@@ -39,13 +39,13 @@ function ProjectCard({ project, videos, onOpen }: { project: ProjectSummary; vid
   return (
     <button type="button" className="panel overflow-hidden text-left" onClick={onOpen}>
       {preview.length ? (
-        <div className="thumb-grid" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+        <div className={preview.length === 1 ? "thumb-grid is-single" : "thumb-grid"} style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
           {preview.map((video) => (
             <img key={video.id} src={video.thumbnail_url} alt="" />
           ))}
         </div>
       ) : (
-        <div className="flex h-40 items-center justify-center bg-black text-xs text-[var(--muted)]">
+        <div className="thumb-empty">
           {processing ? "Processing…" : "No videos"}
         </div>
       )}

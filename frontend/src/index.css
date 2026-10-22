@@ -216,7 +216,7 @@ button.linkish {
   height: 3rem;
   border-radius: 8px;
   object-fit: contain;
-  background: color-mix(in srgb, var(--teal) 16%, var(--panel));
+  background: var(--line);
   display: block;
   flex-shrink: 0;
 }
@@ -285,6 +285,11 @@ button.linkish {
   max-height: 20rem;
   overflow: hidden;
 }
+/* One thumbnail fills the same box as a two-row mosaic. */
+.thumb-grid.is-single {
+  height: 20rem;
+  grid-auto-rows: 20rem;
+}
 .thumb-grid > img {
   width: 100%;
   height: 100%;
@@ -292,6 +297,15 @@ button.linkish {
   object-fit: cover;
   object-position: center;
   background: #000;
+}
+.thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 20rem;
+  background: #000;
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 .project-grid,
 .video-grid {
