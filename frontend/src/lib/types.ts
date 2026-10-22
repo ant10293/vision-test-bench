@@ -18,6 +18,7 @@ export interface RunSummary {
   fixture: boolean;
   fixture_label: string;
   cost_usd: number;
+  unpriced_calls: number;
   input_tokens: number;
   output_tokens: number;
   error: string;
@@ -339,5 +340,17 @@ export interface Dashboard {
   input_tokens: number;
   output_tokens: number;
   cost_usd: number;
+  unpriced_calls: number;
+  unitemized_usd: number;
+  cost_by_provider: ProviderSpend[];
   recent_runs: RunSummary[];
+}
+
+export interface ProviderSpend {
+  provider_id: string;
+  cost_usd: number;
+  calls: number;
+  unpriced_calls: number;
+  input_tokens: number;
+  output_tokens: number;
 }

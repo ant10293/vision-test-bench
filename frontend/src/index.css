@@ -28,6 +28,20 @@ button { cursor: pointer; }
 a { color: inherit; text-decoration: none; }
 .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 
+/* Model responses arrive as one JSON line. Stack them and scroll down the pane. */
+.log-body {
+  margin-top: 0.5rem;
+  max-height: 24rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -488,3 +502,19 @@ body.is-sorting * { cursor: grabbing; }
   transition: background 0.15s;
 }
 .asset-preview-zoom:hover { background: rgba(255, 255, 255, 0.15); }
+
+/* Keep the inspect frame inside the viewport. Absolute positioning stops the video's native size from stretching the page. */
+.stage-frame {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: min(64dvh, calc(100dvh - 16rem));
+  overflow: hidden;
+}
+.stage-frame video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}

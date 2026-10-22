@@ -30,6 +30,7 @@ COLUMN_UPGRADES = {
         ("ingest_detail", "VARCHAR(200) DEFAULT ''"),
         ("ingest_error", "TEXT DEFAULT ''"),
     ],
+    "model_responses": [("price_known", "BOOLEAN NOT NULL DEFAULT 0")],
 }
 
 
@@ -48,3 +49,9 @@ def ensure_task_columns(engine: Engine) -> None:
             for name, ddl in columns:
                 if name not in present:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+        if "model_responses" in tables:
+            present = {row[1] for row in conn.execute(text("PRAGMA table_info(model_responses)"))}
+            if "price_known" in present:
+                conn.execute(
+                    text("UPDATE model_responses SET price_known = 1 WHERE cost_usd > 0 AND price_known = 0")
+                )

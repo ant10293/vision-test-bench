@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { createPortal } from "react-dom";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
+import { ProjectCosts } from "../components/ProjectCosts";
 import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
 import { api, formatTime, formatWhen, type ProjectSummary } from "../lib/api";
 import type { VideoInfo } from "../lib/types";
@@ -504,6 +505,8 @@ export function VideosPage() {
           />}
         </section>
       )}
+
+      {mode === "edit" && editId && <ProjectCosts projectId={editId} />}
 
       {mode === "edit" && (
         <div

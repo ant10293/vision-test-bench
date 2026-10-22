@@ -9,13 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.demo.scenarios import SCENARIOS, build_document
 from app.models.media import FrameAsset, VideoAsset
-from app.models.runs import AnalysisRun, ModelRequestRow, ModelResponseRow
-from app.models.util import new_id
+from app.models.runs import AnalysisRun, ModelRequestRow
 from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
 from app.providers.registry import get_provider
 from app.providers.types import FrameInput, GenerationRequest, UnsupportedMode, rough_input_tokens
 from app.schemas.analysis import AnalysisDocument, Coverage
+from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
 from app.services.credentials import load_secret
 from app.services.storage import data_path, resolve_stored
 
@@ -215,15 +215,15 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
         raise BudgetExceeded(
             f"estimated spend {run.cost_usd:.4f} USD has reached the ceiling of {ceiling} USD"
         )
-    row = ModelRequestRow(
-        id=new_id(),
-        run_id=run.id,
+    row = open_provider_call(
+        session,
+        run,
         stage=stage,
         provider_id=run.provider_id,
         model_id=run.model_id,
         modality=run.modality,
         prompt_version_id=run.prompt_version_id,
-        parameters_json={
+        parameters={
             "temperature": request.temperature,
             "reasoning_effort": request.reasoning_effort,
             "image_detail": request.image_detail,
@@ -231,35 +231,15 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
             "sdk_note": "recorded on the response",
         },
         frame_timestamps=[frame.timestamp for frame in frames],
-        status="running",
     )
-    session.add(row)
     session.commit()
     try:
         response = await provider.generate(secret, request)
     except Exception as exc:
-        row.status = "failed"
-        row.error = str(exc)[:2000]
+        fail_provider_call(row, exc)
         session.commit()
         raise
-    row.status = "completed"
-    row.latency_ms = response.latency_ms
-    row.provider_request_id = response.request_id
-    row.parameters_json = {**row.parameters_json, "sdk_version": response.sdk_version}
-    session.add(
-        ModelResponseRow(
-            request_id=row.id,
-            run_id=run.id,
-            raw_json=response.raw,
-            text=response.text,
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
-            cost_usd=response.usage.cost_usd,
-        )
-    )
-    run.input_tokens += response.usage.input_tokens
-    run.output_tokens += response.usage.output_tokens
-    run.cost_usd = round(run.cost_usd + response.usage.cost_usd, 6)
+    finish_provider_call(session, run, row, response)
     session.commit()
     return parse_analysis(response.text)
 

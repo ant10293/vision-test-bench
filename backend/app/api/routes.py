@@ -32,15 +32,6 @@ from app.models.domain import (
     WorkflowRow,
 )
 from app.models.media import FrameAsset, Project, VideoAsset
-from app.models.sessions import (
-    CanonicalObject,
-    IdentityLink,
-    InterSessionTransition,
-    OrderHypothesis,
-    ProjectGroundTruth,
-    ProjectRevision,
-    RecordingSession,
-)
 from app.models.runs import (
     AnalysisRevision,
     AnalysisRun,
@@ -50,6 +41,15 @@ from app.models.runs import (
     ModelResponseRow,
     PromptVersion,
     ProviderStatus,
+)
+from app.models.sessions import (
+    CanonicalObject,
+    IdentityLink,
+    InterSessionTransition,
+    OrderHypothesis,
+    ProjectGroundTruth,
+    ProjectRevision,
+    RecordingSession,
 )
 from app.models.util import utcnow
 from app.providers.catalog import lookup, models_for
@@ -68,6 +68,7 @@ from app.services.corrections import (
     update_object,
     update_step,
 )
+from app.services.costs import aggregate_spend, project_costs
 from app.services.credentials import (
     delete_secret,
     load_secret,
@@ -135,6 +136,7 @@ def dashboard(session: Session = Depends(db)) -> dict:
         if status and status.last_ok:
             connected.append(provider_id)
     recent = [run_summary(session, run) for run in sorted(runs, key=lambda item: item.created_at, reverse=True)[:12]]
+    spend = aggregate_spend(session, list(runs))
     return {
         "videos": videos,
         "runs_completed": completed,
@@ -144,9 +146,12 @@ def dashboard(session: Session = Depends(db)) -> dict:
         "workflows": workflows,
         "ambiguities": ambiguities,
         "providers_connected": connected,
-        "input_tokens": sum(run.input_tokens for run in runs),
-        "output_tokens": sum(run.output_tokens for run in runs),
-        "cost_usd": round(sum(run.cost_usd for run in runs), 6),
+        "input_tokens": spend["input_tokens"],
+        "output_tokens": spend["output_tokens"],
+        "cost_usd": spend["cost_usd"],
+        "unpriced_calls": spend["unpriced_calls"],
+        "unitemized_usd": spend["unitemized_usd"],
+        "cost_by_provider": spend["cost_by_provider"],
         "recent_runs": recent,
     }
 
@@ -175,6 +180,14 @@ def create_project(payload: dict, session: Session = Depends(db)) -> dict:
     session.commit()
     session.refresh(row)
     return _project_payload(row)
+
+
+@router.get("/projects/{project_id}/costs")
+def project_cost_report(project_id: str, session: Session = Depends(db)) -> dict:
+    report = project_costs(session, project_id)
+    if report is None:
+        raise HTTPException(404, "project not found")
+    return report
 
 
 def _unlink_stored(stored: str) -> None:
@@ -711,6 +724,7 @@ def run_requests(run_id: str, session: Session = Depends(db)) -> list[dict]:
                     "input_tokens": response.input_tokens if response else 0,
                     "output_tokens": response.output_tokens if response else 0,
                     "cost_usd": response.cost_usd if response else 0,
+                    "price_known": bool(response.price_known) if response else False,
                 },
             }
         )

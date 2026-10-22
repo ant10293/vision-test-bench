@@ -1,5 +1,6 @@
 import { Background, Controls, ReactFlow, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { humanize } from "../lib/humanize";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
 
@@ -19,7 +20,7 @@ export function WorkflowGraph({ bundle }: { bundle: Bundle }) {
     data: {
       label: (
         <div className="text-left text-xs">
-          <div className="mono text-[10px] text-[var(--muted)]">{step.number}. {step.evidence_class}</div>
+          <div className="mono text-[10px] text-[var(--muted)]">{step.number}. {humanize(step.evidence_class)}</div>
           <div className="font-medium">{step.name}</div>
           <div className="text-[var(--muted)]">{step.completion_condition}</div>
         </div>
@@ -36,7 +37,7 @@ export function WorkflowGraph({ bundle }: { bundle: Bundle }) {
     id: dep.id,
     source: dep.from_step,
     target: dep.to_step,
-    label: dep.category.replaceAll("_", " "),
+    label: humanize(dep.category),
     style: { stroke: COLORS[dep.category] ?? "#8b95a8" },
     data: { rationale: dep.rationale },
   }));

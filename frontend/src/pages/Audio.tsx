@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, formatTime } from "../lib/api";
+import { humanize } from "../lib/humanize";
 import { useBundle } from "../lib/bundleContext";
 import type { AudioAlignment, TranscriptSegment } from "../lib/types";
 import { useInspector } from "../stores/ui";
@@ -56,17 +57,17 @@ export function AudioPage() {
       <section className="space-y-2">
         <h2 className="text-sm font-medium">Whisper configuration</h2>
         <p className="text-xs text-[var(--muted)]">
-          Transcription {config.transcribe ? "on" : "off"} · workflow use {config.use_transcript ? "on" : "off"} · model {String(config.whisper_model || "base")} · language {String(config.whisper_language || "auto")} · silence filter {config.whisper_vad === false ? "off" : "on"} · window {String(config.align_window_sec || 4)}s
+          Transcription {config.transcribe ? "on" : "off"} · workflow use {config.use_transcript ? "on" : "off"} · model {humanize(String(config.whisper_model || "base"))} · language {String(config.whisper_language || "auto")} · silence filter {config.whisper_vad === false ? "off" : "on"} · window {String(config.align_window_sec || 4)}s
         </p>
         {Boolean(config.transcript_text_may_be_sent) && (
           <p className="text-xs text-[var(--amber)]">
-            This run can send transcript text to {bundle.run.provider_id}. The audio track stays on this machine.
+            This run can send transcript text to {humanize(bundle.run.provider_id)}. The audio track stays on this machine.
           </p>
         )}
         {models.data && !models.data.installed && <p className="text-xs text-[var(--amber)]">{models.data.detail}</p>}
         {models.data?.models?.some((item) => !item.downloaded) && (
           <p className="text-xs text-[var(--muted)]">
-            Not downloaded yet: {models.data.models.filter((item) => !item.downloaded).map((item) => item.model).join(", ")}. The first transcription of a model downloads it once.
+            Not downloaded yet: {models.data.models.filter((item) => !item.downloaded).map((item) => humanize(item.model)).join(", ")}. The first transcription of a model downloads it once.
           </p>
         )}
         {bundle.video && (
@@ -83,7 +84,7 @@ export function AudioPage() {
           <h2 className="text-sm font-medium">Transcript timeline</h2>
           {FILTERS.map((item) => (
             <button key={item} className={`btn ${filter === item ? "primary" : ""}`} onClick={() => setFilter(item)}>
-              {item.replaceAll("_", " ")}
+              {humanize(item)}
             </button>
           ))}
         </div>
@@ -141,7 +142,7 @@ function SegmentCard({
   return (
     <li className="rounded-md border border-[var(--line)] p-3">
       <button className="text-xs text-[var(--teal)]" onClick={() => onSeek(segment.start)}>
-        {formatTime(segment.start)} – {formatTime(segment.end)} · {segment.local_id}
+        {formatTime(segment.start)} – {formatTime(segment.end)} · {humanize(segment.local_id)}
         {segment.language ? ` · ${segment.language}` : ""}
         {segment.confidence != null ? ` · ${segment.confidence.toFixed(2)}` : ""}
       </button>
@@ -149,7 +150,7 @@ function SegmentCard({
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button className="btn" onClick={() => onText(text)}>Save text</button>
         {segment.corrected && <span className="tag">corrected · model text kept</span>}
-        {alignment && <span className={`text-xs ${TONE[alignment.classification] || ""}`}>{alignment.classification.replaceAll("_", " ")}</span>}
+        {alignment && <span className={`text-xs ${TONE[alignment.classification] || ""}`}>{humanize(alignment.classification)}</span>}
       </div>
       {segment.corrected && segment.text_model !== segment.text && (
         <p className="mt-2 text-xs text-[var(--muted)]">Original model text: {segment.text_model}</p>
@@ -158,12 +159,12 @@ function SegmentCard({
         <div className="mt-3 space-y-2 text-xs">
           <p>{alignment.explanation}</p>
           <p className="text-[var(--muted)]">
-            Evidence {alignment.evidence_class} · {alignment.provenance}
+            Evidence {humanize(alignment.evidence_class)} · {humanize(alignment.provenance)}
             {alignment.speech_is_not_completion ? " · speech does not complete the step" : ""}
             {alignment.time_offset_sec != null ? ` · speech offset ${alignment.time_offset_sec}s` : ""}
           </p>
           <p>
-            Actions {alignment.action_local_ids.join(", ") || "none"} · objects {alignment.object_local_ids.join(", ") || "none"} · steps {alignment.step_local_ids.join(", ") || "none"}
+            Actions {alignment.action_local_ids.map(humanize).join(", ") || "none"} · objects {alignment.object_local_ids.map(humanize).join(", ") || "none"} · steps {alignment.step_local_ids.map(humanize).join(", ") || "none"}
           </p>
           <div className="flex flex-wrap gap-2">
             {alignment.frame_timestamps.map((time) => (
@@ -172,7 +173,7 @@ function SegmentCard({
           </div>
           <div className="flex flex-wrap gap-2">
             <select className="field" value={label} onChange={(event) => setLabel(event.target.value)}>
-              {FILTERS.filter((item) => item !== "all").map((item) => <option key={item} value={item}>{item.replaceAll("_", " ")}</option>)}
+              {FILTERS.filter((item) => item !== "all").map((item) => <option key={item} value={item}>{humanize(item)}</option>)}
             </select>
             <input className="field" value={explanation} onChange={(event) => setExplanation(event.target.value)} />
             <button className="btn" onClick={() => onClass({ ...alignment, classification: label, explanation })}>Save classification</button>
@@ -191,10 +192,10 @@ function ComparisonReport({ report }: { report: Record<string, unknown> }) {
     <div className="rounded-md border border-[var(--line)] p-3 text-xs">
       <p>{String(report.note || "")}</p>
       <p className="mt-2">Workflow document changed: {report.workflow_document_changed ? "yes" : "no"}</p>
-      <p>Actions only in visual: {(actions?.only_visual || []).join(", ") || "none"}</p>
-      <p>Actions only in audio-assisted: {(actions?.only_audio_assisted || []).join(", ") || "none"}</p>
-      <p>Objects only in one side: {[...(objects?.only_visual || []), ...(objects?.only_audio_assisted || [])].join(", ") || "none"}</p>
-      <p>Steps only in one side: {[...(steps?.only_visual || []), ...(steps?.only_audio_assisted || [])].join(", ") || "none"}</p>
+      <p>Actions only in visual: {(actions?.only_visual || []).map(humanize).join(", ") || "none"}</p>
+      <p>Actions only in audio-assisted: {(actions?.only_audio_assisted || []).map(humanize).join(", ") || "none"}</p>
+      <p>Objects only in one side: {[...(objects?.only_visual || []), ...(objects?.only_audio_assisted || [])].map(humanize).join(", ") || "none"}</p>
+      <p>Steps only in one side: {[...(steps?.only_visual || []), ...(steps?.only_audio_assisted || [])].map(humanize).join(", ") || "none"}</p>
       <p>Latency (s): {JSON.stringify(report.latency_sec)}</p>
       <p>Cost: {JSON.stringify(report.cost_usd)}</p>
       <p>Speech classes: {JSON.stringify(report.speech_classifications)}</p>

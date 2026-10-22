@@ -245,6 +245,7 @@ async def _audio_context(session, run, video, stage) -> None:
     from app.models.audio import TranscriptSegment
     from app.providers.registry import get_provider
     from app.providers.types import FrameInput, GenerationRequest
+    from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
     from app.services.credentials import load_secret
 
     result = align_clip(session, run, video)
@@ -271,28 +272,46 @@ async def _audio_context(session, run, video, stage) -> None:
         for frame in frames
         if data_path(*Path(frame.path).parts).exists()
     ]
-    response = await get_provider(run.provider_id, session).generate(
-        secret,
-        GenerationRequest(
-            model_id=run.model_id,
-            system_prompt=request_body["system_prompt"],
-            user_prompt=request_body["user_prompt"],
-            frames=frame_inputs,
-            modality="sampled_frames",
-            temperature=config.get("temperature"),
-            timeout_s=float(config.get("timeout_s") or 180),
-            image_detail=config.get("image_detail") or "low",
-        ),
+    generation = GenerationRequest(
+        model_id=run.model_id,
+        system_prompt=request_body["system_prompt"],
+        user_prompt=request_body["user_prompt"],
+        frames=frame_inputs,
+        modality="sampled_frames",
+        temperature=config.get("temperature"),
+        timeout_s=float(config.get("timeout_s") or 180),
+        image_detail=config.get("image_detail") or "low",
     )
+    call = open_provider_call(
+        session,
+        run,
+        stage="audio_context",
+        provider_id=run.provider_id,
+        model_id=run.model_id,
+        modality="sampled_frames",
+        prompt_version_id=run.prompt_version_id,
+        parameters={
+            "temperature": generation.temperature,
+            "image_detail": generation.image_detail,
+            "purpose": "transcript_context",
+        },
+        frame_timestamps=[frame.timestamp for frame in frame_inputs],
+    )
+    session.commit()
+    try:
+        response = await get_provider(run.provider_id, session).generate(secret, generation)
+    except Exception as exc:
+        fail_provider_call(call, exc)
+        session.commit()
+        raise
+    finish_provider_call(session, run, call, response)
+    session.commit()
     parsed = _json_object(response.text)
     if parsed:
         result["provider_updates"] = apply_provider_classes(session, run.id, parsed)
     result["transcript_text_sent_to_provider"] = True
     result["audio_bytes_sent"] = False
     result["note"] = "Transcript text, not the audio track, was sent to the selected model."
-    run.cost_usd = (run.cost_usd or 0) + response.usage.cost_usd
-    run.input_tokens += response.usage.input_tokens
-    run.output_tokens += response.usage.output_tokens
     stage.checkpoint_json = result
 
 
@@ -583,8 +602,11 @@ async def _run_sam(session, run, stage) -> None:
     is stored as an unassigned track instead of forcing the semantic id.
     """
     from app.models.domain import DetectedObject, ObjectImage, ObjectObservation
+    from app.providers.catalog import lookup
     from app.providers.sam import SamAdapter
+    from app.providers.types import ProviderResponse, Usage, estimate_cost
     from app.schemas.analysis import BBox
+    from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
     from app.services.credentials import load_secret
 
     secret, _source = load_secret(session, "meta")
@@ -609,7 +631,47 @@ async def _run_sam(session, run, stage) -> None:
         if frame is None:
             continue
         image_path = data_path(*Path(frame.path).parts)
-        _text, records, latency_ms = await adapter.segment_image(image_path, obj.label)
+        call = open_provider_call(
+            session,
+            run,
+            stage="segmentation",
+            provider_id="meta",
+            model_id="sam-3.1",
+            modality="sampled_frames",
+            parameters={"concept": obj.label, "frame_id": frame.id},
+            frame_timestamps=[obs.timestamp],
+        )
+        session.commit()
+        try:
+            result = await adapter.segment_image(image_path, obj.label)
+        except Exception as exc:
+            fail_provider_call(call, exc)
+            session.commit()
+            raise
+        cost, known = estimate_cost(lookup("meta", "sam-3.1"), result.input_tokens, result.output_tokens)
+        finish_provider_call(
+            session,
+            run,
+            call,
+            ProviderResponse(
+                text=result.text,
+                raw={
+                    "id": result.request_id,
+                    "model": "sam-3.1",
+                    "usage": {
+                        "input_tokens": result.input_tokens,
+                        "output_tokens": result.output_tokens,
+                    },
+                },
+                usage=Usage(result.input_tokens, result.output_tokens, cost, known),
+                request_id=result.request_id,
+                latency_ms=result.latency_ms,
+                model_id="sam-3.1",
+            ),
+        )
+        session.commit()
+        records = result.records
+        latency_ms = result.latency_ms
         target = BBox.model_validate(obs.bbox_json)
         best = None
         best_iou = 0.0

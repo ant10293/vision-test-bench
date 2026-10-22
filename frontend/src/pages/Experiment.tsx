@@ -3,6 +3,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { SettingsFieldset } from "../components/SettingsFieldset";
 import { api } from "../lib/api";
+import { humanize } from "../lib/humanize";
 import type { Capability } from "../lib/types";
 import { videoReady } from "../lib/uploadProgress";
 
@@ -47,7 +48,7 @@ export function ExperimentPage() {
   const create = useMutation({
     mutationFn: () =>
       api.createRun({
-        name: `${mode} · ${modelId}`,
+        name: `${humanize(mode)} · ${humanize(modelId)}`,
         video_id: videoId,
         provider_id: providerId,
         model_id: modelId,
@@ -97,12 +98,12 @@ export function ExperimentPage() {
             const first = providers.data?.find((item) => item.id === next)?.models[0];
             if (first) setModelId(first.model_id);
           }}>
-            {providers.data?.map((provider) => <option key={provider.id} value={provider.id}>{provider.id}</option>)}
+            {providers.data?.map((provider) => <option key={provider.id} value={provider.id}>{humanize(provider.id)}</option>)}
           </select>
         </Field>
         <Field label="Model">
           <select className="field stretch" value={modelId} onChange={(event) => setModelId(event.target.value)}>
-            {models.map((model) => <option key={model.model_id} value={model.model_id}>{model.model_id}</option>)}
+            {models.map((model) => <option key={model.model_id} value={model.model_id}>{humanize(model.model_id)}</option>)}
           </select>
         </Field>
       </div>
@@ -122,7 +123,7 @@ export function ExperimentPage() {
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Sampling">
           <select className="field stretch" value={preset} onChange={(event) => setPreset(event.target.value)}>
-            {["sparse", "standard", "detailed", "high_detail", "intensive", "adaptive"].map((item) => <option key={item}>{item}</option>)}
+            {["sparse", "standard", "detailed", "high_detail", "intensive", "adaptive"].map((item) => <option key={item} value={item}>{humanize(item)}</option>)}
           </select>
         </Field>
         <Field label="Pipeline">
@@ -148,14 +149,14 @@ export function ExperimentPage() {
         <Field label="Reasoning effort">
           <select className="field stretch" value={reasoning} disabled={!selected?.reasoning_efforts.length} onChange={(event) => setReasoning(event.target.value)}>
             <option value="">default</option>
-            {selected?.reasoning_efforts.map((effort) => <option key={effort}>{effort}</option>)}
+            {selected?.reasoning_efforts.map((effort) => <option key={effort} value={effort}>{humanize(effort)}</option>)}
           </select>
         </Field>
       </div>
       <Field label="Prompt family">
         <select className="field" defaultValue="scene">
           {prompts.data?.filter((item, index, all) => all.findIndex((other) => other.key === item.key) === index).map((item) => (
-            <option key={item.key} value={item.key}>{item.name}</option>
+            <option key={item.key} value={item.key}>{humanize(item.name)}</option>
           ))}
         </select>
       </Field>
@@ -177,7 +178,7 @@ export function ExperimentPage() {
               <select className="field stretch" value={whisperModel} onChange={(event) => setWhisperModel(event.target.value)}>
                 {(whisper.data?.models ?? [{ model: "base", downloaded: false }]).map((item) => (
                   <option key={item.model} value={item.model}>
-                    {item.model}{item.downloaded ? "" : " (not downloaded)"}
+                    {humanize(item.model)}{item.downloaded ? "" : " (not downloaded)"}
                   </option>
                 ))}
               </select>
@@ -206,7 +207,7 @@ export function ExperimentPage() {
         )}
         {useTranscript && !["fixture", "deterministic", "manual_json"].includes(providerId) && (
           <p className="text-xs text-[var(--amber)]">
-            Transcript text, not the audio track, will be sent to {providerId} for comparison with the visual record.
+            Transcript text, not the audio track, will be sent to {humanize(providerId)} for comparison with the visual record.
           </p>
         )}
         <p className="text-xs text-[var(--muted)]">

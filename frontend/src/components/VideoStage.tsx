@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Bundle } from "../lib/types";
 import { observationsAt } from "../lib/analysis";
+import { labeledId } from "../lib/humanize";
 import { useInspector } from "../stores/ui";
 
 export function VideoStage({ bundle }: { bundle: Bundle }) {
@@ -54,25 +55,38 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
     setTime(next?.timestamp ?? Math.max(0, now + direction / 10));
   }
 
-  function measure() {
-    const video = videoRef.current;
-    const box = boxRef.current;
-    if (!video || !box || !video.videoWidth) return;
-    const rect = box.getBoundingClientRect();
-    const scale = Math.min(rect.width / video.videoWidth, rect.height / video.videoHeight);
-    const w = video.videoWidth * scale;
-    const h = video.videoHeight * scale;
-    setContent({ x: (rect.width - w) / 2, y: (rect.height - h) / 2, w, h, vw: video.videoWidth, vh: video.videoHeight });
-  }
-
   const visible = overlay ? observationsAt(bundle, time) : [];
   const src = bundle.video ? bundle.video.playback_url : "";
 
+  useEffect(() => {
+    const box = boxRef.current;
+    const video = videoRef.current;
+    if (!box) return;
+    const apply = () => {
+      const frame = boxRef.current;
+      const node = videoRef.current;
+      if (!frame || !node || !node.videoWidth) return;
+      const rect = frame.getBoundingClientRect();
+      const scale = Math.min(rect.width / node.videoWidth, rect.height / node.videoHeight);
+      const w = node.videoWidth * scale;
+      const h = node.videoHeight * scale;
+      setContent({ x: (rect.width - w) / 2, y: (rect.height - h) / 2, w, h, vw: node.videoWidth, vh: node.videoHeight });
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(box);
+    video?.addEventListener("loadedmetadata", apply);
+    return () => {
+      observer.disconnect();
+      video?.removeEventListener("loadedmetadata", apply);
+    };
+  }, [src]);
+
   return (
-    <div className="flex h-full min-h-[280px] flex-col gap-2">
+    <div className="stage-slot flex min-h-0 w-full flex-col gap-2">
       <div
         ref={boxRef}
-        className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black"
+        className="stage-frame rounded-lg bg-black"
         onWheel={(event) => {
           event.preventDefault();
           setZoom((value) => Math.min(4, Math.max(1, value + (event.deltaY < 0 ? 0.15 : -0.15))));
@@ -81,9 +95,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
         <video
           ref={videoRef}
           src={src}
-          className="h-full w-full object-contain"
           style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
-          onLoadedMetadata={measure}
           onTimeUpdate={(event) => {
             const current = event.currentTarget.currentTime;
             if (loop && current > loop.end) {
@@ -119,7 +131,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
                     strokeWidth={2}
                   />
                   <text x={obs.bbox.x * content.vw + 4} y={Math.max(14, obs.bbox.y * content.vh - 4)} fill={color} fontSize={14}>
-                    {object?.local_id} {object?.label}
+                    {object ? labeledId(object.local_id, object.label) : ""}
                   </text>
                 </g>
               );

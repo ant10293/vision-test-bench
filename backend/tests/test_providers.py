@@ -4,7 +4,7 @@ import pytest
 from app.providers.anthropic_provider import AnthropicProvider
 from app.providers.catalog import lookup
 from app.providers.openai_provider import OpenAIProvider
-from app.providers.types import GenerationRequest, UnsupportedMode
+from app.providers.types import GenerationRequest, UnsupportedMode, estimate_cost
 
 
 def test_openai_catalog_has_no_native_video():
@@ -49,3 +49,17 @@ def test_sam_is_not_an_analysis_model():
     caps = lookup("meta", "sam-3.1")
     assert caps.structured_output is False
     assert "action" not in caps.notes.lower() or "not an action" in caps.notes.lower()
+
+
+def test_estimate_cost_uses_catalog_list_rates():
+    caps = lookup("openai", "gpt-4.1")
+    cost, known = estimate_cost(caps, 1000, 500)
+    assert known is True
+    assert cost == 0.006
+
+
+def test_unpriced_model_does_not_invent_a_zero_invoice():
+    caps = lookup("meta", "muse-spark-1.3")
+    cost, known = estimate_cost(caps, 1000, 500)
+    assert known is False
+    assert cost == 0.0

@@ -23,6 +23,16 @@ FRAME_RE = re.compile(r"^<(?P<frame>\d+)f>(?P<body>.*)$")
 
 
 @dataclass
+class SamImageResult:
+    text: str
+    records: list["SamRecord"]
+    latency_ms: int
+    request_id: str
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass
 class SamRecord:
     frame_index: int
     track_id: str
@@ -113,7 +123,7 @@ class SamAdapter:
     def _client(self) -> AsyncOpenAI:
         return AsyncOpenAI(api_key=self.secret, base_url=META_BASE, timeout=self.timeout_s)
 
-    async def segment_image(self, image_path, concept: str) -> tuple[str, list[SamRecord], str]:
+    async def segment_image(self, image_path, concept: str) -> SamImageResult:
         if not concept.strip():
             raise ProviderError("SAM concept prompts must be a non-empty noun phrase.")
         started = time.perf_counter()
@@ -133,5 +143,13 @@ class SamAdapter:
             )
         except Exception as exc:
             raise translate(exc) from exc
+        usage = getattr(response, "usage", None)
         text = getattr(response, "output_text", "") or ""
-        return text, parse_sam_output(text), str(int((time.perf_counter() - started) * 1000))
+        return SamImageResult(
+            text=text,
+            records=parse_sam_output(text),
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            request_id=str(getattr(response, "id", "") or ""),
+            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+        )

@@ -39,12 +39,41 @@ export interface ProjectSummary {
   is_task: boolean;
 }
 
+export interface ProviderCall {
+  id: string;
+  run_id: string;
+  run_name: string;
+  video_id: string;
+  video_filename: string;
+  stage: string;
+  provider_id: string;
+  model_id: string;
+  status: string;
+  latency_ms: number;
+  created_at: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  price_known: boolean;
+}
+
+export interface ProjectCosts {
+  project_id: string;
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  unpriced_calls: number;
+  unitemized_usd: number;
+  calls: ProviderCall[];
+}
+
 export const api = {
   dashboard: () => request<Dashboard>("/api/dashboard"),
   projects: () => request<ProjectSummary[]>("/api/projects"),
   createProject: (name: string, description = "") =>
     request<ProjectSummary>("/api/projects", { method: "POST", body: JSON.stringify({ name, description }) }),
   deleteProject: (id: string) => request<{ deleted: string }>(`/api/projects/${id}`, { method: "DELETE" }),
+  projectCosts: (id: string) => request<ProjectCosts>(`/api/projects/${id}/costs`),
   videos: (projectId?: string) => request<VideoInfo[]>(`/api/videos${projectId ? `?project_id=${projectId}` : ""}`),
   video: (id: string) => request<VideoInfo>(`/api/videos/${id}`),
   upload: (
@@ -302,6 +331,12 @@ export interface TaskClip {
   thumbnail_url: string;
   run_id: string;
   actions: { local_id: string; action_type: string; description: string; start: number; end: number; evidence_class: string }[];
+}
+
+export function formatUsd(amount: number, priceKnown = true): string {
+  if (!priceKnown) return "unpriced";
+  const value = Number.isFinite(amount) ? amount : 0;
+  return `$${value.toFixed(4)}`;
 }
 
 export function formatTime(seconds: number | null | undefined): string {

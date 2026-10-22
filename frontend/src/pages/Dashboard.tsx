@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, formatTime } from "../lib/api";
+import { api, formatTime, formatUsd } from "../lib/api";
+import { humanize, humanizeText } from "../lib/humanize";
 import { RunAnalysis } from "./RunPages";
 
 export function DashboardPage() {
@@ -18,6 +19,7 @@ export function DashboardPage() {
     ["Workflows", data.workflows],
     ["Ambiguities", data.ambiguities],
     ["Connected providers", data.providers_connected.length],
+    ["Estimated cost", formatUsd(data.cost_usd)],
   ];
   return (
     <div className="space-y-6">
@@ -38,6 +40,11 @@ export function DashboardPage() {
           </div>
         ))}
       </section>
+      {data.unpriced_calls > 0 && (
+        <p className="text-xs text-[var(--amber)]">
+          {data.unpriced_calls} provider {data.unpriced_calls === 1 ? "call has" : "calls have"} no catalog price, so the total is a partial estimate.
+        </p>
+      )}
       <section className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="panel p-4">
           <h2 className="mb-3 text-sm font-medium">Recent experiments</h2>
@@ -46,11 +53,12 @@ export function DashboardPage() {
               <Link key={run.id} to={`/runs/${run.id}`} className="grid grid-cols-[72px_1fr] gap-3 rounded-md border border-transparent p-2 hover:border-[var(--line)]">
                 {run.thumbnail_url ? <img src={run.thumbnail_url} alt="" className="aspect-video w-full rounded bg-black object-contain" /> : <div className="aspect-video rounded bg-[#0d1016]" />}
                 <div className="min-w-0">
-                  <div className="truncate">{run.name}</div>
+                  <div className="truncate">{humanizeText(run.name)}</div>
                   <div className="text-xs text-[var(--muted)]">
-                    {run.provider_id} · {run.model_id} · {run.modality} · {run.status}
+                    {humanize(run.provider_id)} · {humanize(run.model_id)} · {humanize(run.modality)} · {humanize(run.status)}
                     {run.fixture ? " · fixture" : ""} · {run.action_count} actions · {run.object_count} objects
-                    · {formatTime(run.duration_sec)} · ${run.cost_usd.toFixed(4)}
+                    · {formatTime(run.duration_sec)} · {formatUsd(run.cost_usd)}
+                    {run.unpriced_calls > 0 ? ` · ${run.unpriced_calls} unpriced` : ""}
                   </div>
                 </div>
               </Link>
@@ -62,7 +70,7 @@ export function DashboardPage() {
           <h2 className="mb-2 text-sm font-medium">Actions per recent run</h2>
           <div className="h-52">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data.recent_runs.map((run) => ({ name: run.model_id.slice(0, 12), actions: run.action_count, objects: run.object_count }))}>
+              <BarChart data={data.recent_runs.map((run) => ({ name: humanize(run.model_id), actions: run.action_count, objects: run.object_count }))}>
                 <XAxis dataKey="name" stroke="#8b95a8" fontSize={11} />
                 <YAxis stroke="#8b95a8" fontSize={11} allowDecimals={false} />
                 <Tooltip />
@@ -71,10 +79,31 @@ export function DashboardPage() {
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <p className="mt-3 text-xs text-[var(--muted)]">
-            Tokens {data.input_tokens + data.output_tokens} · estimated API cost ${data.cost_usd.toFixed(4)}.
-            Connected means a validation request succeeded: {data.providers_connected.join(", ") || "none yet"}.
-          </p>
+          <div className="mt-3 space-y-1 text-xs text-[var(--muted)]">
+            <div className="flex justify-between gap-3 text-[var(--text)]">
+              <span>Estimated API cost</span>
+              <span className="mono">{formatUsd(data.cost_usd)}</span>
+            </div>
+            {data.cost_by_provider.map((row) => (
+              <div key={row.provider_id} className="flex justify-between gap-3">
+                <span>{humanize(row.provider_id)} · {row.calls} {row.calls === 1 ? "call" : "calls"}</span>
+                <span className="mono">
+                  {row.unpriced_calls > 0 ? `${row.unpriced_calls} unpriced · ` : ""}
+                  {formatUsd(row.cost_usd)}
+                </span>
+              </div>
+            ))}
+            {data.unitemized_usd > 0 && (
+              <div className="flex justify-between gap-3">
+                <span>Stored on runs without a call record</span>
+                <span className="mono">{formatUsd(data.unitemized_usd)}</span>
+              </div>
+            )}
+            <p>
+              Tokens {data.input_tokens + data.output_tokens}. Catalog list prices, not an invoice.
+              Connected means a validation request succeeded: {data.providers_connected.map(humanize).join(", ") || "none yet"}.
+            </p>
+          </div>
         </div>
       </section>
       <LatestAnalysis />

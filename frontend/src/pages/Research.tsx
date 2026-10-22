@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../lib/api";
+import { humanize, humanizeText } from "../lib/humanize";
 import type { RunSummary } from "../lib/types";
 
 export function ProvidersPage() {
@@ -31,9 +32,9 @@ export function ProvidersPage() {
         {providers.data?.map((provider) => (
           <section key={provider.id} className="panel space-y-2 p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg">{provider.id}</h2>
+              <h2 className="text-lg">{humanize(provider.id)}</h2>
               <span className={`tag ${provider.validated ? "observed" : "unknown"}`}>{provider.validated ? "validated" : "not validated"}</span>
-              {provider.configured && <span className="tag">key {provider.secret_source} {provider.hint}</span>}
+              {provider.configured && <span className="tag">key {humanize(provider.secret_source)} {provider.hint}</span>}
             </div>
             {provider.last_error && <p className="text-sm text-[var(--rose)]">{provider.last_error}</p>}
             {!["deterministic", "fixture", "manual_json"].includes(provider.id) && (
@@ -65,7 +66,7 @@ export function ProvidersPage() {
             </div>
             <ul className="grid gap-1 text-xs text-[var(--muted)] md:grid-cols-2">
               {provider.models.map((model) => (
-                <li key={model.model_id}>{model.model_id} · video {model.native_video ? "yes" : "no"} · images {model.max_images} · {model.notes}</li>
+                <li key={model.model_id}>{humanize(model.model_id)} · video {model.native_video ? "yes" : "no"} · images {model.max_images} · {model.notes}</li>
               ))}
             </ul>
           </section>
@@ -99,7 +100,7 @@ export function PromptsPage() {
       <h1 className="text-2xl font-medium">Prompt versions</h1>
       <p className="text-sm text-[var(--muted)]">Saving creates a new version. Past experiments keep the snapshot they launched with.</p>
       <select className="field max-w-sm" value={key} onChange={(event) => { setKey(event.target.value); setBody(null); }}>
-        {[...new Set(prompts.data?.map((item) => item.key) ?? [])].map((item) => <option key={item}>{item}</option>)}
+        {[...new Set(prompts.data?.map((item) => item.key) ?? [])].map((item) => <option key={item} value={item}>{humanize(item)}</option>)}
       </select>
       <textarea className="field min-h-80 font-mono text-xs" value={draft} onChange={(event) => setBody(event.target.value)} />
       <button className="btn primary" disabled={unchanged} onClick={async () => {
@@ -171,17 +172,17 @@ function RunColumn({
       <h2 className="text-sm font-medium">{title}</h2>
       <select className="field stretch" value={value} onChange={(event) => onChange(event.target.value)} aria-label={title}>
         <option value="">{title}</option>
-        {runs.map((run) => <option key={run.id} value={run.id}>{run.name}</option>)}
+        {runs.map((run) => <option key={run.id} value={run.id}>{humanizeText(run.name)}</option>)}
       </select>
       {selected ? (
         <dl className="mt-auto grid grid-cols-2 gap-x-4 gap-y-2 border-t border-[var(--line)] pt-3 text-xs">
           <div>
             <dt className="text-[var(--muted)]">Model</dt>
-            <dd>{selected.model_id || "unset"}</dd>
+            <dd>{humanize(selected.model_id) || "unset"}</dd>
           </div>
           <div>
             <dt className="text-[var(--muted)]">Provider</dt>
-            <dd>{selected.provider_id}</dd>
+            <dd>{humanize(selected.provider_id)}</dd>
           </div>
           <div className="min-w-0">
             <dt className="text-[var(--muted)]">Video</dt>

@@ -2,8 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
+import { ProjectCosts } from "../components/ProjectCosts";
 import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
 import { api, evidenceClass, formatTime, type TaskBundle, type TaskClip } from "../lib/api";
+import { humanize, labeledId } from "../lib/humanize";
 import { clipPosition } from "../lib/taskOrder";
 
 const MODES = ["", "fixed_camera", "constrained_head_mounted", "unconstrained_head_mounted"];
@@ -107,13 +109,15 @@ export function TaskDetailPage() {
         </div>
       </header>
 
+      <ProjectCosts projectId={projectId} />
+
       <StorageSettings />
       {reference ? (
         <>
           <label className="field-label">
             <span>Camera mode for this batch</span>
             <select className="field w-auto" value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Camera mode">
-              {MODES.map((item) => <option key={item || "unset"} value={item}>{item || "unset"}</option>)}
+              {MODES.map((item) => <option key={item || "unset"} value={item}>{humanize(item) || "Unset"}</option>)}
             </select>
           </label>
           <VideoPathForm
@@ -143,7 +147,7 @@ export function TaskDetailPage() {
           <label className="field-label">
             <span>Camera mode for this batch</span>
             <select className="field w-auto" value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Camera mode">
-              {MODES.map((item) => <option key={item || "unset"} value={item}>{item || "unset"}</option>)}
+              {MODES.map((item) => <option key={item || "unset"} value={item}>{humanize(item) || "Unset"}</option>)}
             </select>
           </label>
         }
@@ -153,7 +157,7 @@ export function TaskDetailPage() {
       <section className="space-y-2">
         <h2 className="text-lg">Chronology</h2>
         <p className="text-xs text-[var(--muted)]">
-          Method {task.order.method || "none"}. This order is {task.order.fact ? "marked as fact" : "not treated as fact"}.
+          Method {task.order.method ? humanize(task.order.method) : "none"}. This order is {task.order.fact ? "marked as fact" : "not treated as fact"}.
           Drag a clip onto another to lock a manual order. Ambiguous positions stay highlighted.
         </p>
         {task.order.notes?.map((note) => <p key={note} className="text-xs text-[var(--amber)]">{note}</p>)}
@@ -203,8 +207,8 @@ export function TaskDetailPage() {
           {task.workflow.steps.map((step) => (
             <li key={step.id} className="panel p-3 text-sm">
               <div className="flex flex-wrap items-center gap-2">
-                <span className={`tag ${evidenceClass(step.evidence_class)}`}>{step.kind.replaceAll("_", " ")}</span>
-                <span>{step.label}</span>
+                <span className={`tag ${evidenceClass(step.evidence_class)}`}>{humanize(step.kind)}</span>
+                <span>{humanize(step.label)}</span>
               </div>
               {step.note && <p className="mt-1 text-[var(--muted)]">{step.note}</p>}
               {step.observed_change && <p className="mt-1">Observed change: {step.observed_change}</p>}
@@ -226,7 +230,7 @@ export function TaskDetailPage() {
             className="panel block p-3 text-sm"
             to={clip.run_id ? `/runs/${clip.run_id}?t=${action.start}` : `/videos/${clip.id}?t=${action.start}`}
           >
-            <span className={`tag ${evidenceClass(action.evidence_class)}`}>clip action</span> {action.action_type} · clip time {formatTime(action.start)}–{formatTime(action.end)} · {clip.filename}
+            <span className={`tag ${evidenceClass(action.evidence_class)}`}>clip action</span> {humanize(action.action_type)} · clip time {formatTime(action.start)}–{formatTime(action.end)} · {clip.filename}
           </Link>
         )))}
       </section>
@@ -237,8 +241,7 @@ export function TaskDetailPage() {
           <article key={object.id} className="panel p-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-block h-3 w-3 rounded-full" style={{ background: object.color }} />
-              <strong>{object.local_id}</strong>
-              <span>{object.label}</span>
+              <strong>{labeledId(object.local_id, object.label)}</strong>
               {object.uncertain && <span className="tag unknown">identity uncertain</span>}
             </div>
             <p className="mt-1 text-sm text-[var(--muted)]">{object.description}</p>
@@ -254,9 +257,9 @@ export function TaskDetailPage() {
                   >
                     {entry.image_url && <img src={entry.image_url} alt="" className="mb-2 h-28 w-full object-contain bg-black" />}
                     <div>{clip?.filename ?? entry.video_id}</div>
-                    <div className="text-[var(--muted)]">Before: {entry.state_before || "undescribed"}</div>
-                    <div className="text-[var(--muted)]">After: {entry.state_after || "undescribed"}</div>
-                    <div className="text-xs">{entry.status}{entry.uncertain ? " · uncertain" : ""}</div>
+                    <div className="text-[var(--muted)]">Before: {humanize(entry.state_before) || "undescribed"}</div>
+                    <div className="text-[var(--muted)]">After: {humanize(entry.state_after) || "undescribed"}</div>
+                    <div className="text-xs">{humanize(entry.status)}{entry.uncertain ? " · uncertain" : ""}</div>
                   </button>
                 );
               })}
@@ -268,7 +271,7 @@ export function TaskDetailPage() {
           {task.links.filter((link) => link.status !== "rejected").map((link) => (
             <div key={link.id} className="panel flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
               <div>
-                {clipById.get(link.video_id)?.filename} / {link.object_local_id} · {link.status}
+                {clipById.get(link.video_id)?.filename} / {humanize(link.object_local_id)} · {humanize(link.status)}
                 {link.uncertain && " · uncertain"}
                 <div className="text-xs text-[var(--muted)]">{link.note}</div>
               </div>
@@ -297,7 +300,7 @@ export function TaskDetailPage() {
         <h2 className="text-lg">Inter-session changes</h2>
         {task.transitions.map((row) => (
           <article key={row.id} className="panel space-y-2 p-3 text-sm">
-            <span className={`tag ${evidenceClass(row.evidence_class)}`}>{row.evidence_class}</span>
+            <span className={`tag ${evidenceClass(row.evidence_class)}`}>{humanize(row.evidence_class)}</span>
             {row.verified && <span className="tag">researcher verified</span>}
             <p><strong>Observed change.</strong> {row.observed_change}</p>
             <p><strong>Hypothesis.</strong> {row.hypothesis || "None stored."}</p>
@@ -322,7 +325,7 @@ export function TaskDetailPage() {
         <h2 className="text-lg">Project readings</h2>
         {task.revisions.map((revision) => (
           <div key={revision.id} className="panel p-3 text-sm">
-            <div>Version {revision.version} · {revision.trigger}</div>
+            <div>Version {revision.version} · {humanize(revision.trigger)}</div>
             <p className="text-[var(--muted)]">{revision.change_summary}</p>
           </div>
         ))}
@@ -361,10 +364,10 @@ function ClipRow({
         <strong>{clip.filename}</strong>
         {highlight && <span className="tag inferred">{position.tied ? "tied timestamp" : "ambiguous position"}</span>}
         {clip.order_locked && <span className="tag">locked</span>}
-        <span className="text-xs text-[var(--muted)]">{clip.research_mode || "camera unset"}</span>
+        <span className="text-xs text-[var(--muted)]">{humanize(clip.research_mode) || "camera unset"}</span>
       </div>
       <p className="mt-1 text-xs text-[var(--muted)]">
-        Capture {clip.capture_time_utc || clip.capture_time_raw || "not in the file"} · source {clip.timestamp_source} · reliability {clip.timestamp_reliability}
+        Capture {clip.capture_time_utc || clip.capture_time_raw || "not in the file"} · source {humanize(clip.timestamp_source)} · reliability {humanize(clip.timestamp_reliability)}
         <br />
         File modified {clip.file_mtime || "unknown"} · uploaded {clip.uploaded_at} · clip duration {formatTime(clip.duration_sec)}
       </p>
@@ -384,7 +387,7 @@ function ClipRow({
           aria-label={`Camera mode for ${clip.filename}`}
           onChange={async (event) => { await api.patchClip(task.project.id, clip.id, { research_mode: event.target.value }); await onChange(); }}
         >
-          {MODES.map((item) => <option key={item || "unset"} value={item}>{item || "unset"}</option>)}
+          {MODES.map((item) => <option key={item || "unset"} value={item}>{humanize(item) || "Unset"}</option>)}
         </select>
         <input
           className="field w-64"
@@ -430,9 +433,9 @@ function ComparePane({ task, keys }: { task: TaskBundle; keys: string[] }) {
         <figure key={`${item.object.id}-${item.entry.video_id}`} className="panel p-3">
           {item.entry.image_url ? <img src={item.entry.image_url} alt="" className="max-h-64 w-full object-contain bg-black" /> : <div className="text-sm text-[var(--muted)]">No stored crop for this appearance.</div>}
           <figcaption className="mt-2 text-sm">
-            {item.object.local_id} · {item.clip?.filename}
-            <div>Before: {item.entry.state_before || "undescribed"}</div>
-            <div>After: {item.entry.state_after || "undescribed"}</div>
+            {humanize(item.object.local_id)} · {item.clip?.filename}
+            <div>Before: {humanize(item.entry.state_before) || "undescribed"}</div>
+            <div>After: {humanize(item.entry.state_after) || "undescribed"}</div>
           </figcaption>
         </figure>
       ))}

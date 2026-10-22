@@ -19,7 +19,7 @@ from app.models.domain import (
     WorkflowStepRow,
 )
 from app.models.media import FrameAsset, VideoAsset
-from app.models.runs import AnalysisRevision, AnalysisRun, PipelineStageRun
+from app.models.runs import AnalysisRevision, AnalysisRun, ModelResponseRow, PipelineStageRun
 
 
 def video_dict(video: VideoAsset, frame_count: int | None = None) -> dict:
@@ -81,6 +81,11 @@ def run_summary(session: Session, run: AnalysisRun) -> dict:
     duration = None
     if run.started_at and run.finished_at:
         duration = (run.finished_at - run.started_at).total_seconds()
+    unpriced_calls = session.scalar(
+        select(func.count())
+        .select_from(ModelResponseRow)
+        .where(ModelResponseRow.run_id == run.id, ModelResponseRow.price_known.is_(False))
+    ) or 0
     return {
         "id": run.id,
         "project_id": run.project_id,
@@ -99,6 +104,7 @@ def run_summary(session: Session, run: AnalysisRun) -> dict:
         "fixture": run.fixture,
         "fixture_label": run.fixture_label,
         "cost_usd": run.cost_usd,
+        "unpriced_calls": unpriced_calls,
         "input_tokens": run.input_tokens,
         "output_tokens": run.output_tokens,
         "error": run.error,

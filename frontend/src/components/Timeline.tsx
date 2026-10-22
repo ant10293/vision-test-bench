@@ -1,4 +1,5 @@
 import { formatTime } from "../lib/api";
+import { humanize } from "../lib/humanize";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
 
@@ -95,7 +96,7 @@ function segments(name: (typeof TRACKS)[number], bundle: Bundle): Segment[] {
       key: frame.id,
       start: frame.timestamp,
       end: frame.timestamp + 0.08,
-      label: frame.reason,
+      label: humanize(frame.reason),
       color: frame.scene_change ? "#e06c75" : "#465066",
     }));
   }
@@ -104,7 +105,7 @@ function segments(name: (typeof TRACKS)[number], bundle: Bundle): Segment[] {
       key: action.id,
       start: action.start,
       end: Math.max(action.end, action.start + 0.05),
-      label: `${action.action_type} · ${action.outcome}`,
+      label: `${humanize(action.action_type)} · ${humanize(action.outcome)}`,
       color: action.outcome === "completed" ? "#1f6b4a" : action.outcome === "attempted" ? "#8a6a22" : "#5c3a55",
       actionId: action.local_id,
     }));
@@ -128,7 +129,7 @@ function segments(name: (typeof TRACKS)[number], bundle: Bundle): Segment[] {
       key: item.id,
       start: item.timestamp,
       end: item.timestamp + 0.12,
-      label: `${item.from_state} → ${item.to_state}`,
+      label: `${humanize(item.from_state)} → ${humanize(item.to_state)}`,
       color: "#31597a",
       objectId: item.object_local_id,
     }));
