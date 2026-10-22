@@ -277,18 +277,21 @@ button.linkish {
   color: var(--muted);
 }
 
-/* Floor is high enough for two rows in a full card. Images still stop at the wide-layout cell (378px). */
+/* Each preview row is 10rem. The mosaic stops at two rows so a full card cannot grow past that height. */
 .thumb-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  grid-auto-rows: 10rem;
+  max-height: 20rem;
+  overflow: hidden;
   justify-content: start;
 }
 .thumb-grid > img {
   width: 100%;
-  max-width: 23.625rem;
-  justify-self: start;
-  aspect-ratio: 16 / 9;
-  object-fit: contain;
+  height: 10rem;
+  max-height: 10rem;
+  object-fit: cover;
+  object-position: center;
   background: #000;
 }
 .project-grid,

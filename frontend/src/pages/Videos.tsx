@@ -37,7 +37,7 @@ function ProjectCard({ project, videos, onOpen }: { project: ProjectSummary; vid
           ))}
         </div>
       ) : (
-        <div className="flex aspect-video items-center justify-center bg-black text-xs text-[var(--muted)]">
+        <div className="flex h-40 items-center justify-center bg-black text-xs text-[var(--muted)]">
           {processing ? "Processing…" : "No videos"}
         </div>
       )}
