@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { AssetDropZone } from "../components/AssetDropZone";
 import { api, formatTime } from "../lib/api";
 
 export function VideosPage() {
@@ -34,28 +35,19 @@ export function VideosPage() {
         </div>
         <button className="btn" onClick={() => create.mutate()}>New project</button>
       </header>
-      <label
-        className="panel block border-dashed p-8 text-center text-sm text-[var(--muted)]"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          const file = event.dataTransfer.files[0];
+      <AssetDropZone
+        accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+        prompt="Drag and drop a video here or"
+        chooseLabel="Choose file"
+        supported="Supported: MP4, MOV, WebM"
+        pending={upload.isPending}
+        pendingLabel="Reading and probing…"
+        error={error}
+        onFiles={(files) => {
+          const file = files[0];
           if (file) upload.mutate(file);
         }}
-      >
-        Drop an MP4, MOV, or WebM file, or
-        <input
-          className="ml-2"
-          type="file"
-          accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) upload.mutate(file);
-          }}
-        />
-        {upload.isPending && <div className="mt-2">Reading and probing…</div>}
-        {error && <div className="mt-2 text-[var(--rose)]">{error}</div>}
-      </label>
+      />
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {videos.data?.map((video) => (
           <Link key={video.id} to={`/videos/${video.id}`} className="panel overflow-hidden">

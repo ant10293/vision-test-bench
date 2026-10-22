@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { AssetDropZone } from "../components/AssetDropZone";
 import { api, evidenceClass, formatTime, type TaskBundle, type TaskClip } from "../lib/api";
 import { clipPosition } from "../lib/taskOrder";
 
@@ -103,36 +104,28 @@ export function TaskDetailPage() {
         </div>
       </header>
 
-      <label
-        className="panel block border-dashed p-6 text-center text-sm text-[var(--muted)]"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          const files = [...event.dataTransfer.files];
+      <AssetDropZone
+        multiple
+        accept="video/mp4,video/quicktime,video/webm"
+        prompt="Drag and drop recordings here or"
+        chooseLabel="Choose files"
+        supported="Supported: MP4, MOV, WebM"
+        hint="Each clip can use a different camera configuration after upload."
+        pending={upload.isPending}
+        pendingLabel="Uploading and reconciling the project reading…"
+        error={error}
+        onFiles={(files) => {
           if (files.length) upload.mutate(files);
         }}
-      >
-        Drop recordings here, or
-        <input
-          className="ml-2"
-          type="file"
-          accept="video/mp4,video/quicktime,video/webm"
-          multiple
-          onChange={(event) => {
-            const files = [...(event.target.files ?? [])];
-            if (files.length) upload.mutate(files);
-          }}
-        />
-        <div className="mt-2">
-          Camera mode for this batch
-          <select className="field ml-2 inline w-auto" value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Camera mode">
-            {MODES.map((item) => <option key={item || "unset"} value={item}>{item || "unset"}</option>)}
-          </select>
-        </div>
-        Each clip can use a different camera configuration after upload.
-      </label>
-      {error && <p className="text-sm text-[var(--rose)]">{error}</p>}
-      {upload.isPending && <p className="text-sm text-[var(--muted)]">Uploading and reconciling the project reading…</p>}
+        settings={
+          <label>
+            Camera mode for this batch
+            <select className="field ml-2 inline w-auto" value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Camera mode">
+              {MODES.map((item) => <option key={item || "unset"} value={item}>{item || "unset"}</option>)}
+            </select>
+          </label>
+        }
+      />
 
       <section className="space-y-2">
         <h2 className="text-lg">Chronology</h2>
