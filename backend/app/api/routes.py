@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app import __version__
@@ -14,17 +15,32 @@ from app.api.serialize import bundle, run_summary, video_dict
 from app.db import get_session
 from app.evaluation.compare import compare_documents
 from app.evaluation.metrics import evaluate_documents
+from app.models.audio import AudioAlignment, TranscriptSegment
 from app.models.domain import (
     ActionRow,
     AmbiguityRow,
+    AnnotationRow,
+    Artifact,
     ComparisonRow,
     DetectedObject,
     EvaluationResult,
     GroundTruthDataset,
     ObjectImage,
+    SceneChunk,
+    SegmentationMask,
+    SpatialTrackPoint,
     WorkflowRow,
 )
 from app.models.media import FrameAsset, Project, VideoAsset
+from app.models.sessions import (
+    CanonicalObject,
+    IdentityLink,
+    InterSessionTransition,
+    OrderHypothesis,
+    ProjectGroundTruth,
+    ProjectRevision,
+    RecordingSession,
+)
 from app.models.runs import (
     AnalysisRevision,
     AnalysisRun,
@@ -127,10 +143,21 @@ def dashboard(session: Session = Depends(db)) -> dict:
     }
 
 
+def _project_payload(row: Project) -> dict:
+    created = row.created_at.isoformat() if row.created_at else ""
+    return {
+        "id": row.id,
+        "name": row.name,
+        "description": row.description,
+        "is_task": bool(row.is_task),
+        "created_at": created,
+    }
+
+
 @router.get("/projects")
 def list_projects(session: Session = Depends(db)) -> list[dict]:
     rows = session.scalars(select(Project).order_by(Project.created_at.desc())).all()
-    return [{"id": row.id, "name": row.name, "description": row.description, "created_at": row.created_at.isoformat()} for row in rows]
+    return [_project_payload(row) for row in rows]
 
 
 @router.post("/projects")
@@ -138,7 +165,114 @@ def create_project(payload: dict, session: Session = Depends(db)) -> dict:
     row = Project(name=payload.get("name") or "Untitled study", description=payload.get("description") or "")
     session.add(row)
     session.commit()
-    return {"id": row.id, "name": row.name, "description": row.description}
+    session.refresh(row)
+    return _project_payload(row)
+
+
+def _unlink_stored(stored: str) -> None:
+    if not stored:
+        return
+    try:
+        path = resolve_stored(stored)
+    except ValueError:
+        return
+    if path.is_file():
+        path.unlink()
+
+
+def _remove_tree(folder: str, name: str) -> None:
+    path = data_path(folder, name)
+    if path.is_dir():
+        shutil.rmtree(path)
+
+
+def _delete_where(session: Session, model, column, ids: list[str]) -> None:
+    if ids:
+        session.execute(delete(model).where(column.in_(ids)))
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str, session: Session = Depends(db)) -> dict:
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "project not found")
+    videos = list(session.scalars(select(VideoAsset).where(VideoAsset.project_id == project.id)))
+    runs = list(session.scalars(select(AnalysisRun).where(AnalysisRun.project_id == project.id)))
+    video_ids = [video.id for video in videos]
+    run_ids = [run.id for run in runs]
+    paths: list[str] = []
+    for video in videos:
+        paths.extend([video.stored_path, video.proxy_path, video.thumbnail_path, video.contact_sheet_path])
+    if video_ids:
+        paths.extend(session.scalars(select(FrameAsset.path).where(FrameAsset.video_id.in_(video_ids))))
+        paths.extend(session.scalars(select(Artifact.path).where(Artifact.video_id.in_(video_ids))))
+    if run_ids:
+        paths.extend(session.scalars(select(Artifact.path).where(Artifact.run_id.in_(run_ids))))
+        paths.extend(session.scalars(select(SegmentationMask.path).where(SegmentationMask.run_id.in_(run_ids))))
+        paths.extend(
+            session.scalars(
+                select(ObjectImage.path)
+                .join(DetectedObject, ObjectImage.object_id == DetectedObject.id)
+                .where(DetectedObject.run_id.in_(run_ids))
+            )
+        )
+    for model in (
+        RecordingSession,
+        CanonicalObject,
+        IdentityLink,
+        InterSessionTransition,
+        ProjectRevision,
+        ProjectGroundTruth,
+        OrderHypothesis,
+    ):
+        session.execute(delete(model).where(model.project_id == project.id))
+    _delete_where(session, TranscriptSegment, TranscriptSegment.video_id, video_ids)
+    _delete_where(session, TranscriptSegment, TranscriptSegment.run_id, run_ids)
+    _delete_where(session, AudioAlignment, AudioAlignment.video_id, video_ids)
+    _delete_where(session, AudioAlignment, AudioAlignment.run_id, run_ids)
+    _delete_where(session, Artifact, Artifact.video_id, video_ids)
+    _delete_where(session, Artifact, Artifact.run_id, run_ids)
+    _delete_where(session, SegmentationMask, SegmentationMask.run_id, run_ids)
+    _delete_where(session, SpatialTrackPoint, SpatialTrackPoint.run_id, run_ids)
+    _delete_where(session, SceneChunk, SceneChunk.run_id, run_ids)
+    _delete_where(session, GroundTruthDataset, GroundTruthDataset.run_id, run_ids)
+    _delete_where(session, EvaluationResult, EvaluationResult.run_id, run_ids)
+    _delete_where(session, AnnotationRow, AnnotationRow.run_id, run_ids)
+    if run_ids:
+        session.execute(
+            delete(ComparisonRow).where(or_(ComparisonRow.left_run_id.in_(run_ids), ComparisonRow.right_run_id.in_(run_ids)))
+        )
+    session.execute(delete(Project).where(Project.id == project.id))
+    session.commit()
+    for stored in {path for path in paths if path}:
+        remaining = session.scalar(
+            select(func.count()).select_from(VideoAsset).where(
+                or_(VideoAsset.stored_path == stored, VideoAsset.proxy_path == stored)
+            )
+        ) or 0
+        if remaining:
+            continue
+        _unlink_stored(stored)
+        if stored.startswith("originals/"):
+            prefix = Path(stored).name.split("_", 1)[0]
+            still = session.scalar(
+                select(func.count()).select_from(VideoAsset).where(VideoAsset.stored_path.like(f"originals/{prefix}\\_%", escape="\\"))
+            ) or 0
+            if not still:
+                pts = data_path("originals", f"{prefix}.pts.json")
+                if pts.is_file():
+                    pts.unlink()
+    for video_id in video_ids:
+        _remove_tree("frames", video_id)
+    for run_id in run_ids:
+        _remove_tree("runs", run_id)
+        run_export = data_path("exports", f"{run_id}.zip")
+        if run_export.is_file():
+            run_export.unlink()
+    export = data_path("exports", f"{project_id}-task.zip")
+    if export.is_file():
+        export.unlink()
+    return {"deleted": project_id}
 
 
 @router.post("/videos")

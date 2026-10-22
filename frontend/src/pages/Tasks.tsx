@@ -118,9 +118,9 @@ export function TaskDetailPage() {
           if (files.length) upload.mutate(files);
         }}
         settings={
-          <label>
-            Camera mode for this batch
-            <select className="field ml-2 inline w-auto" value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Camera mode">
+          <label className="field-label">
+            <span>Camera mode for this batch</span>
+            <select className="field w-auto" value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Camera mode">
               {MODES.map((item) => <option key={item || "unset"} value={item}>{item || "unset"}</option>)}
             </select>
           </label>

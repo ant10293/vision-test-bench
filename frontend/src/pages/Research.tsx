@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../lib/api";
+import type { RunSummary } from "../lib/types";
 
 export function ProvidersPage() {
   const client = useQueryClient();
@@ -36,7 +37,7 @@ export function ProvidersPage() {
             </div>
             {provider.last_error && <p className="text-sm text-[var(--rose)]">{provider.last_error}</p>}
             {!["deterministic", "fixture", "manual_json"].includes(provider.id) && (
-              <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto_auto]">
+              <div className="flex flex-wrap items-center gap-2">
                 <input className="field" type="password" autoComplete="off" placeholder="API key" value={keys[provider.id] ?? ""} onChange={(event) => setKeys({ ...keys, [provider.id]: event.target.value })} />
                 <input className="field" placeholder={provider.id === "openai_compatible" ? "Base URL" : "Optional base URL"} value={bases[provider.id] ?? provider.base_url} onChange={(event) => setBases({ ...bases, [provider.id]: event.target.value })} />
                 <button className="btn" onClick={() => save.mutate(provider.id)}>Save key</button>
@@ -54,10 +55,10 @@ export function ProvidersPage() {
             {["deterministic", "fixture", "manual_json"].includes(provider.id) && (
               <button className="btn" onClick={async () => { await api.validateProvider(provider.id); await client.invalidateQueries({ queryKey: ["providers"] }); }}>Mark local provider ready</button>
             )}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <input className="field" placeholder="Add model id" value={models[provider.id] ?? ""} onChange={(event) => setModels({ ...models, [provider.id]: event.target.value })} />
-              <button className="btn" onClick={async () => { await api.addModel(provider.id, models[provider.id] ?? ""); await client.invalidateQueries({ queryKey: ["providers"] }); }}>Add model</button>
-              <button className="btn" onClick={async () => {
+              <button className="btn shrink-0" onClick={async () => { await api.addModel(provider.id, models[provider.id] ?? ""); await client.invalidateQueries({ queryKey: ["providers"] }); }}>Add model</button>
+              <button className="btn shrink-0" onClick={async () => {
                 const found = await api.discoverModels(provider.id);
                 setMessage(found.error ? found.error : `Discovered ${found.discovered.length} model ids.`);
               }}>Discover</button>
@@ -115,15 +116,9 @@ export function ComparePage() {
       <p className="max-w-3xl text-sm text-[var(--muted)]">
         Object ids from different runs are not the same object. Assisted matches use labels and are marked as assisted. Disagreement is not a verdict.
       </p>
-      <div className="grid gap-2 md:grid-cols-2">
-        <select className="field" value={left} onChange={(event) => setLeft(event.target.value)}>
-          <option value="">Left run</option>
-          {completed.map((run) => <option key={run.id} value={run.id}>{run.name}</option>)}
-        </select>
-        <select className="field" value={right} onChange={(event) => setRight(event.target.value)}>
-          <option value="">Right run</option>
-          {completed.map((run) => <option key={run.id} value={run.id}>{run.name}</option>)}
-        </select>
+      <div className="grid items-stretch gap-4 lg:grid-cols-2">
+        <RunColumn title="Left run" value={left} onChange={setLeft} runs={completed} />
+        <RunColumn title="Right run" value={right} onChange={setRight} runs={completed} />
       </div>
       <button className="btn primary" disabled={!left || !right} onClick={async () => {
         const created = await api.compare(left, right);
@@ -144,5 +139,50 @@ export function ComparePage() {
         </div>
       )}
     </div>
+  );
+}
+
+function RunColumn({
+  title,
+  value,
+  onChange,
+  runs,
+}: {
+  title: string;
+  value: string;
+  onChange: (id: string) => void;
+  runs: RunSummary[];
+}) {
+  const selected = runs.find((run) => run.id === value);
+  return (
+    <section className="panel flex h-full min-h-48 flex-col gap-3 p-4">
+      <h2 className="text-sm font-medium">{title}</h2>
+      <select className="field stretch" value={value} onChange={(event) => onChange(event.target.value)} aria-label={title}>
+        <option value="">{title}</option>
+        {runs.map((run) => <option key={run.id} value={run.id}>{run.name}</option>)}
+      </select>
+      {selected ? (
+        <dl className="mt-auto grid grid-cols-2 gap-x-4 gap-y-2 border-t border-[var(--line)] pt-3 text-xs">
+          <div>
+            <dt className="text-[var(--muted)]">Model</dt>
+            <dd>{selected.model_id || "unset"}</dd>
+          </div>
+          <div>
+            <dt className="text-[var(--muted)]">Provider</dt>
+            <dd>{selected.provider_id}</dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-[var(--muted)]">Video</dt>
+            <dd className="truncate">{selected.video_filename}</dd>
+          </div>
+          <div>
+            <dt className="text-[var(--muted)]">Objects / actions</dt>
+            <dd>{selected.object_count} / {selected.action_count}</dd>
+          </div>
+        </dl>
+      ) : (
+        <p className="mt-auto text-xs text-[var(--muted)]">Select a completed run.</p>
+      )}
+    </section>
   );
 }

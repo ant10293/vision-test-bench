@@ -24,11 +24,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.blob()) as T;
 }
 
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  is_task: boolean;
+}
+
 export const api = {
   dashboard: () => request<Dashboard>("/api/dashboard"),
-  projects: () => request<{ id: string; name: string; description: string }[]>("/api/projects"),
+  projects: () => request<ProjectSummary[]>("/api/projects"),
   createProject: (name: string, description = "") =>
-    request<{ id: string }>("/api/projects", { method: "POST", body: JSON.stringify({ name, description }) }),
+    request<ProjectSummary>("/api/projects", { method: "POST", body: JSON.stringify({ name, description }) }),
+  deleteProject: (id: string) => request<{ deleted: string }>(`/api/projects/${id}`, { method: "DELETE" }),
   videos: (projectId?: string) => request<VideoInfo[]>(`/api/videos${projectId ? `?project_id=${projectId}` : ""}`),
   video: (id: string) => request<VideoInfo>(`/api/videos/${id}`),
   upload: (projectId: string, file: File) => {

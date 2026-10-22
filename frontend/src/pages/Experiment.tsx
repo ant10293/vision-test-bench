@@ -89,7 +89,7 @@ export function ExperimentPage() {
       </Field>
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Provider">
-          <select className="field" value={providerId} onChange={(event) => {
+          <select className="field stretch" value={providerId} onChange={(event) => {
             const next = event.target.value;
             setProviderId(next);
             const first = providers.data?.find((item) => item.id === next)?.models[0];
@@ -99,7 +99,7 @@ export function ExperimentPage() {
           </select>
         </Field>
         <Field label="Model">
-          <select className="field" value={modelId} onChange={(event) => setModelId(event.target.value)}>
+          <select className="field stretch" value={modelId} onChange={(event) => setModelId(event.target.value)}>
             {models.map((model) => <option key={model.model_id} value={model.model_id}>{model.model_id}</option>)}
           </select>
         </Field>
@@ -119,19 +119,19 @@ export function ExperimentPage() {
       </Field>
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Sampling">
-          <select className="field" value={preset} onChange={(event) => setPreset(event.target.value)}>
+          <select className="field stretch" value={preset} onChange={(event) => setPreset(event.target.value)}>
             {["sparse", "standard", "detailed", "high_detail", "intensive", "adaptive"].map((item) => <option key={item}>{item}</option>)}
           </select>
         </Field>
         <Field label="Pipeline">
-          <select className="field" value={pass} onChange={(event) => setPass(event.target.value)}>
+          <select className="field stretch" value={pass} onChange={(event) => setPass(event.target.value)}>
             <option value="single">Single pass</option>
             <option value="multi">Multi-stage</option>
             <option value="multi_reinspect">Multi-stage + reinspection</option>
           </select>
         </Field>
         <Field label="Segmentation">
-          <select className="field" value={segmentation} onChange={(event) => setSegmentation(event.target.value)}>
+          <select className="field stretch" value={segmentation} onChange={(event) => setSegmentation(event.target.value)}>
             <option value="disabled">Disabled</option>
             <option value="boxes_only">Boxes and crops</option>
             <option value="local_grabcut">Local GrabCut</option>
@@ -141,10 +141,10 @@ export function ExperimentPage() {
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Temperature">
-          <input className="field" disabled={!selected?.supports_temperature} value={temperature} placeholder={selected?.supports_temperature ? "model default" : "unsupported"} onChange={(event) => setTemperature(event.target.value)} />
+          <input className="field stretch" disabled={!selected?.supports_temperature} value={temperature} placeholder={selected?.supports_temperature ? "model default" : "unsupported"} onChange={(event) => setTemperature(event.target.value)} />
         </Field>
         <Field label="Reasoning effort">
-          <select className="field" value={reasoning} disabled={!selected?.reasoning_efforts.length} onChange={(event) => setReasoning(event.target.value)}>
+          <select className="field stretch" value={reasoning} disabled={!selected?.reasoning_efforts.length} onChange={(event) => setReasoning(event.target.value)}>
             <option value="">default</option>
             {selected?.reasoning_efforts.map((effort) => <option key={effort}>{effort}</option>)}
           </select>
@@ -176,7 +176,7 @@ export function ExperimentPage() {
         {transcribe && (
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Whisper model">
-              <select className="field" value={whisperModel} onChange={(event) => setWhisperModel(event.target.value)}>
+              <select className="field stretch" value={whisperModel} onChange={(event) => setWhisperModel(event.target.value)}>
                 {(whisper.data?.models ?? [{ model: "base", downloaded: false }]).map((item) => (
                   <option key={item.model} value={item.model}>
                     {item.model}{item.downloaded ? "" : " (not downloaded)"}
@@ -185,7 +185,7 @@ export function ExperimentPage() {
               </select>
             </Field>
             <Field label="Language">
-              <input className="field" value={language} placeholder="auto" onChange={(event) => setLanguage(event.target.value)} />
+              <input className="field stretch" value={language} placeholder="auto" onChange={(event) => setLanguage(event.target.value)} />
             </Field>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={vad} onChange={(event) => setVad(event.target.checked)} />
@@ -222,8 +222,8 @@ export function ExperimentPage() {
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="block space-y-1 text-sm">
-      <span className="text-[var(--muted)]">{label}</span>
+    <label className="field-label">
+      <span>{label}</span>
       {children}
     </label>
   );

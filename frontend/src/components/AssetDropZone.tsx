@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-type Item = { name: string; url: string };
+type Item = { name: string; url: string; file: File };
 
 type Props = {
   accept: string;
@@ -13,6 +13,8 @@ type Props = {
   pendingLabel?: string;
   error?: string;
   onFiles: (files: File[]) => void;
+  defer?: boolean;
+  onStagedChange?: (files: File[]) => void;
   settings?: ReactNode;
 };
 
@@ -27,6 +29,8 @@ export function AssetDropZone({
   pendingLabel,
   error,
   onFiles,
+  defer = false,
+  onStagedChange,
   settings,
 }: Props) {
   const input = useRef<HTMLInputElement>(null);
@@ -52,15 +56,34 @@ export function AssetDropZone({
     };
   }, []);
 
+  function publish(next: Item[]) {
+    onStagedChange?.(next.map((item) => item.file));
+  }
+
   function take(list: FileList | null) {
     const files = [...(list ?? [])];
     const chosen = multiple ? files : files.slice(0, 1);
     if (!chosen.length) return;
+    const added = chosen.map((file) => ({ name: file.name, url: URL.createObjectURL(file), file }));
     setItems((current) => {
-      for (const item of current) URL.revokeObjectURL(item.url);
-      return chosen.map((file) => ({ name: file.name, url: URL.createObjectURL(file) }));
+      const next = defer && multiple ? [...current, ...added] : added;
+      if (!(defer && multiple)) {
+        for (const item of current) URL.revokeObjectURL(item.url);
+      }
+      publish(next);
+      return next;
     });
-    onFiles(chosen);
+    if (!defer) onFiles(chosen);
+  }
+
+  function remove(url: string) {
+    setItems((current) => {
+      const next = current.filter((item) => item.url !== url);
+      const gone = current.find((item) => item.url === url);
+      if (gone) URL.revokeObjectURL(gone.url);
+      publish(next);
+      return next;
+    });
   }
 
   return (
@@ -122,6 +145,9 @@ export function AssetDropZone({
               <strong>{item.name}</strong>
               <span>{pending ? pendingLabel : error || "Ready"}</span>
             </div>
+            {defer && (
+              <button type="button" className="btn" onClick={() => remove(item.url)}>Remove</button>
+            )}
           </div>
         </div>
       ))}
