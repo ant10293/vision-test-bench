@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
 import { api, formatTime, type ProjectSummary } from "../lib/api";
 import type { VideoInfo } from "../lib/types";
@@ -41,10 +41,12 @@ function projectWhen(project: ProjectSummary): string {
 
 export function VideosPage() {
   const client = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const requestedProject = params.get("project") ?? "";
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: api.tasks });
-  const [mode, setMode] = useState<"library" | "create" | "edit">("library");
-  const [editId, setEditId] = useState("");
+  const [mode, setMode] = useState<"library" | "create" | "edit">(requestedProject ? "edit" : "library");
+  const [editId, setEditId] = useState(requestedProject);
   const [name, setName] = useState("");
   const [staged, setStaged] = useState<File[]>([]);
   const [error, setError] = useState("");
@@ -135,7 +137,11 @@ export function VideosPage() {
     setName("");
     setStaged([]);
     setError("");
+    if (params.get("project")) setParams({}, { replace: true });
   }
+
+  const requested = (projects.data ?? []).find((project) => project.id === requestedProject);
+  if (requested?.is_task) return <Navigate to={`/tasks/${requested.id}`} replace />;
 
   return (
     <div className="space-y-4">
@@ -274,11 +280,18 @@ export function VideoDetailPage() {
     if (node.readyState >= 1) seek();
     return () => node.removeEventListener("loadedmetadata", seek);
   }, [params, video.data?.id]);
+  const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   if (!video.data) return <p className="text-[var(--muted)]">Loading video…</p>;
   const item = video.data;
+  const project = projects.data?.find((row) => row.id === item.project_id);
+  const backHref = project?.is_task ? `/tasks/${project.id}` : item.project_id ? `/videos?project=${item.project_id}` : "/videos";
+  const backLabel = project?.is_task ? "← Back to task" : item.project_id ? "← Back to project" : "← Back to library";
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-medium">{item.filename}</h1>
+      <div>
+        <Link className="text-sm text-[var(--muted)]" to={backHref}>{backLabel}</Link>
+        <h1 className="mt-2 text-2xl font-medium">{item.filename}</h1>
+      </div>
       <p className="text-xs text-[var(--amber)]">Clip time starts at the beginning of this file. It is not the project capture clock.</p>
       <video ref={player} src={item.playback_url} controls className="max-h-[480px] w-full rounded-lg bg-black" />
       <div className="panel grid gap-2 p-3 text-sm md:grid-cols-3">
