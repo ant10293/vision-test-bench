@@ -1,9 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { Trash2 } from "lucide-react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
 import { api, formatTime, type ProjectSummary } from "../lib/api";
 import type { VideoInfo } from "../lib/types";
+
+function compareDisplayOrder(left: VideoInfo, right: VideoInfo): number {
+  const leftRank = left.order_index;
+  const rightRank = right.order_index;
+  if (leftRank == null && rightRank == null) return 0;
+  if (leftRank == null) return 1;
+  if (rightRank == null) return -1;
+  return leftRank - rightRank;
+}
+
+function inDisplayOrder(videos: VideoInfo[]): VideoInfo[] {
+  if (!videos.some((video) => video.order_index != null)) return videos;
+  return [...videos].sort(compareDisplayOrder);
+}
 
 function ProjectCard({ project, videos, onOpen }: { project: ProjectSummary; videos: VideoInfo[]; onOpen: () => void }) {
   const frames = videos.filter((video) => video.thumbnail_url);
@@ -30,6 +46,114 @@ function ProjectCard({ project, videos, onOpen }: { project: ProjectSummary; vid
     </button>
   );
 }
+
+type SortCell = { key: string; video: VideoInfo | null; order: number; sortIndex: number };
+
+function cellsWithSlot(videos: VideoInfo[], dragId: string, insertAt: number): SortCell[] {
+  const resting = videos.filter((video) => video.id !== dragId);
+  const slot = Math.max(0, Math.min(insertAt, resting.length));
+  const cells: SortCell[] = [];
+  let visual = 0;
+  for (let index = 0; index <= resting.length; index += 1) {
+    if (index === slot) {
+      cells.push({ key: "slot", video: null, order: visual + 1, sortIndex: visual });
+      visual += 1;
+    }
+    if (index < resting.length) {
+      cells.push({ key: resting[index].id, video: resting[index], order: visual + 1, sortIndex: visual });
+      visual += 1;
+    }
+  }
+  return cells;
+}
+
+function slotIndexAtPoint(grid: HTMLElement, x: number, y: number): number | null {
+  const cells = [...grid.querySelectorAll<HTMLElement>("[data-sort-index]")];
+  if (!cells.length) return null;
+  let best = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const cell of cells) {
+    const rect = cell.getBoundingClientRect();
+    const dx = x - (rect.left + rect.width / 2);
+    const dy = y - (rect.top + rect.height / 2);
+    const distance = dx * dx + dy * dy;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = Number(cell.dataset.sortIndex);
+    }
+  }
+  return best;
+}
+
+function VideoFace({ video, order }: { video: VideoInfo; order: number }) {
+  return (
+    <>
+      {video.thumbnail_url && <img src={video.thumbnail_url} alt="" className="aspect-video w-full bg-black object-contain" />}
+      <div className="flex items-end gap-3 p-3 text-sm">
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="truncate">{video.filename}</div>
+          <div className="mono truncate text-xs text-[var(--muted)]">
+            {formatTime(video.duration_sec)} · {video.width}×{video.height} · {video.fps.toFixed(2)} fps
+            {video.variable_frame_rate ? " · VFR" : " · CFR"} · {video.codec}
+          </div>
+        </div>
+        <div className="mono shrink-0 text-xs text-[var(--muted)]" aria-label={`Order ${order}`}>{order}</div>
+      </div>
+    </>
+  );
+}
+
+function VideoCard({
+  video,
+  order,
+  sortIndex,
+  deleting,
+  onDelete,
+  onGrab,
+}: {
+  video: VideoInfo;
+  order: number;
+  sortIndex: number;
+  deleting: boolean;
+  onDelete: () => void;
+  onGrab: (event: ReactPointerEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <div className="video-card panel overflow-hidden" data-sort-index={sortIndex} onPointerDown={onGrab}>
+      <button
+        type="button"
+        className="video-card-delete"
+        aria-label={`Delete ${video.filename}`}
+        title="Delete video"
+        disabled={deleting}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onDelete();
+        }}
+      >
+        <Trash2 size={15} aria-hidden="true" />
+      </button>
+      <Link to={`/videos/${video.id}`} className="block" draggable={false}>
+        <VideoFace video={video} order={order} />
+      </Link>
+    </div>
+  );
+}
+
+type DragState = {
+  id: string;
+  index: number;
+  origin: number;
+  x: number;
+  y: number;
+  offsetX: number;
+  offsetY: number;
+  width: number;
+  height: number;
+  active: boolean;
+};
 
 function projectWhen(project: ProjectSummary): string {
   const raw = project.created_at ?? "";
@@ -64,6 +188,9 @@ export function VideosPage() {
     const group = videosByProject.get(video.project_id) ?? [];
     group.push(video);
     videosByProject.set(video.project_id, group);
+  }
+  for (const [projectId, group] of videosByProject) {
+    videosByProject.set(projectId, inDisplayOrder(group));
   }
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
@@ -113,8 +240,142 @@ export function VideosPage() {
     },
     onError: (err: Error) => setError(err.message),
   });
+  const removeVideo = useMutation({
+    mutationFn: (id: string) => api.deleteVideo(id),
+    onMutate: async (id) => {
+      setError("");
+      await client.cancelQueries({ queryKey: ["videos"] });
+      const snapshots = client.getQueriesData<VideoInfo[]>({ queryKey: ["videos"] });
+      for (const [key, data] of snapshots) {
+        if (Array.isArray(data)) client.setQueryData(key, data.filter((video) => video.id !== id));
+      }
+      return { snapshots };
+    },
+    onError: (err: Error, _id, context) => {
+      for (const [key, data] of context?.snapshots ?? []) client.setQueryData(key, data);
+      setError(err.message);
+    },
+    onSettled: async () => {
+      await client.invalidateQueries({ queryKey: ["videos"] });
+    },
+  });
+  const reorder = useMutation({
+    mutationFn: (ids: string[]) => api.orderVideos(editId, ids),
+    onMutate: async (ids) => {
+      setError("");
+      await client.cancelQueries({ queryKey: ["videos", editId] });
+      const previous = client.getQueryData<VideoInfo[]>(["videos", editId]);
+      const library = client.getQueryData<VideoInfo[]>(["videos", "all"]);
+      if (previous) {
+        const byId = new Map(previous.map((video) => [video.id, video]));
+        client.setQueryData(
+          ["videos", editId],
+          ids.flatMap((id, index) => {
+            const video = byId.get(id);
+            return video ? [{ ...video, order_index: index }] : [];
+          }),
+        );
+      }
+      if (library) {
+        const rank = new Map(ids.map((id, index) => [id, index]));
+        client.setQueryData(
+          ["videos", "all"],
+          library.map((video) => (rank.has(video.id) ? { ...video, order_index: rank.get(video.id) } : video)),
+        );
+      }
+      return { previous, library };
+    },
+    onError: (err: Error, _ids, context) => {
+      if (context?.previous) client.setQueryData(["videos", editId], context.previous);
+      if (context?.library) client.setQueryData(["videos", "all"], context.library);
+      setError(err.message);
+    },
+    onSettled: async () => {
+      await client.invalidateQueries({ queryKey: ["videos"] });
+    },
+  });
   const canSave = Boolean(name.trim()) && staged.length > 0 && !save.isPending;
-  const shown = mode === "edit" ? projectVideos.data : libraryVideos.data?.filter((video) => !taskIds.has(video.project_id));
+  const creating = mode === "create";
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const dragLive = useRef<DragState | null>(null);
+  const suppressClick = useRef(false);
+  const orderRef = useRef<string[]>([]);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const stopGesture = useRef<(() => void) | null>(null);
+  const shown = mode === "edit" ? inDisplayOrder(projectVideos.data ?? []) : libraryVideos.data?.filter((video) => !taskIds.has(video.project_id));
+  useEffect(() => {
+    if (reorder.isPending) return;
+    orderRef.current = inDisplayOrder(projectVideos.data ?? []).map((video) => video.id);
+  }, [projectVideos.data, reorder.isPending]);
+
+  useEffect(() => () => stopGesture.current?.(), []);
+
+  function commit(index: number, sourceId: string) {
+    const current = orderRef.current.length ? orderRef.current : inDisplayOrder(projectVideos.data ?? []).map((video) => video.id);
+    if (!sourceId || reorder.isPending) return;
+    const next = current.filter((id) => id !== sourceId);
+    next.splice(Math.max(0, Math.min(index, next.length)), 0, sourceId);
+    if (next.length === current.length && next.every((id, position) => id === current[position])) return;
+    orderRef.current = next;
+    reorder.mutate(next);
+  }
+
+  function grabCard(video: VideoInfo, index: number, event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || reorder.isPending) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const live: DragState = {
+      id: video.id,
+      index,
+      origin: index,
+      x: event.clientX,
+      y: event.clientY,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+      active: false,
+    };
+    dragLive.current = live;
+    const move = (pointer: PointerEvent) => {
+      const current = dragLive.current;
+      if (!current) return;
+      const distance = Math.hypot(pointer.clientX - current.x, pointer.clientY - current.y);
+      if (!current.active && distance < 6) return;
+      current.x = pointer.clientX;
+      current.y = pointer.clientY;
+      if (!current.active) {
+        current.active = true;
+        current.index = current.origin;
+        document.body.classList.add("is-sorting");
+        setDrag({ ...current });
+        return;
+      }
+      const grid = gridRef.current;
+      if (grid) {
+        const next = slotIndexAtPoint(grid, pointer.clientX, pointer.clientY);
+        if (next !== null) current.index = next;
+      }
+      setDrag({ ...current });
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      stopGesture.current = null;
+      const finished = dragLive.current;
+      dragLive.current = null;
+      setDrag(null);
+      document.body.classList.remove("is-sorting");
+      if (finished?.active) {
+        suppressClick.current = true;
+        commit(finished.index, finished.id);
+      }
+    };
+    stopGesture.current = end;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  }
 
   function openCreate() {
     setMode("create");
@@ -140,18 +401,26 @@ export function VideosPage() {
     if (params.get("project")) setParams({}, { replace: true });
   }
 
+  function requestBackToLibrary() {
+    if (creating && canSave && !window.confirm("Go back without saving? This project will be lost if you leave before saving.")) return;
+    backToLibrary();
+  }
+
   const requested = (projects.data ?? []).find((project) => project.id === requestedProject);
   if (requested?.is_task) return <Navigate to={`/tasks/${requested.id}`} replace />;
+  const editingVideos = shown ?? [];
+  const sorting = drag?.active ? cellsWithSlot(editingVideos, drag.id, drag.index) : null;
+  const draggedVideo = drag ? editingVideos.find((video) => video.id === drag.id) : undefined;
 
   return (
     <div className="space-y-4">
-      {mode !== "edit" && (
+      {mode === "library" && (
         <header className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-2xl font-medium">Video library</h1>
             <p className="text-sm text-[var(--muted)]">Originals are stored unchanged. Playback uses a proxy only when the browser cannot decode the file.</p>
           </div>
-          {mode === "library" && <button className="btn primary" onClick={openCreate}>New project</button>}
+          <button className="btn primary" onClick={openCreate}>New project</button>
         </header>
       )}
 
@@ -172,92 +441,116 @@ export function VideosPage() {
         )
       )}
 
-      {mode === "create" && (
-        <section className="panel space-y-4 p-4">
-          <div>
-            <h2 className="text-lg">New project</h2>
-            <p className="text-sm text-[var(--muted)]">Add a name and at least one video. Nothing is saved until both are present.</p>
-          </div>
-          <label className="field-label">
-            <span>Project name</span>
-            <input className="field" value={name} onChange={(event) => setName(event.target.value)} placeholder="Project name" aria-label="Project name" />
-          </label>
-          <AssetDropZone
-            accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
-            multiple
-            defer
-            prompt="Drag and drop videos here or"
-            chooseLabel="Choose files"
-            supported="Supported: MP4, MOV, WebM"
-            onFiles={() => undefined}
-            onStagedChange={setStaged}
-          />
-          {error && <p className="text-sm text-[var(--rose)]">{error}</p>}
-          <div className="flex flex-wrap items-center gap-2">
-            <button className="btn primary" disabled={!canSave} onClick={() => save.mutate()}>
-              {save.isPending ? "Saving…" : "Save project"}
-            </button>
-            <button className="btn" onClick={backToLibrary} disabled={save.isPending}>Cancel</button>
-          </div>
-        </section>
-      )}
-
-      {mode === "edit" && editing && (
+      {(creating || (mode === "edit" && editing)) && (
         <section className="space-y-3">
           <div>
-            <button className="text-sm text-[var(--muted)]" onClick={backToLibrary}>← Back to library</button>
-            <h2 className="mt-2 text-lg">{editing.name}</h2>
-            <p className="text-sm text-[var(--muted)]">Add videos to this project. They are stored as soon as you drop them.</p>
+            <button className="text-sm text-[var(--muted)] disabled:opacity-45" onClick={requestBackToLibrary} disabled={save.isPending}>← Back to library</button>
+            {creating ? (
+              <input
+                className="field mt-2 mb-2 block"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Project name"
+                aria-label="Project name"
+                autoFocus
+              />
+            ) : (
+              <h2 className="mt-2 text-lg">{editing?.name}</h2>
+            )}
+            <p className="text-sm text-[var(--muted)]">
+              {creating
+                ? "Add a name and at least one video. Nothing is saved until both are present."
+                : "Add videos to this project. They are stored as soon as you drop them. Drag a card to reorder it."}
+            </p>
           </div>
           <AssetDropZone
             accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
             multiple
+            defer={creating}
             prompt="Drag and drop videos here or"
             chooseLabel="Choose files"
             supported="Supported: MP4, MOV, WebM"
-            pending={upload.isPending}
+            pending={!creating && upload.isPending}
             pendingLabel="Reading and probing…"
-            error={error}
+            error={creating ? "" : error}
             onFiles={(files) => {
-              if (files.length) upload.mutate(files);
+              if (!creating && files.length) upload.mutate(files);
             }}
+            onStagedChange={creating ? setStaged : undefined}
           />
         </section>
       )}
 
       {mode === "edit" && (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {shown?.map((video) => (
-            <Link key={video.id} to={`/videos/${video.id}`} className="panel overflow-hidden">
-              {video.thumbnail_url && <img src={video.thumbnail_url} alt="" className="aspect-video w-full bg-black object-contain" />}
-              <div className="space-y-1 p-3 text-sm">
-                <div className="truncate">{video.filename}</div>
-                <div className="mono text-xs text-[var(--muted)]">
-                  {formatTime(video.duration_sec)} · {video.width}×{video.height} · {video.fps.toFixed(2)} fps
-                  {video.variable_frame_rate ? " · VFR" : " · CFR"} · {video.codec}
-                </div>
-              </div>
-            </Link>
-          ))}
+        <div
+          ref={gridRef}
+          className="grid gap-3 md:grid-cols-2 xl:grid-cols-3"
+          onClickCapture={(event) => {
+            if (!suppressClick.current) return;
+            event.preventDefault();
+            event.stopPropagation();
+            suppressClick.current = false;
+          }}
+        >
+          {(sorting ?? editingVideos.map((video, index) => ({ key: video.id, video, order: index + 1, sortIndex: index }))).map((cell) =>
+            cell.video ? (
+              <VideoCard
+                key={cell.key}
+                video={cell.video}
+                order={cell.order}
+                sortIndex={cell.sortIndex}
+                deleting={removeVideo.isPending && removeVideo.variables === cell.video.id}
+                onGrab={(event) => grabCard(cell.video as VideoInfo, cell.sortIndex, event)}
+                onDelete={() => {
+                  const filename = cell.video?.filename ?? "this video";
+                  const id = cell.video?.id ?? "";
+                  if (window.confirm(`Delete “${filename}”? The file will be removed from this project.`)) removeVideo.mutate(id);
+                }}
+              />
+            ) : (
+              <div
+                key={cell.key}
+                className="video-card-slot"
+                data-sort-index={cell.sortIndex}
+                style={{ height: drag?.height }}
+                aria-label={`Drop position ${cell.order}`}
+              />
+            ),
+          )}
         </div>
+      )}
+      {drag?.active && draggedVideo && createPortal(
+        <div
+          className="video-card-ghost panel"
+          style={{ left: drag.x - drag.offsetX, top: drag.y - drag.offsetY, width: drag.width, height: drag.height }}
+        >
+          <VideoFace video={draggedVideo} order={drag.index + 1} />
+        </div>,
+        document.body,
       )}
       {libraryVideos.isError && <p className="text-sm text-[var(--rose)]">{(libraryVideos.error as Error).message}</p>}
       {mode === "edit" && !projectVideos.isLoading && !projectVideos.data?.length && (
         <p className="text-sm text-[var(--muted)]" aria-live="polite">This project has no videos yet. Drop one above.</p>
       )}
-      {mode === "edit" && editing && (
+      {(creating || (mode === "edit" && editing)) && (
         <div className="border-t border-[var(--line)] pt-4">
           {error && <p className="mb-3 text-sm text-[var(--rose)]">{error}</p>}
-          <button
-            className="btn danger"
-            disabled={remove.isPending || upload.isPending}
-            onClick={() => {
-              const label = editing.name || "this project";
-              if (window.confirm(`Delete “${label}”? Its videos and files will be removed.`)) remove.mutate();
-            }}
-          >
-            {remove.isPending ? "Deleting…" : "Delete project"}
-          </button>
+          {creating ? (
+            <button className="btn primary" disabled={!canSave} onClick={() => save.mutate()}>
+              {save.isPending ? "Saving…" : "Save project"}
+            </button>
+          ) : (
+            <button
+              className="btn danger"
+              disabled={remove.isPending || upload.isPending}
+              onClick={() => {
+                const label = editing?.name || "this project";
+                if (window.confirm(`Delete “${label}”? Its videos and files will be removed.`)) remove.mutate();
+              }}
+            >
+              {remove.isPending ? "Deleting…" : "Delete project"}
+            </button>
+          )}
         </div>
       )}
     </div>

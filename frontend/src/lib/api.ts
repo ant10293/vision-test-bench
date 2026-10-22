@@ -47,6 +47,11 @@ export const api = {
     return request<VideoInfo>("/api/videos", { method: "POST", body });
   },
   deleteVideo: (id: string) => request(`/api/videos/${id}`, { method: "DELETE" }),
+  orderVideos: (projectId: string, videoIds: string[]) =>
+    request<VideoInfo[]>(`/api/projects/${projectId}/videos/order`, {
+      method: "POST",
+      body: JSON.stringify({ video_ids: videoIds }),
+    }),
   runs: (params: { status?: string; provider_id?: string } = {}) => {
     const query = new URLSearchParams();
     if (params.status) query.set("status", params.status);

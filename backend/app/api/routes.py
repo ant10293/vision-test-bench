@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app import __version__
@@ -302,12 +302,60 @@ async def upload_video(
     return video_dict(video)
 
 
+def _videos_in_display_order(project_id: str):
+    """Custom order first. Unordered videos stay newest-first behind that sequence."""
+    return (
+        select(VideoAsset)
+        .where(VideoAsset.project_id == project_id)
+        .order_by(
+            case((VideoAsset.order_index.is_(None), 1), else_=0),
+            VideoAsset.order_index.asc(),
+            VideoAsset.created_at.desc(),
+        )
+    )
+
+
 @router.get("/videos")
 def list_videos(project_id: str | None = None, session: Session = Depends(db)) -> list[dict]:
-    query = select(VideoAsset).order_by(VideoAsset.created_at.desc())
     if project_id:
-        query = query.where(VideoAsset.project_id == project_id)
+        query = _videos_in_display_order(project_id)
+    else:
+        query = select(VideoAsset).order_by(VideoAsset.created_at.desc())
     return [video_dict(video) for video in session.scalars(query)]
+
+
+@router.post("/projects/{project_id}/videos/order")
+def order_project_videos(project_id: str, payload: dict, session: Session = Depends(db)) -> list[dict]:
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "project not found")
+    if project.is_task:
+        raise HTTPException(400, "reorder task clips from the task chronology")
+    videos = {
+        video.id: video
+        for video in session.scalars(select(VideoAsset).where(VideoAsset.project_id == project_id))
+    }
+    requested = payload.get("video_ids") or []
+    if not isinstance(requested, list) or any(not isinstance(video_id, str) for video_id in requested):
+        raise HTTPException(400, "video_ids must be a list of ids")
+    if any(video_id not in videos for video_id in requested):
+        raise HTTPException(400, "video list includes a clip from another project")
+    placed = set(requested)
+    rest = [
+        video.id
+        for video in sorted(
+            (video for video in videos.values() if video.id not in placed),
+            key=lambda video: (
+                video.order_index is None,
+                video.order_index if video.order_index is not None else 0,
+                -(video.created_at.timestamp() if video.created_at else 0),
+            ),
+        )
+    ]
+    for index, video_id in enumerate([*requested, *rest]):
+        videos[video_id].order_index = float(index)
+    session.commit()
+    return [video_dict(video) for video in session.scalars(_videos_in_display_order(project_id))]
 
 
 @router.get("/videos/{video_id}")

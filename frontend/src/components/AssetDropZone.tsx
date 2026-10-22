@@ -60,6 +60,10 @@ export function AssetDropZone({
     onStagedChange?.(next.map((item) => item.file));
   }
 
+  function isFileDrag(event: { dataTransfer: DataTransfer | null }) {
+    return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+  }
+
   function take(list: FileList | null) {
     const files = [...(list ?? [])];
     const chosen = multiple ? files : files.slice(0, 1);
@@ -92,10 +96,12 @@ export function AssetDropZone({
         className={`drop-zone${dragOver ? " is-dragover" : ""}`}
         tabIndex={0}
         onDragEnter={(event) => {
+          if (!isFileDrag(event)) return;
           event.preventDefault();
           setDragOver(true);
         }}
         onDragOver={(event) => {
+          if (!isFileDrag(event)) return;
           event.preventDefault();
           setDragOver(true);
         }}
@@ -105,6 +111,7 @@ export function AssetDropZone({
         onDrop={(event) => {
           event.preventDefault();
           setDragOver(false);
+          if (!isFileDrag(event)) return;
           take(event.dataTransfer.files);
         }}
         onKeyDown={(event) => {

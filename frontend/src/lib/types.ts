@@ -56,6 +56,7 @@ export interface VideoInfo {
   has_audio?: boolean;
   audio_probed?: boolean;
   audio_codec?: string;
+  order_index?: number | null;
 }
 
 export interface FrameInfo {

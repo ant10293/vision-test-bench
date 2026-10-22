@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.media import FrameAsset, Project, VideoAsset
@@ -134,6 +134,15 @@ def ingest_file(
         sheet = data_path("sheets", f"{video.id}.jpg")
         contact_sheet(frame_paths, sheet)
         video.contact_sheet_path = relative(sheet)
+    if not project.is_task:
+        peak = session.scalar(
+            select(func.max(VideoAsset.order_index)).where(
+                VideoAsset.project_id == project_id,
+                VideoAsset.id != video.id,
+            )
+        )
+        if peak is not None:
+            video.order_index = float(peak) + 1
     session.commit()
     session.refresh(video)
     return video

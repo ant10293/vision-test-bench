@@ -192,3 +192,59 @@ def test_job_restart_requeues_running_work(client):
     assert session.get(Job, job.id).status == "pending"
     assert session.get(PipelineStageRun, stage.id).status == "pending"
     session.close()
+
+
+def test_project_video_order_and_delete(client):
+    from datetime import UTC, datetime, timedelta
+
+    from app.db import SessionLocal
+    from app.models.media import VideoAsset
+
+    project = client.post("/api/projects", json={"name": "Order"}).json()
+    task = client.post("/api/tasks", json={"name": "Task order", "description": ""}).json()
+    session = SessionLocal()
+    now = datetime.now(UTC)
+    older = VideoAsset(
+        project_id=project["id"],
+        original_filename="older.mp4",
+        stored_path="originals/older.mp4",
+        checksum_sha256="a" * 64,
+        created_at=now,
+    )
+    newer = VideoAsset(
+        project_id=project["id"],
+        original_filename="newer.mp4",
+        stored_path="originals/newer.mp4",
+        checksum_sha256="b" * 64,
+        created_at=now + timedelta(seconds=5),
+    )
+    session.add_all([older, newer])
+    session.commit()
+    older_id, newer_id = older.id, newer.id
+    session.close()
+
+    listed = client.get("/api/videos", params={"project_id": project["id"]}).json()
+    assert [item["filename"] for item in listed] == ["newer.mp4", "older.mp4"]
+
+    ordered = client.post(
+        f"/api/projects/{project['id']}/videos/order",
+        json={"video_ids": [older_id, newer_id]},
+    )
+    assert ordered.status_code == 200, ordered.text
+    assert [item["filename"] for item in ordered.json()] == ["older.mp4", "newer.mp4"]
+    again = client.get("/api/videos", params={"project_id": project["id"]}).json()
+    assert [item["id"] for item in again] == [older_id, newer_id]
+    assert [item["order_index"] for item in again] == [0, 1]
+
+    foreign = client.post(
+        f"/api/projects/{project['id']}/videos/order",
+        json={"video_ids": [older_id, "missing"]},
+    )
+    assert foreign.status_code == 400
+    rejected = client.post(f"/api/projects/{task['project']['id']}/videos/order", json={"video_ids": []})
+    assert rejected.status_code == 400
+
+    removed = client.delete(f"/api/videos/{newer_id}")
+    assert removed.status_code == 200, removed.text
+    remaining = client.get("/api/videos", params={"project_id": project["id"]}).json()
+    assert [item["id"] for item in remaining] == [older_id]

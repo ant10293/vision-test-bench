@@ -234,3 +234,49 @@ button.linkish {
   color: var(--muted);
   font-size: 0.8rem;
 }
+
+.video-card {
+  position: relative;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.video-card img,
+.video-card-ghost img {
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+body.is-sorting,
+body.is-sorting * { cursor: grabbing; }
+.video-card-slot {
+  border: 1px dashed var(--teal);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--teal) 16%, var(--panel));
+}
+.video-card-ghost {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0.96;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+.video-card-delete {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(9, 11, 16, 0.82);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+.video-card-delete:hover { background: var(--rose); }
+.video-card-delete:disabled { opacity: 0.45; cursor: not-allowed; }
