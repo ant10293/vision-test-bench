@@ -350,3 +350,127 @@ body.is-sorting * { cursor: grabbing; }
 }
 .video-card-delete:hover { background: var(--rose); }
 .video-card-delete:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Full-screen image preview, from potheads-ceramics' admin image overlay. */
+.asset-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.asset-preview-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 10px 16px;
+}
+.asset-preview-close,
+.asset-preview-action,
+.asset-preview-nav,
+.asset-preview-zoom {
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.asset-preview-close {
+  color: #9aa0a6;
+  padding: 6px;
+  border-radius: 50%;
+  transition: background 0.15s, color 0.15s;
+}
+.asset-preview-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+.asset-preview-filename {
+  color: #fff;
+  font-size: 1.1rem;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asset-preview-actions {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.asset-preview-action {
+  color: #9aa0a6;
+  padding: 8px;
+  border-radius: 50%;
+  transition: background 0.15s, color 0.15s;
+}
+.asset-preview-action:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+.asset-preview-viewport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 3rem 4rem;
+}
+.asset-preview-img {
+  max-width: 90vw;
+  max-height: 85vh;
+  min-width: min(512px, 90vw);
+  min-height: min(512px, 70vh);
+  object-fit: contain;
+  transition: transform 0.15s ease;
+  user-select: none;
+}
+.asset-preview-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  transition: background 0.15s;
+}
+.asset-preview-nav:hover { background: rgba(255, 255, 255, 0.25); }
+.asset-preview-nav.is-prev { left: 16px; }
+.asset-preview-nav.is-next { right: 16px; }
+.asset-preview-controls {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  z-index: 1;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 24px;
+  padding: 4px 6px;
+}
+.asset-preview-zoom {
+  color: #fff;
+  font-size: 1.2rem;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  transition: background 0.15s;
+}
+.asset-preview-zoom:hover { background: rgba(255, 255, 255, 0.15); }

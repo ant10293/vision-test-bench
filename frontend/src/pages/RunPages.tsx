@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, NavLink, Outlet, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { AssetPreview } from "../components/AssetPreview";
 import { BeforeAfter } from "../components/BeforeAfter";
 import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
@@ -221,8 +222,10 @@ export function ObjectsPage() {
   const [open, setOpen] = useState<string | null>(null);
   const [label, setLabel] = useState("");
   const [mergeDrop, setMergeDrop] = useState("");
+  const [preview, setPreview] = useState<number | null>(null);
   const client = useQueryClient();
   const selected = bundle.objects.find((item) => item.local_id === open);
+  const shots = selected?.images.filter((image) => image.url) ?? [];
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
@@ -231,7 +234,7 @@ export function ObjectsPage() {
       </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {bundle.objects.map((object) => (
-          <button key={object.id} className="panel overflow-hidden text-left" onClick={() => setOpen(object.local_id)}>
+          <button key={object.id} className="panel overflow-hidden text-left" onClick={() => { setOpen(object.local_id); setPreview(null); }}>
             {object.primary_image_url ? <img src={object.primary_image_url} alt="" className="h-36 w-full bg-black object-contain" /> : <div className="grid h-36 place-items-center text-xs text-[var(--muted)]">No crop yet</div>}
             <div className="space-y-1 p-3 text-sm">
               <div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ background: object.color }} />{object.local_id}</div>
@@ -248,14 +251,23 @@ export function ObjectsPage() {
             <h2>{selected.local_id} · {selected.label}</h2>
             <p>{selected.description}</p>
             <p className="text-[var(--muted)]">Initial: {selected.initial_state || "—"} · Final: {selected.final_state || "—"}</p>
-            <label className="block">Rename
-              <input className="field mt-1" defaultValue={selected.label} id={`rename-${selected.local_id}`} />
-            </label>
-            <button className="btn" onClick={async () => {
-              const input = document.getElementById(`rename-${selected.local_id}`) as HTMLInputElement;
-              await api.patchObject(bundle.run.id, selected.local_id, { label: input.value });
-              await client.invalidateQueries({ queryKey: ["run", bundle.run.id] });
-            }}>Save label</button>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex max-w-full min-w-0 items-center gap-4" htmlFor={`rename-${selected.local_id}`}>
+                <span className="shrink-0 whitespace-nowrap">Rename</span>
+                <input
+                  key={selected.local_id}
+                  className="field max-w-full"
+                  style={{ width: "calc((48rem - 0.75rem) / 2)" }}
+                  defaultValue={selected.label}
+                  id={`rename-${selected.local_id}`}
+                />
+              </label>
+              <button className="btn shrink-0" onClick={async () => {
+                const input = document.getElementById(`rename-${selected.local_id}`) as HTMLInputElement;
+                await api.patchObject(bundle.run.id, selected.local_id, { label: input.value });
+                await client.invalidateQueries({ queryKey: ["run", bundle.run.id] });
+              }}>Save label</button>
+            </div>
             <div className="flex gap-2">
               <select className="field" value={mergeDrop} onChange={(event) => setMergeDrop(event.target.value)}>
                 <option value="">Merge another id into this one</option>
@@ -264,13 +276,30 @@ export function ObjectsPage() {
               <button className="btn" disabled={!mergeDrop} onClick={async () => { await api.mergeObjects(bundle.run.id, selected.local_id, mergeDrop); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Merge</button>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {selected.images.filter((image) => image.url).map((image) => (
-                <a key={image.id} href={image.url} target="_blank" rel="noreferrer" className="block">
+              {shots.map((image, index) => (
+                <button
+                  key={image.id}
+                  type="button"
+                  className="block w-full border-0 bg-transparent p-0 text-left"
+                  aria-label={`View ${image.kind} at ${image.timestamp.toFixed(2)} seconds`}
+                  onClick={() => setPreview(index)}
+                >
                   <img src={image.url} alt={image.kind} className="h-20 w-full rounded bg-black object-contain" />
                   <div className="text-[10px] text-[var(--muted)]">{image.kind} · {image.timestamp.toFixed(2)}s</div>
-                </a>
+                </button>
               ))}
             </div>
+            {preview != null && (
+              <AssetPreview
+                key={`${selected.local_id}:${preview}`}
+                images={shots.map((image) => ({
+                  src: image.url,
+                  filename: `${image.kind} · ${image.timestamp.toFixed(2)}s`,
+                }))}
+                startIndex={preview}
+                onClose={() => setPreview(null)}
+              />
+            )}
           </div>
         </div>
       )}
