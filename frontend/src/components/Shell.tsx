@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Clapperboard, FlaskConical, GitCompare, Layers, Library, ScrollText, Settings2, Waypoints, Activity } from "lucide-react";
+import { Clapperboard, FlaskConical, GitCompare, Layers, ScrollText, Settings2, Waypoints, Activity } from "lucide-react";
 
 const LINKS = [
   ["/", "Dashboard", Activity],
@@ -34,9 +34,6 @@ export function Shell() {
           ))}
           <NavLink to="/runs" className="flex items-center gap-2 px-2 py-1.5 text-sm text-[var(--muted)]">
             <Waypoints size={15} /> Runs
-          </NavLink>
-          <NavLink to="/library" className="flex items-center gap-2 px-2 py-1.5 text-sm text-[var(--muted)]">
-            <Library size={15} /> Latest analysis
           </NavLink>
         </nav>
       </aside>

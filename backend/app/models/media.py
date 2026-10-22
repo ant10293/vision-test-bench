@@ -71,6 +71,10 @@ class VideoAsset(Base):
     has_audio: Mapped[bool] = mapped_column(Boolean, default=False)
     audio_codec: Mapped[str] = mapped_column(String(80), default="")
     audio_channels: Mapped[int] = mapped_column(Integer, default=0)
+    ingest_status: Mapped[str] = mapped_column(String(32), default="ready")
+    ingest_progress: Mapped[float] = mapped_column(Float, default=100)
+    ingest_detail: Mapped[str] = mapped_column(String(200), default="")
+    ingest_error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     project: Mapped[Project] = relationship(back_populates="videos")

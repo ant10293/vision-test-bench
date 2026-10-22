@@ -20,7 +20,7 @@ from app.models.sessions import (
     RecordingSession,
 )
 from app.models.util import new_id
-from app.services.ingest import ingest_file
+from app.services.ingest import ingest_file, referenced_file
 from app.services.reconcile import manual_order, move_clip, new_session, reconcile
 from app.services.storage import data_path
 from app.services.task_export import export_task
@@ -97,6 +97,42 @@ async def upload_clips(
                 temp.unlink()
     before_jobs = session.scalar(select(func.count()).select_from(Job)) or 0
     reconcile(session, project_id, "clip upload")
+    after_jobs = session.scalar(select(func.count()).select_from(Job)) or 0
+    bundle = task_bundle(session, project_id)
+    bundle["jobs_created"] = after_jobs - before_jobs
+    return bundle
+
+
+@router.post("/{project_id}/clips/reference")
+def reference_clips(project_id: str, payload: dict, session: Session = Depends(db)) -> dict:
+    from app.video.probe import VideoError
+
+    project = session.get(Project, project_id)
+    if project is None or not project.is_task:
+        raise HTTPException(404, "task not found")
+    raw_paths = payload.get("paths") or []
+    if isinstance(raw_paths, str):
+        raw_paths = [raw_paths]
+    if not raw_paths:
+        raise HTTPException(400, "add at least one path")
+    research_mode = str(payload.get("research_mode") or "")
+    session_id = str(payload.get("session_id") or "") or None
+    for raw in raw_paths:
+        try:
+            path = referenced_file(str(raw))
+            ingest_file(
+                session,
+                project_id,
+                path.name,
+                path,
+                research_mode=research_mode,
+                session_id=session_id,
+                reference=True,
+            )
+        except VideoError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    before_jobs = session.scalar(select(func.count()).select_from(Job)) or 0
+    reconcile(session, project_id, "clip reference")
     after_jobs = session.scalar(select(func.count()).select_from(Job)) or 0
     bundle = task_bundle(session, project_id)
     bundle["jobs_created"] = after_jobs - before_jobs

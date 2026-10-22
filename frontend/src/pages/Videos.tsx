@@ -4,8 +4,11 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { createPortal } from "react-dom";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
+import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
 import { api, formatTime, type ProjectSummary } from "../lib/api";
 import type { VideoInfo } from "../lib/types";
+import { videoReady } from "../lib/uploadProgress";
+import { useUploads } from "../stores/uploads";
 
 function compareDisplayOrder(left: VideoInfo, right: VideoInfo): number {
   const leftRank = left.order_index;
@@ -22,24 +25,26 @@ function inDisplayOrder(videos: VideoInfo[]): VideoInfo[] {
 }
 
 function ProjectCard({ project, videos, onOpen }: { project: ProjectSummary; videos: VideoInfo[]; onOpen: () => void }) {
-  const frames = videos.filter((video) => video.thumbnail_url);
+  const listed = videos.filter((video) => video.ingest_status !== "failed");
+  const frames = listed.filter((video) => video.thumbnail_url && videoReady(video));
+  const processing = listed.some((video) => video.ingest_status === "processing");
   return (
     <button type="button" className="panel overflow-hidden text-left" onClick={onOpen}>
-      {frames.length > 1 ? (
-        <div className="grid grid-cols-2">
+      {frames.length ? (
+        <div className="thumb-grid">
           {frames.map((video) => (
-            <img key={video.id} src={video.thumbnail_url} alt="" className="aspect-video w-full bg-black object-contain" />
+            <img key={video.id} src={video.thumbnail_url} alt="" />
           ))}
         </div>
-      ) : frames.length === 1 ? (
-        <img src={frames[0].thumbnail_url} alt="" className="aspect-video w-full bg-black object-contain" />
       ) : (
-        <div className="flex aspect-video items-center justify-center bg-black text-xs text-[var(--muted)]">No videos</div>
+        <div className="flex aspect-video items-center justify-center bg-black text-xs text-[var(--muted)]">
+          {processing ? "Processing…" : "No videos"}
+        </div>
       )}
       <div className="space-y-1 p-3 text-sm">
         <div className="truncate">{project.name}</div>
         <div className="mono text-xs text-[var(--muted)]">
-          {videos.length} {videos.length === 1 ? "video" : "videos"}
+          {listed.length} {listed.length === 1 ? "video" : "videos"}
           {projectWhen(project) ? ` · ${projectWhen(project)}` : ""}
         </div>
       </div>
@@ -168,11 +173,24 @@ export function VideosPage() {
   const [params, setParams] = useSearchParams();
   const requestedProject = params.get("project") ?? "";
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
+  const labSettings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: api.tasks });
-  const [mode, setMode] = useState<"library" | "create" | "edit">(requestedProject ? "edit" : "library");
-  const [editId, setEditId] = useState(requestedProject);
-  const [name, setName] = useState("");
-  const [staged, setStaged] = useState<File[]>([]);
+  const view = useUploads((state) => state.view);
+  const setView = useUploads((state) => state.setView);
+  const items = useUploads((state) => state.items);
+  const stageFiles = useUploads((state) => state.stageFiles);
+  const stagePaths = useUploads((state) => state.stagePaths);
+  const enqueue = useUploads((state) => state.enqueue);
+  const enqueuePaths = useUploads((state) => state.enqueuePaths);
+  const removeItem = useUploads((state) => state.removeItem);
+  const beginCreate = useUploads((state) => state.beginCreate);
+  const clearDraft = useUploads((state) => state.clearDraft);
+  const forgetProject = useUploads((state) => state.forgetProject);
+  const adoptServer = useUploads((state) => state.adoptServer);
+  const mode = view.mode;
+  const editId = view.editId;
+  const name = view.name;
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const taskIds = new Set((tasks.data ?? []).map((task) => task.id));
   const studies = (projects.data ?? []).filter((project) => !project.is_task && !taskIds.has(project.id));
@@ -192,47 +210,11 @@ export function VideosPage() {
   for (const [projectId, group] of videosByProject) {
     videosByProject.set(projectId, inDisplayOrder(group));
   }
-  const upload = useMutation({
-    mutationFn: async (files: File[]) => {
-      if (!editId) throw new Error("Open a project before adding videos.");
-      for (const file of files) await api.upload(editId, file);
-    },
-    onSuccess: async () => {
-      setError("");
-      await client.invalidateQueries({ queryKey: ["videos"] });
-    },
-    onError: (err: Error) => setError(err.message),
-  });
-  const save = useMutation({
-    mutationFn: async () => {
-      const trimmed = name.trim();
-      if (!trimmed || !staged.length) throw new Error("Name the project and add at least one video.");
-      const project = await api.createProject(trimmed, "");
-      let stored = 0;
-      try {
-        for (const file of staged) {
-          await api.upload(project.id, file);
-          stored += 1;
-        }
-      } catch (err) {
-        if (!stored) await api.deleteProject(project.id).catch(() => undefined);
-        throw err;
-      }
-      return project;
-    },
-    onSuccess: async (project) => {
-      setMode("edit");
-      setEditId(project.id);
-      setName("");
-      setStaged([]);
-      setError("");
-      await client.invalidateQueries({ queryKey: ["projects"] });
-      await client.invalidateQueries({ queryKey: ["videos"] });
-    },
-    onError: (err: Error) => setError(err.message),
-  });
   const remove = useMutation({
-    mutationFn: () => api.deleteProject(editId),
+    mutationFn: () => {
+      forgetProject(editId);
+      return api.deleteProject(editId);
+    },
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ["projects"] });
       await client.invalidateQueries({ queryKey: ["videos"] });
@@ -268,13 +250,12 @@ export function VideosPage() {
       const library = client.getQueryData<VideoInfo[]>(["videos", "all"]);
       if (previous) {
         const byId = new Map(previous.map((video) => [video.id, video]));
-        client.setQueryData(
-          ["videos", editId],
-          ids.flatMap((id, index) => {
-            const video = byId.get(id);
-            return video ? [{ ...video, order_index: index }] : [];
-          }),
-        );
+        const ordered = ids.flatMap((id, index) => {
+          const video = byId.get(id);
+          return video ? [{ ...video, order_index: index }] : [];
+        });
+        const rest = previous.filter((video) => !ids.includes(video.id));
+        client.setQueryData(["videos", editId], [...ordered, ...rest]);
       }
       if (library) {
         const rank = new Map(ids.map((id, index) => [id, index]));
@@ -294,7 +275,8 @@ export function VideosPage() {
       await client.invalidateQueries({ queryKey: ["videos"] });
     },
   });
-  const canSave = Boolean(name.trim()) && staged.length > 0 && !save.isPending;
+  const draftItems = items.filter((item) => item.projectId === "");
+  const canSave = Boolean(name.trim()) && draftItems.some((item) => item.phase === "staged") && !saving;
   const creating = mode === "create";
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragLive = useRef<DragState | null>(null);
@@ -305,13 +287,23 @@ export function VideosPage() {
   const shown = mode === "edit" ? inDisplayOrder(projectVideos.data ?? []) : libraryVideos.data?.filter((video) => !taskIds.has(video.project_id));
   useEffect(() => {
     if (reorder.isPending) return;
-    orderRef.current = inDisplayOrder(projectVideos.data ?? []).map((video) => video.id);
+    orderRef.current = inDisplayOrder(projectVideos.data ?? []).filter(videoReady).map((video) => video.id);
   }, [projectVideos.data, reorder.isPending]);
 
   useEffect(() => () => stopGesture.current?.(), []);
 
+  useEffect(() => {
+    if (requestedProject) setView({ mode: "edit", editId: requestedProject });
+  }, [requestedProject, setView]);
+
+  useEffect(() => {
+    if (mode === "edit" && editId && projectVideos.data) adoptServer(editId, projectVideos.data);
+  }, [mode, editId, projectVideos.data, adoptServer]);
+
   function commit(index: number, sourceId: string) {
-    const current = orderRef.current.length ? orderRef.current : inDisplayOrder(projectVideos.data ?? []).map((video) => video.id);
+    const current = orderRef.current.length
+      ? orderRef.current
+      : inDisplayOrder(projectVideos.data ?? []).filter(videoReady).map((video) => video.id);
     if (!sourceId || reorder.isPending) return;
     const next = current.filter((id) => id !== sourceId);
     next.splice(Math.max(0, Math.min(index, next.length)), 0, sourceId);
@@ -378,37 +370,49 @@ export function VideosPage() {
   }
 
   function openCreate() {
-    setMode("create");
-    setEditId("");
-    setName("");
-    setStaged([]);
+    clearDraft();
+    setView({ mode: "create", editId: "", name: "" });
     setError("");
+    if (params.get("project")) setParams({}, { replace: true });
   }
 
   function openEdit(id: string) {
-    setMode("edit");
-    setEditId(id);
-    setStaged([]);
+    setView({ mode: "edit", editId: id });
     setError("");
   }
 
   function backToLibrary() {
-    setMode("library");
-    setEditId("");
-    setName("");
-    setStaged([]);
+    setView({ mode: "library", editId: "", name: "" });
     setError("");
     if (params.get("project")) setParams({}, { replace: true });
   }
 
   function requestBackToLibrary() {
-    if (creating && canSave && !window.confirm("Go back without saving? This project will be lost if you leave before saving.")) return;
+    if (creating && draftItems.length && !window.confirm("Go back without saving? This project will be lost if you leave before saving.")) return;
+    if (creating) clearDraft();
     backToLibrary();
+  }
+
+  async function saveProject() {
+    setSaving(true);
+    setError("");
+    try {
+      const projectId = await beginCreate(name.trim());
+      setView({ mode: "edit", editId: projectId, name: "" });
+      await client.invalidateQueries({ queryKey: ["projects"] });
+      await client.invalidateQueries({ queryKey: ["videos"] });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the project");
+    } finally {
+      setSaving(false);
+    }
   }
 
   const requested = (projects.data ?? []).find((project) => project.id === requestedProject);
   if (requested?.is_task) return <Navigate to={`/tasks/${requested.id}`} replace />;
-  const editingVideos = shown ?? [];
+  const editingVideos = (shown ?? []).filter(videoReady);
+  const assetRows = items.filter((item) => (creating ? item.projectId === "" : item.projectId === editId));
+  const reference = labSettings.data?.video_storage === "reference";
   const sorting = drag?.active ? cellsWithSlot(editingVideos, drag.id, drag.index) : null;
   const draggedVideo = drag ? editingVideos.find((video) => video.id === drag.id) : undefined;
 
@@ -418,15 +422,17 @@ export function VideosPage() {
         <header className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-2xl font-medium">Video library</h1>
-            <p className="text-sm text-[var(--muted)]">Originals are stored unchanged. Playback uses a proxy only when the browser cannot decode the file.</p>
+            <p className="text-sm text-[var(--muted)]">New videos can be copied into the lab or read from their current path. Playback uses a proxy only when the browser cannot decode the file.</p>
           </div>
           <button className="btn primary" onClick={openCreate}>New project</button>
         </header>
       )}
 
+      {mode === "library" && <StorageSettings />}
+
       {mode === "library" && (
         studies.length ? (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="project-grid">
             {studies.map((project) => (
               <ProjectCard
                 key={project.id}
@@ -444,12 +450,12 @@ export function VideosPage() {
       {(creating || (mode === "edit" && editing)) && (
         <section className="space-y-3">
           <div>
-            <button className="text-sm text-[var(--muted)] disabled:opacity-45" onClick={requestBackToLibrary} disabled={save.isPending}>← Back to library</button>
+            <button className="text-sm text-[var(--muted)] disabled:opacity-45" onClick={requestBackToLibrary} disabled={saving}>← Back to library</button>
             {creating ? (
               <input
                 className="field mt-2 mb-2 block"
                 value={name}
-                onChange={(event) => setName(event.target.value)}
+                onChange={(event) => setView({ name: event.target.value })}
                 placeholder="Project name"
                 aria-label="Project name"
                 autoFocus
@@ -459,32 +465,50 @@ export function VideosPage() {
             )}
             <p className="text-sm text-[var(--muted)]">
               {creating
-                ? "Add a name and at least one video. Nothing is saved until both are present."
-                : "Add videos to this project. They are stored as soon as you drop them. Drag a card to reorder it."}
+                ? "Add a name and at least one video. After you save, upload and analysis keep going if you leave this page."
+                : reference
+                  ? "Add a path or drop a file, depending on the storage setting. Analysis keeps running if you switch pages. Drag a card to reorder it."
+                  : "Drop videos to add them. Upload and analysis keep running if you switch pages. Drag a card to reorder it."}
             </p>
           </div>
-          <AssetDropZone
+          <StorageSettings />
+          {reference ? (
+            <VideoPathForm
+              onAdd={(paths) => {
+                if (creating) stagePaths(paths);
+                else if (editId) enqueuePaths(editId, paths);
+              }}
+            />
+          ) : null}
+          {(!reference || assetRows.length > 0) && <AssetDropZone
+            chooser={!reference}
             accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
             multiple
-            defer={creating}
             prompt="Drag and drop videos here or"
             chooseLabel="Choose files"
             supported="Supported: MP4, MOV, WebM"
-            pending={!creating && upload.isPending}
-            pendingLabel="Reading and probing…"
-            error={creating ? "" : error}
+            rows={assetRows.map((item) => ({
+              id: item.key,
+              name: item.name,
+              url: item.previewUrl,
+              subtitle: item.subtitle,
+              progress: item.progress,
+              failed: item.phase === "error",
+            }))}
+            onRemove={removeItem}
             onFiles={(files) => {
-              if (!creating && files.length) upload.mutate(files);
+              if (!files.length) return;
+              if (creating) stageFiles(files);
+              else if (editId) enqueue(editId, files);
             }}
-            onStagedChange={creating ? setStaged : undefined}
-          />
+          />}
         </section>
       )}
 
       {mode === "edit" && (
         <div
           ref={gridRef}
-          className="grid gap-3 md:grid-cols-2 xl:grid-cols-3"
+          className="video-grid"
           onClickCapture={(event) => {
             if (!suppressClick.current) return;
             event.preventDefault();
@@ -504,7 +528,7 @@ export function VideosPage() {
                 onDelete={() => {
                   const filename = cell.video?.filename ?? "this video";
                   const id = cell.video?.id ?? "";
-                  if (window.confirm(`Delete “${filename}”? The file will be removed from this project.`)) removeVideo.mutate(id);
+                  if (window.confirm(`Delete “${filename}”? It will be removed from this project. A referenced original stays on disk.`)) removeVideo.mutate(id);
                 }}
               />
             ) : (
@@ -529,23 +553,25 @@ export function VideosPage() {
         document.body,
       )}
       {libraryVideos.isError && <p className="text-sm text-[var(--rose)]">{(libraryVideos.error as Error).message}</p>}
-      {mode === "edit" && !projectVideos.isLoading && !projectVideos.data?.length && (
-        <p className="text-sm text-[var(--muted)]" aria-live="polite">This project has no videos yet. Drop one above.</p>
+      {mode === "edit" && !projectVideos.isLoading && !editingVideos.length && !assetRows.length && (
+        <p className="text-sm text-[var(--muted)]" aria-live="polite">
+          {reference ? "This project has no videos yet. Add a path above." : "This project has no videos yet. Drop one above."}
+        </p>
       )}
       {(creating || (mode === "edit" && editing)) && (
         <div className="border-t border-[var(--line)] pt-4">
           {error && <p className="mb-3 text-sm text-[var(--rose)]">{error}</p>}
           {creating ? (
-            <button className="btn primary" disabled={!canSave} onClick={() => save.mutate()}>
-              {save.isPending ? "Saving…" : "Save project"}
+            <button className="btn primary" disabled={!canSave} onClick={() => void saveProject()}>
+              {saving ? "Saving…" : "Save project"}
             </button>
           ) : (
             <button
               className="btn danger"
-              disabled={remove.isPending || upload.isPending}
+              disabled={remove.isPending}
               onClick={() => {
                 const label = editing?.name || "this project";
-                if (window.confirm(`Delete “${label}”? Its videos and files will be removed.`)) remove.mutate();
+                if (window.confirm(`Delete “${label}”? Copied videos and previews will be removed. Referenced files stay on disk.`)) remove.mutate();
               }}
             >
               {remove.isPending ? "Deleting…" : "Delete project"}

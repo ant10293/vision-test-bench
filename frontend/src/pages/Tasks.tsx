@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
+import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
 import { api, evidenceClass, formatTime, type TaskBundle, type TaskClip } from "../lib/api";
 import { clipPosition } from "../lib/taskOrder";
 
@@ -51,6 +52,8 @@ export function TaskDetailPage() {
   const { projectId = "" } = useParams();
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["task", projectId], queryFn: () => api.task(projectId), enabled: Boolean(projectId) });
+  const labSettings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  const reference = labSettings.data?.video_storage === "reference";
   const [mode, setMode] = useState("fixed_camera");
   const [error, setError] = useState("");
   const [sessionName, setSessionName] = useState("Later session");
@@ -104,6 +107,25 @@ export function TaskDetailPage() {
         </div>
       </header>
 
+      <StorageSettings />
+      {reference ? (
+        <>
+          <label className="field-label">
+            <span>Camera mode for this batch</span>
+            <select className="field w-auto" value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Camera mode">
+              {MODES.map((item) => <option key={item || "unset"} value={item}>{item || "unset"}</option>)}
+            </select>
+          </label>
+          <VideoPathForm
+            hint="One full path per line. Each recording stays where it is, and this task reads it from that path."
+            onAdd={async (paths) => {
+              await api.referenceClips(projectId, paths, mode);
+              setError("");
+              await refresh();
+            }}
+          />
+        </>
+      ) : (
       <AssetDropZone
         multiple
         accept="video/mp4,video/quicktime,video/webm"
@@ -126,6 +148,7 @@ export function TaskDetailPage() {
           </label>
         }
       />
+      )}
 
       <section className="space-y-2">
         <h2 className="text-lg">Chronology</h2>

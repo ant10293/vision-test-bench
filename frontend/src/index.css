@@ -218,6 +218,7 @@ button.linkish {
   object-fit: contain;
   background: color-mix(in srgb, var(--teal) 16%, var(--panel));
   display: block;
+  flex-shrink: 0;
 }
 .drop-item-meta {
   display: grid;
@@ -233,8 +234,75 @@ button.linkish {
 .drop-item-meta span {
   color: var(--muted);
   font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drop-item-meta span.is-error { color: var(--rose); }
+.drop-item-remove {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.2rem 0.35rem;
+}
+.drop-item-remove:hover { color: var(--text); }
+.drop-item-remove:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+.drop-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.55rem;
+  align-items: center;
+  margin-top: 0.65rem;
+}
+.drop-progress-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgb(from var(--text) r g b / 0.2);
+  overflow: hidden;
+}
+.drop-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--teal) 85%, black);
+  transition: width 220ms ease;
+}
+.drop-progress span {
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 
+/* Floor is high enough for two rows in a full card. Images still stop at the wide-layout cell (378px). */
+.thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  justify-content: start;
+}
+.thumb-grid > img {
+  width: 100%;
+  max-width: 23.625rem;
+  justify-self: start;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  background: #000;
+}
+.project-grid,
+.video-grid {
+  display: grid;
+  gap: 0.75rem;
+  justify-content: start;
+}
+.project-grid {
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 47.25rem));
+}
+.video-grid {
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 23.625rem));
+}
 .video-card {
   position: relative;
   cursor: grab;

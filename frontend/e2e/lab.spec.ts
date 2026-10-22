@@ -11,13 +11,13 @@ test("fixture laboratory can be inspected, corrected, compared, and exported", a
   await expect(page.getByRole("heading", { name: "Research dashboard" })).toBeVisible();
   await page.locator('a[href^="/runs/"]').first().click();
   await expect(page.getByText("Fixture — authored, not model output")).toBeVisible();
-  await page.getByRole("link", { name: "objects" }).click();
+  await page.getByRole("link", { name: "Objects" }).click();
   await page.locator("button.panel").first().click();
   const rename = page.locator("input[id^='rename-']");
   await rename.fill("Corrected label");
   await page.getByRole("button", { name: "Save label" }).click();
   await expect(page.getByText("Corrected label").first()).toBeVisible();
-  await page.getByRole("link", { name: "workflow" }).click();
+  await page.getByRole("link", { name: "Workflow" }).click();
   await expect(page.locator(".react-flow")).toBeVisible();
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("link", { name: "Export archive" }).click();

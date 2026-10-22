@@ -1,13 +1,13 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Shell } from "./components/Shell";
+import { queryClient } from "./lib/queryClient";
 import { DashboardPage } from "./pages/Dashboard";
 import { ExperimentPage } from "./pages/Experiment";
 import { ComparePage, PromptsPage, ProvidersPage } from "./pages/Research";
 import {
   EvaluatePage,
   InspectPage,
-  LibraryRedirect,
   LogsPage,
   ObjectsPage,
   PipelinePage,
@@ -21,13 +21,9 @@ import { VideoDetailPage, VideosPage } from "./pages/Videos";
 import { AudioPage } from "./pages/Audio";
 import { TaskDetailPage, TasksPage } from "./pages/Tasks";
 
-const client = new QueryClient({
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
-});
-
 export function App() {
   return (
-    <QueryClientProvider client={client}>
+    <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
           <Route element={<Shell />}>
@@ -38,7 +34,6 @@ export function App() {
             <Route path="tasks/:projectId" element={<TaskDetailPage />} />
             <Route path="experiments/new" element={<ExperimentPage />} />
             <Route path="runs" element={<RunsPage />} />
-            <Route path="library" element={<LibraryRedirect />} />
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="prompts" element={<PromptsPage />} />
             <Route path="compare" element={<ComparePage />} />

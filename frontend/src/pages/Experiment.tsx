@@ -3,6 +3,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Capability } from "../lib/types";
+import { videoReady } from "../lib/uploadProgress";
 
 const MODES = [
   ["fixed_camera", "Fixed camera"],
@@ -79,7 +80,7 @@ export function ExperimentPage() {
       <Field label="Video">
         <select className="field" value={videoId} onChange={(event) => setVideoId(event.target.value)}>
           <option value="">Choose a video</option>
-          {videos.data?.map((video) => <option key={video.id} value={video.id}>{video.filename}</option>)}
+          {videos.data?.filter(videoReady).map((video) => <option key={video.id} value={video.id}>{video.filename}</option>)}
         </select>
       </Field>
       <Field label="Research mode">

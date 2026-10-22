@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ def client(tmp_path, monkeypatch):
     settings.database_url = f"sqlite:///{tmp_path}/lab.db"
     settings.worker_enabled = False
     settings.auto_seed = False
+    settings.ingest_inline = True
     rebind_engine(settings.sqlalchemy_url)
     from app.main import create_app, init_database
 
@@ -248,3 +250,105 @@ def test_project_video_order_and_delete(client):
     assert removed.status_code == 200, removed.text
     remaining = client.get("/api/videos", params={"project_id": project["id"]}).json()
     assert [item["id"] for item in remaining] == [older_id]
+
+
+def test_upload_analyzes_after_the_response(client, tmp_path: Path):
+    from app.config import settings
+    from app.demo.encode import write_clip
+    from app.demo.scenarios import SCENARIOS, render_scenario
+
+    settings.ingest_inline = False
+    try:
+        project = client.post("/api/projects", json={"name": "Background"}).json()
+        clip = tmp_path / "background.mp4"
+        write_clip(render_scenario(SCENARIOS["fixed_camera"]()), clip)
+        with clip.open("rb") as handle:
+            uploaded = client.post(
+                "/api/videos",
+                data={"project_id": project["id"]},
+                files={"file": ("background.mp4", handle, "video/mp4")},
+            )
+        assert uploaded.status_code == 200, uploaded.text
+        video = uploaded.json()
+        assert video["ingest_status"] == "processing"
+        assert video["ingest_progress"] < 100
+        detail = video
+        deadline = time.time() + 60
+        while time.time() < deadline and detail["ingest_status"] == "processing":
+            time.sleep(0.05)
+            detail = client.get(f"/api/videos/{video['id']}").json()
+        assert detail["ingest_status"] == "ready", detail.get("ingest_error")
+        assert detail["duration_sec"] > 1
+        assert detail["frames"]
+        assert detail["thumbnail_url"]
+        assert detail["contact_sheet_url"]
+        assert detail["ingest_progress"] == 100
+    finally:
+        settings.ingest_inline = True
+
+
+def test_reference_keeps_the_original_file(client, tmp_path: Path):
+    from app.config import settings
+    from app.demo.encode import write_clip
+    from app.demo.scenarios import SCENARIOS, render_scenario
+
+    project = client.post("/api/projects", json={"name": "Referenced"}).json()
+    clip = tmp_path / "outside.mp4"
+    write_clip(render_scenario(SCENARIOS["fixed_camera"]()), clip)
+    before = clip.stat().st_ino
+
+    missing = client.post("/api/videos/reference", json={"project_id": project["id"], "path": "clip.mp4"})
+    assert missing.status_code == 400
+
+    saved = client.put("/api/settings", json={"video_storage": "reference"})
+    assert saved.status_code == 200
+    assert client.get("/api/settings").json()["video_storage"] == "reference"
+
+    linked = client.post("/api/videos/reference", json={"project_id": project["id"], "path": str(clip)})
+    assert linked.status_code == 200, linked.text
+    video = linked.json()
+    assert video["ingest_status"] == "ready", video.get("ingest_error")
+    assert video["thumbnail_url"]
+    playback = client.get(video["playback_url"])
+    assert playback.status_code == 200
+    assert playback.content == clip.read_bytes()
+    assert clip.stat().st_ino == before
+    copied = [path for path in settings.resolved_data_dir.joinpath("originals").glob("*.mp4")]
+    assert copied == []
+
+    removed = client.delete(f"/api/videos/{video['id']}")
+    assert removed.status_code == 200
+    assert clip.is_file()
+    assert clip.stat().st_ino == before
+
+
+def test_reference_shows_a_still_while_it_processes(client, tmp_path: Path):
+    from app.config import settings
+    from app.demo.encode import write_clip
+    from app.demo.scenarios import SCENARIOS, render_scenario
+
+    settings.ingest_inline = False
+    try:
+        project = client.post("/api/projects", json={"name": "Referenced preview"}).json()
+        clip = tmp_path / "preview.mp4"
+        write_clip(render_scenario(SCENARIOS["fixed_camera"]()), clip)
+        linked = client.post("/api/videos/reference", json={"project_id": project["id"], "path": str(clip)})
+        assert linked.status_code == 200, linked.text
+        video = linked.json()
+        assert video["ingest_status"] == "processing"
+        assert video["thumbnail_url"]
+        still = client.get(video["thumbnail_url"])
+        assert still.status_code == 200
+        assert still.content[:3] == b"\xff\xd8\xff"
+        detail = video
+        deadline = time.time() + 60
+        seen = {detail.get("ingest_detail")}
+        while time.time() < deadline and detail["ingest_status"] == "processing":
+            time.sleep(0.05)
+            detail = client.get(f"/api/videos/{video['id']}").json()
+            seen.add(detail.get("ingest_detail"))
+        assert detail["ingest_status"] == "ready", detail.get("ingest_error")
+        assert any(item and item not in {"Hashing", "Queued"} for item in seen)
+        assert clip.is_file()
+    finally:
+        settings.ingest_inline = True

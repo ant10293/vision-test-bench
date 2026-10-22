@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, formatTime } from "../lib/api";
+import { RunAnalysis } from "./RunPages";
 
 export function DashboardPage() {
   const dash = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard, refetchInterval: 3000 });
@@ -76,6 +77,25 @@ export function DashboardPage() {
           </p>
         </div>
       </section>
+      <LatestAnalysis />
     </div>
+  );
+}
+
+function LatestAnalysis() {
+  const runs = useQuery({
+    queryKey: ["runs", "completed"],
+    queryFn: () => api.runs({ status: "completed" }),
+    refetchInterval: 3000,
+  });
+  const first = runs.data?.[0];
+  return (
+    <section className="panel space-y-3 p-4">
+      <h2 className="text-sm font-medium">Latest analysis</h2>
+      {runs.isError && <p className="text-sm text-[var(--rose)]">{(runs.error as Error).message}</p>}
+      {runs.isLoading && <p className="text-sm text-[var(--muted)]">Loading analysis…</p>}
+      {runs.isSuccess && !first && <p className="text-sm text-[var(--muted)]">No completed analysis yet.</p>}
+      {first && <RunAnalysis key={first.id} runId={first.id} embedded />}
+    </section>
   );
 }

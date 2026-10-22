@@ -10,7 +10,7 @@ from app.config import settings
 
 def ensure_data_dirs() -> Path:
     root = settings.resolved_data_dir
-    for name in ("originals", "proxies", "frames", "thumbs", "sheets", "runs", "exports", "objects"):
+    for name in ("originals", "proxies", "frames", "thumbs", "sheets", "runs", "exports", "objects", "imports"):
         (root / name).mkdir(parents=True, exist_ok=True)
     return root
 
@@ -33,7 +33,23 @@ def relative(path: Path) -> str:
     return str(path.resolve().relative_to(settings.resolved_data_dir.resolve()))
 
 
+EXTERNAL_PREFIX = "external:"
+
+
+def external_ref(path: Path) -> str:
+    return f"{EXTERNAL_PREFIX}{path.expanduser().resolve()}"
+
+
+def is_external(stored: str) -> bool:
+    return stored.startswith(EXTERNAL_PREFIX)
+
+
 def resolve_stored(stored: str) -> Path:
     if not stored:
         raise ValueError("empty stored path")
+    if is_external(stored):
+        path = Path(stored.removeprefix(EXTERNAL_PREFIX)).expanduser()
+        if not path.is_absolute():
+            raise ValueError("referenced path must be absolute")
+        return path.resolve()
     return data_path(*Path(stored).parts)

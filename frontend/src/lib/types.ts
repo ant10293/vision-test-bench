@@ -57,6 +57,10 @@ export interface VideoInfo {
   audio_probed?: boolean;
   audio_codec?: string;
   order_index?: number | null;
+  ingest_status?: "processing" | "ready" | "failed" | "";
+  ingest_progress?: number;
+  ingest_detail?: string;
+  ingest_error?: string;
 }
 
 export interface FrameInfo {

@@ -29,7 +29,7 @@ from app.schemas.analysis import AnalysisDocument, Coverage
 from app.schemas.enums import PIPELINE_STAGES
 from app.services.ingest import playback_path, sample_run_frames
 from app.services.materialize import grabcut_cutout, materialize
-from app.services.storage import data_path, relative
+from app.services.storage import data_path, relative, resolve_stored
 from app.video.frames import contact_sheet, extract_frame, read_bgr
 from app.video.probe import presentation_timestamps
 from app.video.sampling import (
@@ -218,7 +218,7 @@ async def _transcription(session, run, video, stage) -> None:
         raise StageSkipped("Local transcription is off. Whisper was not loaded.")
     from app.audio.service import transcribe_clip
 
-    source = data_path(*Path(video.stored_path).parts)
+    source = resolve_stored(video.stored_path)
 
     def stop() -> bool:
         session.refresh(run)
@@ -313,7 +313,7 @@ def _sample(session, run, video, stage) -> None:
     start = float(config.get("time_start") or 0)
     end = float(config.get("time_end") or video.duration_sec)
     pts_cache = data_path("originals", f"{video.checksum_sha256[:12]}.pts.json")
-    original = data_path(*Path(video.stored_path).parts)
+    original = resolve_stored(video.stored_path)
     pts = presentation_timestamps(original, pts_cache)
     pts = [item for item in pts if start - 0.01 <= item <= end + 0.01]
     preset = run.sampling_preset
@@ -775,7 +775,7 @@ async def _reinspect(session, run, video, stage) -> None:
         if ambiguity.time_start is None:
             continue
         end = ambiguity.time_end if ambiguity.time_end is not None else ambiguity.time_start
-        original = data_path(*Path(video.stored_path).parts)
+        original = resolve_stored(video.stored_path)
         extra_rows = []
         cursor = ambiguity.time_start
         while cursor <= end and len(extra_rows) < 4:

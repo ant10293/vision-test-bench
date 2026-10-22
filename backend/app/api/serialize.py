@@ -60,6 +60,10 @@ def video_dict(video: VideoAsset, frame_count: int | None = None) -> dict:
         "order_locked": video.order_locked,
         "order_method": video.order_method,
         "order_ambiguous": video.order_ambiguous,
+        "ingest_status": video.ingest_status or "ready",
+        "ingest_progress": video.ingest_progress if video.ingest_progress is not None else 100,
+        "ingest_detail": video.ingest_detail or "",
+        "ingest_error": video.ingest_error or "",
     }
 
 

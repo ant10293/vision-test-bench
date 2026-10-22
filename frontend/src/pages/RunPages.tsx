@@ -1,17 +1,30 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, NavLink, Outlet, useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { BeforeAfter } from "../components/BeforeAfter";
 import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
 import { WorkflowGraph } from "../components/WorkflowGraph";
 import { api, evidenceClass, formatTime } from "../lib/api";
+import { BundleContext, useBundle } from "../lib/bundleContext";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
+import { AudioPage } from "./Audio";
+
+function label(tab: string) {
+  return tab.charAt(0).toUpperCase() + tab.slice(1);
+}
+
+const ANALYSIS_TABS = ["", "objects", "states", "workflow", "steps", "pipeline", "audio", "evaluate", "logs"];
 
 export function RunLayout() {
   const { runId = "" } = useParams();
+  return <RunAnalysis runId={runId} />;
+}
+
+export function RunAnalysis({ runId, embedded = false }: { runId: string; embedded?: boolean }) {
   const [params] = useSearchParams();
+  const [tab, setTab] = useState("objects");
   const query = useQuery({
     queryKey: ["run", runId],
     queryFn: () => api.run(runId),
@@ -27,15 +40,19 @@ export function RunLayout() {
   if (query.isError) return <p className="text-[var(--rose)]">{(query.error as Error).message}</p>;
   if (!query.data) return <p className="text-[var(--muted)]">Loading analysis…</p>;
   const bundle = query.data;
-  const tabs = ["", "objects", "states", "workflow", "steps", "pipeline", "audio", "evaluate", "logs"];
   return (
+    <BundleContext.Provider value={bundle}>
     <div className="space-y-3">
       <div>
-        <Link className="text-sm text-[var(--muted)]" to="/runs">← Back to runs</Link>
-        <header className="mt-2 flex flex-wrap items-start justify-between gap-3">
+        {!embedded && <Link className="text-sm text-[var(--muted)]" to="/runs">← Back to runs</Link>}
+        <header className={`${embedded ? "" : "mt-2 "}flex flex-wrap items-start justify-between gap-3`}>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl font-medium">{bundle.run.name}</h1>
+              {embedded ? (
+                <h2 className="text-xl font-medium">{bundle.run.name}</h2>
+              ) : (
+                <h1 className="text-xl font-medium">{bundle.run.name}</h1>
+              )}
               <span className="tag">{bundle.run.status}</span>
               {bundle.run.fixture && <span className="tag fixture">Fixture — authored, not model output</span>}
               <span className="tag">{bundle.run.research_mode.replaceAll("_", " ")}</span>
@@ -52,20 +69,60 @@ export function RunLayout() {
         </header>
       </div>
       <nav className="flex gap-2 overflow-auto text-sm">
-        {tabs.map((tab) => (
-          <NavLink
-            key={tab || "inspect"}
-            end={tab === ""}
-            to={tab ? `/runs/${runId}/${tab}` : `/runs/${runId}`}
-            className={({ isActive }) => `rounded-md px-2 py-1 ${isActive ? "bg-[#1a221d] text-[var(--teal)]" : "text-[var(--muted)]"}`}
-          >
-            {tab || "inspect"}
-          </NavLink>
-        ))}
+        {ANALYSIS_TABS.map((item) => {
+          const name = label(item || "inspect");
+          if (embedded) {
+            const selected = tab === item;
+            return (
+              <button
+                key={item || "inspect"}
+                type="button"
+                className={`rounded-md px-2 py-1 ${selected ? "bg-[#1a221d] text-[var(--teal)]" : "text-[var(--muted)]"}`}
+                onClick={() => setTab(item)}
+              >
+                {name}
+              </button>
+            );
+          }
+          return (
+            <NavLink
+              key={item || "inspect"}
+              end={item === ""}
+              to={item ? `/runs/${runId}/${item}` : `/runs/${runId}`}
+              className={({ isActive }) => `rounded-md px-2 py-1 ${isActive ? "bg-[#1a221d] text-[var(--teal)]" : "text-[var(--muted)]"}`}
+            >
+              {name}
+            </NavLink>
+          );
+        })}
       </nav>
-      <Outlet context={bundle} />
+      {embedded ? <AnalysisTab tab={tab} /> : <Outlet />}
     </div>
+    </BundleContext.Provider>
   );
+}
+
+function AnalysisTab({ tab }: { tab: string }) {
+  switch (tab) {
+    case "objects":
+      return <ObjectsPage />;
+    case "states":
+      return <StatesPage />;
+    case "workflow":
+      return <WorkflowPage />;
+    case "steps":
+      return <StepsPage />;
+    case "pipeline":
+      return <PipelinePage />;
+    case "audio":
+      return <AudioPage />;
+    case "evaluate":
+      return <EvaluatePage />;
+    case "logs":
+      return <LogsPage />;
+    default:
+      return <InspectPage />;
+  }
 }
 
 function RunActions({ bundle }: { bundle: Bundle }) {
@@ -81,10 +138,6 @@ function RunActions({ bundle }: { bundle: Bundle }) {
       <a className="btn" href={`/api/runs/${bundle.run.id}/analysis.json`}>Analysis JSON</a>
     </div>
   );
-}
-
-export function useBundle() {
-  return useOutletContext<Bundle>();
 }
 
 export function InspectPage() {
@@ -441,9 +494,3 @@ export function RunsPage() {
   );
 }
 
-export function LibraryRedirect() {
-  const runs = useQuery({ queryKey: ["runs", "completed"], queryFn: () => api.runs({ status: "completed" }) });
-  const first = runs.data?.[0];
-  if (!first) return <p className="text-[var(--muted)]">No completed analysis yet.</p>;
-  return <a className="btn primary" href={`/runs/${first.id}/objects`}>Open object library for {first.name}</a>;
-}

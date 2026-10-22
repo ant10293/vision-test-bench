@@ -127,6 +127,7 @@ def client(tmp_path, monkeypatch):
     settings.database_url = f"sqlite:///{tmp_path}/lab.db"
     settings.worker_enabled = False
     settings.auto_seed = False
+    settings.ingest_inline = True
     rebind_engine(settings.sqlalchemy_url)
     from app.main import create_app, init_database
 

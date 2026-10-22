@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     worker_poll_seconds: float = 0.4
     worker_enabled: bool = True
+    ingest_inline: bool = False
     stale_job_seconds: int = 900
 
     @property

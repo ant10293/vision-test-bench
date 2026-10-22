@@ -2,6 +2,15 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type Item = { name: string; url: string; file: File };
 
+export type DropRow = {
+  id: string;
+  name: string;
+  url: string;
+  subtitle: string;
+  progress: number | null;
+  failed?: boolean;
+};
+
 type Props = {
   accept: string;
   multiple?: boolean;
@@ -16,6 +25,9 @@ type Props = {
   defer?: boolean;
   onStagedChange?: (files: File[]) => void;
   settings?: ReactNode;
+  rows?: DropRow[];
+  onRemove?: (id: string) => void;
+  chooser?: boolean;
 };
 
 export function AssetDropZone({
@@ -32,29 +44,36 @@ export function AssetDropZone({
   defer = false,
   onStagedChange,
   settings,
+  rows,
+  onRemove,
+  chooser = true,
 }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const wasPending = useRef(false);
   const itemsRef = useRef<Item[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [items, setItems] = useState<Item[]>([]);
+  const controlled = rows !== undefined;
   itemsRef.current = items;
 
   useEffect(() => {
-    if (wasPending.current && !pending && !error) {
-      setItems((current) => {
-        for (const item of current) URL.revokeObjectURL(item.url);
-        return [];
-      });
+    if (controlled || !wasPending.current || pending || error) {
+      wasPending.current = pending;
+      return;
     }
+    setItems((current) => {
+      for (const item of current) URL.revokeObjectURL(item.url);
+      return [];
+    });
     wasPending.current = pending;
-  }, [pending, error]);
+  }, [controlled, pending, error]);
 
   useEffect(() => {
     return () => {
+      if (controlled) return;
       for (const item of itemsRef.current) URL.revokeObjectURL(item.url);
     };
-  }, []);
+  }, [controlled]);
 
   function publish(next: Item[]) {
     onStagedChange?.(next.map((item) => item.file));
@@ -68,6 +87,10 @@ export function AssetDropZone({
     const files = [...(list ?? [])];
     const chosen = multiple ? files : files.slice(0, 1);
     if (!chosen.length) return;
+    if (controlled) {
+      onFiles(chosen);
+      return;
+    }
     const added = chosen.map((file) => ({ name: file.name, url: URL.createObjectURL(file), file }));
     setItems((current) => {
       const next = defer && multiple ? [...current, ...added] : added;
@@ -90,8 +113,20 @@ export function AssetDropZone({
     });
   }
 
+  const shown: DropRow[] = controlled
+    ? rows
+    : items.map((item) => ({
+        id: item.url,
+        name: item.name,
+        url: item.url,
+        subtitle: pending ? pendingLabel || "Working…" : error || "Ready",
+        progress: null,
+        failed: Boolean(error),
+      }));
+
   return (
     <div>
+      {chooser && <>
       <div
         className={`drop-zone${dragOver ? " is-dragover" : ""}`}
         tabIndex={0}
@@ -144,22 +179,56 @@ export function AssetDropZone({
         <span>{supported}</span>
         {hint ? <span>{hint}</span> : <span />}
       </div>
-      {items.map((item) => (
-        <div key={item.url} className="drop-item">
-          <div className="drop-item-main">
-            <video className="drop-item-thumb" src={item.url} muted playsInline preload="metadata" />
-            <div className="drop-item-meta">
-              <strong>{item.name}</strong>
-              <span>{pending ? pendingLabel : error || "Ready"}</span>
+      </>}
+      {shown.map((item) => {
+        const percent = item.progress == null ? null : Math.round(item.progress);
+        const removable = Boolean(onRemove) || (!controlled && defer);
+        return (
+          <div key={item.id} className="drop-item">
+            <div className="drop-item-main">
+              {item.url?.startsWith("blob:") ? (
+                <video className="drop-item-thumb" src={item.url} muted playsInline preload="metadata" />
+              ) : item.url ? (
+                <img className="drop-item-thumb" src={item.url} alt="" />
+              ) : (
+                <span className="drop-item-thumb" aria-hidden="true" />
+              )}
+              <div className="drop-item-meta">
+                <strong>{item.name}</strong>
+                <span className={item.failed ? "is-error" : undefined}>{item.subtitle}</span>
+              </div>
+              {removable && (
+                <button
+                  type="button"
+                  className="drop-item-remove"
+                  aria-label={`Remove ${item.name}`}
+                  title="Remove"
+                  onClick={() => (onRemove ? onRemove(item.id) : remove(item.id))}
+                >
+                  ×
+                </button>
+              )}
             </div>
-            {defer && (
-              <button type="button" className="btn" onClick={() => remove(item.url)}>Remove</button>
+            {percent != null && (
+              <div
+                className="drop-progress"
+                role="progressbar"
+                aria-valuenow={percent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label={item.subtitle}
+              >
+                <div className="drop-progress-track">
+                  <div className="drop-progress-fill" style={{ width: `${percent}%` }} />
+                </div>
+                <span className="mono">{percent}%</span>
+              </div>
             )}
           </div>
-        </div>
-      ))}
-      {!items.length && pending && pendingLabel && <p className="drop-zone-status">{pendingLabel}</p>}
-      {!items.length && error && <p className="drop-zone-status is-error">{error}</p>}
+        );
+      })}
+      {!shown.length && pending && pendingLabel && <p className="drop-zone-status">{pendingLabel}</p>}
+      {!shown.length && error && <p className="drop-zone-status is-error">{error}</p>}
       {settings && <div className="drop-zone-settings">{settings}</div>}
     </div>
   );

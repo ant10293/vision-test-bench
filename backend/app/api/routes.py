@@ -78,8 +78,16 @@ from app.services.credentials import (
 )
 from app.services.exchange import export_run, import_run
 from app.services.experiments import create_run, duplicate_run, retry_from, save_prompt
-from app.services.ingest import ingest_file
-from app.services.storage import data_path, resolve_stored
+from app.services.ingest import (
+    accept_reference,
+    accept_upload,
+    cancel_ingest,
+    ingest_file,
+    referenced_file,
+    schedule_ingest,
+)
+from app.services.lab_settings import load_settings, save_settings
+from app.services.storage import data_path, is_external, resolve_stored, safe_filename
 
 router = APIRouter(prefix="/api")
 
@@ -170,7 +178,7 @@ def create_project(payload: dict, session: Session = Depends(db)) -> dict:
 
 
 def _unlink_stored(stored: str) -> None:
-    if not stored:
+    if not stored or is_external(stored):
         return
     try:
         path = resolve_stored(stored)
@@ -178,6 +186,20 @@ def _unlink_stored(stored: str) -> None:
         return
     if path.is_file():
         path.unlink()
+
+
+def _drop_pts_if_unused(session: Session, checksum: str) -> None:
+    prefix = (checksum or "")[:12]
+    if len(prefix) < 12:
+        return
+    still = session.scalar(
+        select(func.count()).select_from(VideoAsset).where(VideoAsset.checksum_sha256.startswith(prefix))
+    ) or 0
+    if still:
+        return
+    pts = data_path("originals", f"{prefix}.pts.json")
+    if pts.is_file():
+        pts.unlink()
 
 
 def _remove_tree(folder: str, name: str) -> None:
@@ -199,6 +221,9 @@ def delete_project(project_id: str, session: Session = Depends(db)) -> dict:
     videos = list(session.scalars(select(VideoAsset).where(VideoAsset.project_id == project.id)))
     runs = list(session.scalars(select(AnalysisRun).where(AnalysisRun.project_id == project.id)))
     video_ids = [video.id for video in videos]
+    checksums = [video.checksum_sha256 for video in videos if video.checksum_sha256]
+    for video_id in video_ids:
+        cancel_ingest(video_id)
     run_ids = [run.id for run in runs]
     paths: list[str] = []
     for video in videos:
@@ -262,6 +287,8 @@ def delete_project(project_id: str, session: Session = Depends(db)) -> dict:
                 pts = data_path("originals", f"{prefix}.pts.json")
                 if pts.is_file():
                     pts.unlink()
+    for checksum in checksums:
+        _drop_pts_if_unused(session, checksum)
     for video_id in video_ids:
         _remove_tree("frames", video_id)
     for run_id in run_ids:
@@ -282,23 +309,67 @@ async def upload_video(
     session: Session = Depends(db),
 ) -> dict:
     from app.config import settings
+    from app.models.util import new_id
     from app.video.probe import VideoError
 
-    raw = await file.read()
-    if len(raw) > settings.max_upload_bytes:
-        raise HTTPException(413, "file exceeds the upload limit")
-    if not raw:
-        raise HTTPException(400, "empty upload")
-    temp = data_path("imports", f"upload_{file.filename or 'video'}")
+    temp = data_path("imports", f"upload_{new_id()}_{safe_filename(file.filename or 'video')}")
     temp.parent.mkdir(parents=True, exist_ok=True)
-    temp.write_bytes(raw)
+    size = 0
     try:
-        video = ingest_file(session, project_id, file.filename or "video.mp4", temp)
+        with temp.open("wb") as handle:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > settings.max_upload_bytes:
+                    raise HTTPException(413, "file exceeds the upload limit")
+                handle.write(chunk)
+        if size == 0:
+            raise HTTPException(400, "empty upload")
+        if settings.ingest_inline:
+            video = ingest_file(session, project_id, file.filename or "video.mp4", temp)
+        else:
+            video = accept_upload(session, project_id, file.filename or "video.mp4", temp)
     except VideoError as exc:
         raise HTTPException(400, str(exc)) from exc
     finally:
         if temp.exists():
             temp.unlink()
+    if not settings.ingest_inline:
+        schedule_ingest(video.id)
+    return video_dict(video)
+
+
+@router.get("/settings")
+def get_lab_settings() -> dict:
+    return load_settings()
+
+
+@router.put("/settings")
+def put_lab_settings(payload: dict) -> dict:
+    try:
+        return save_settings(str(payload.get("video_storage") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/videos/reference")
+def reference_video(payload: dict, session: Session = Depends(db)) -> dict:
+    from app.config import settings
+    from app.video.probe import VideoError
+
+    project_id = str(payload.get("project_id") or "")
+    raw = str(payload.get("path") or "").strip()
+    if not project_id or not raw:
+        raise HTTPException(400, "project and path are required")
+    try:
+        path = referenced_file(raw)
+        if settings.ingest_inline:
+            video = ingest_file(session, project_id, path.name, path, reference=True)
+        else:
+            video = accept_reference(session, project_id, path)
+    except VideoError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not settings.ingest_inline:
+        schedule_ingest(video.id)
     return video_dict(video)
 
 
@@ -382,13 +453,18 @@ def delete_video(video_id: str, session: Session = Depends(db)) -> dict:
     used = session.scalar(select(func.count()).select_from(AnalysisRun).where(AnalysisRun.video_id == video.id))
     if used:
         raise HTTPException(409, "delete the runs that use this video first")
+    cancel_ingest(video_id)
+    checksum = video.checksum_sha256
     for stored in (video.stored_path, video.proxy_path, video.thumbnail_path, video.contact_sheet_path):
-        if stored:
-            path = resolve_stored(stored)
-            if path.exists() and path.is_file():
-                path.unlink()
+        if not stored or is_external(stored):
+            continue
+        path = resolve_stored(stored)
+        if path.exists() and path.is_file():
+            path.unlink()
     session.delete(video)
     session.commit()
+    _remove_tree("frames", video_id)
+    _drop_pts_if_unused(session, checksum)
     return {"deleted": video_id}
 
 

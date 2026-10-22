@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
+import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -11,7 +14,15 @@ from sqlalchemy.orm import Session
 from app.models.media import FrameAsset, Project, VideoAsset
 from app.models.sessions import RecordingSession
 from app.models.util import new_id
-from app.services.storage import data_path, ensure_data_dirs, relative, safe_filename
+from app.services.storage import (
+    data_path,
+    ensure_data_dirs,
+    external_ref,
+    is_external,
+    relative,
+    resolve_stored,
+    safe_filename,
+)
 from app.video.capture_time import read_capture
 from app.video.frames import contact_sheet, extract_frame, make_proxy, thumbnail
 from app.video.probe import (
@@ -24,7 +35,18 @@ from app.video.probe import (
 )
 from app.video.sampling import plan_uniform
 
+log = logging.getLogger("learnloop.ingest")
+
 ALLOWED_SUFFIXES = {".mp4", ".mov", ".webm", ".m4v"}
+Progress = Callable[[float, str], None]
+
+_lock = threading.Lock()
+_inflight: set[str] = set()
+_cancel: set[str] = set()
+
+
+class IngestCancelled(Exception):
+    """The video row was removed while analysis was still running."""
 
 
 def ingest_file(
@@ -34,6 +56,10 @@ def ingest_file(
     source: Path,
     research_mode: str = "",
     session_id: str | None = None,
+    video: VideoAsset | None = None,
+    on_progress: Progress | None = None,
+    produced: list[Path] | None = None,
+    reference: bool = False,
 ) -> VideoAsset:
     ensure_data_dirs()
     project = session.get(Project, project_id)
@@ -42,77 +68,115 @@ def ingest_file(
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise VideoError(f"unsupported type {suffix or 'unknown'}; use mp4, mov, or webm")
-    checksum = sha256_file(source)
+    if video is not None:
+        _drop_preview_frames(session, video.id)
+    _step(on_progress, 8, "Hashing")
+    hashed = 8.0
+
+    def on_hashed(read: int, total: int) -> None:
+        nonlocal hashed
+        if total <= 0:
+            return
+        mark = 8 + (read / total) * 8
+        if read < total and mark < hashed + 1:
+            return
+        hashed = mark
+        _step(on_progress, mark, "Hashing")
+
+    checksum = sha256_file(source, on_hashed)
     existing = session.scalar(
         select(VideoAsset).where(
             VideoAsset.project_id == project_id,
             VideoAsset.checksum_sha256 == checksum,
+            VideoAsset.id != (video.id if video is not None else ""),
         )
     )
     if existing is not None:
+        if video is not None:
+            raise VideoError("this file is already in the project")
         if existing.timestamp_source in {"", "absent"} and not existing.capture_time_raw:
             _apply_capture(existing, source)
             if project.is_task and not existing.session_id:
                 existing.session_id = session_id or _default_session(session, project)
             session.commit()
         return existing
+    _step(on_progress, 18, "Probing")
     meta = probe(source)
     if meta.duration_sec <= 0 or meta.width <= 0:
         raise VideoError("the file has no usable video duration or dimensions")
-    stored_name = f"{checksum[:12]}_{safe_filename(filename)}"
-    if not stored_name.lower().endswith(suffix):
-        stored_name += suffix
-    original = data_path("originals", stored_name)
-    if not original.exists():
-        shutil.copy2(source, original)
+    _step(on_progress, 26, "Storing")
+    referencing = reference or (video is not None and is_external(video.stored_path))
+    if referencing:
+        original = source.resolve()
+        prior = None
+    else:
+        stored_name = f"{checksum[:12]}_{safe_filename(filename)}"
+        if not stored_name.lower().endswith(suffix):
+            stored_name += suffix
+        original = data_path("originals", stored_name)
+        if not original.exists():
+            shutil.copy2(source, original)
+            _keep(produced, original)
+        prior = resolve_stored(video.stored_path) if video is not None and video.stored_path else None
     proxy_rel = ""
     if not browser_compatible(meta):
+        _step(on_progress, 32, "Preparing playback")
         proxy = data_path("proxies", f"{checksum[:12]}.mp4")
         if not proxy.exists():
             make_proxy(original, proxy)
+            _keep(produced, proxy)
         proxy_rel = relative(proxy)
+    _step(on_progress, 34, "Reading frame times")
     pts_cache = data_path("originals", f"{checksum[:12]}.pts.json")
     pts = presentation_timestamps(original, pts_cache)
     stamp = read_capture(original)
-    video = VideoAsset(
-        id=new_id(),
-        project_id=project_id,
-        original_filename=safe_filename(filename),
-        stored_path=relative(original),
-        proxy_path=proxy_rel,
-        checksum_sha256=checksum,
-        mime_type=meta.mime_hint,
-        container=meta.container,
-        codec=meta.codec,
-        duration_sec=meta.duration_sec,
-        width=meta.width,
-        height=meta.height,
-        display_width=meta.display_width,
-        display_height=meta.display_height,
-        fps=meta.fps,
-        avg_fps=meta.avg_fps,
-        time_base=meta.time_base,
-        rotation_deg=meta.rotation_deg,
-        variable_frame_rate=meta.variable_frame_rate,
-        frame_count=meta.frame_count or len(pts),
-        size_bytes=original.stat().st_size,
-        session_id=session_id or _default_session(session, project),
-        research_mode=research_mode,
-        capture_time_raw=stamp.raw,
-        capture_time_utc=stamp.utc_iso,
-        capture_timezone=stamp.timezone_name,
-        timestamp_source=stamp.source,
-        timestamp_reliability=stamp.reliability,
-        timestamp_note=stamp.note,
-        file_mtime=stamp.file_mtime,
-    )
-    session.add(video)
+    if video is None:
+        video = VideoAsset(id=new_id(), project_id=project_id, original_filename=safe_filename(filename))
+        session.add(video)
+    video.original_filename = safe_filename(filename)
+    video.stored_path = external_ref(original) if referencing else relative(original)
+    video.proxy_path = proxy_rel
+    video.checksum_sha256 = checksum
+    video.mime_type = meta.mime_hint
+    video.container = meta.container
+    video.codec = meta.codec
+    video.duration_sec = meta.duration_sec
+    video.width = meta.width
+    video.height = meta.height
+    video.display_width = meta.display_width
+    video.display_height = meta.display_height
+    video.fps = meta.fps
+    video.avg_fps = meta.avg_fps
+    video.time_base = meta.time_base
+    video.rotation_deg = meta.rotation_deg
+    video.variable_frame_rate = meta.variable_frame_rate
+    video.frame_count = meta.frame_count or len(pts)
+    video.size_bytes = original.stat().st_size
+    video.session_id = session_id or video.session_id or _default_session(session, project)
+    video.research_mode = research_mode or video.research_mode
+    video.capture_time_raw = stamp.raw
+    video.capture_time_utc = stamp.utc_iso
+    video.capture_timezone = stamp.timezone_name
+    video.timestamp_source = stamp.source
+    video.timestamp_reliability = stamp.reliability
+    video.timestamp_note = stamp.note
+    video.file_mtime = stamp.file_mtime
     session.flush()
+    if on_progress is not None:
+        if not _still_there(session, video.id):
+            raise IngestCancelled()
+        session.commit()
+        if prior is not None and prior.is_file() and prior.resolve() != original.resolve():
+            prior.unlink()
+            prior = None
     preview = plan_uniform(meta.duration_sec, 1.0, pts)[:40]
     frame_paths: list[Path] = []
+    total = max(len(preview), 1)
     for ordinal, sample in enumerate(preview):
+        _step(on_progress, 36 + (54 * ordinal / total), f"Extracting frames ({ordinal + 1}/{len(preview)})")
         dest = data_path("frames", video.id, f"{ordinal:04d}_{sample.timestamp:.3f}.jpg")
         extract_frame(original, sample.timestamp, dest, accurate=True)
+        _keep(produced, dest)
         frame_paths.append(dest)
         session.add(
             FrameAsset(
@@ -128,13 +192,16 @@ def ingest_file(
             )
         )
     if preview:
+        _step(on_progress, 92, "Building preview")
         thumb = data_path("thumbs", f"{video.id}.jpg")
         thumbnail(original, preview[min(1, len(preview) - 1)].timestamp, thumb)
+        _keep(produced, thumb)
         video.thumbnail_path = relative(thumb)
         sheet = data_path("sheets", f"{video.id}.jpg")
         contact_sheet(frame_paths, sheet)
+        _keep(produced, sheet)
         video.contact_sheet_path = relative(sheet)
-    if not project.is_task:
+    if not project.is_task and video.order_index is None:
         peak = session.scalar(
             select(func.max(VideoAsset.order_index)).where(
                 VideoAsset.project_id == project_id,
@@ -143,9 +210,292 @@ def ingest_file(
         )
         if peak is not None:
             video.order_index = float(peak) + 1
+    if on_progress is not None and not _still_there(session, video.id):
+        raise IngestCancelled()
+    video.ingest_status = "ready"
+    video.ingest_progress = 100
+    video.ingest_detail = ""
+    video.ingest_error = ""
+    session.commit()
+    if prior is not None and prior.is_file() and prior.resolve() != original.resolve():
+        prior.unlink()
+    session.refresh(video)
+    return video
+
+
+def accept_upload(session: Session, project_id: str, filename: str, source: Path) -> VideoAsset:
+    """Store the bytes and return before probing or frame extraction."""
+    ensure_data_dirs()
+    project = session.get(Project, project_id)
+    if project is None:
+        raise VideoError("project not found")
+    suffix = Path(filename).suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise VideoError(f"unsupported type {suffix or 'unknown'}; use mp4, mov, or webm")
+    if not source.is_file() or source.stat().st_size <= 0:
+        raise VideoError("empty upload")
+    video_id = new_id()
+    dest = data_path("imports", f"{video_id}_{safe_filename(filename)}")
+    if source.resolve() != dest.resolve():
+        shutil.move(str(source), dest)
+    video = VideoAsset(
+        id=video_id,
+        project_id=project_id,
+        original_filename=safe_filename(filename),
+        stored_path=relative(dest),
+        checksum_sha256="",
+        size_bytes=dest.stat().st_size,
+        ingest_status="processing",
+        ingest_progress=0,
+        ingest_detail="Queued",
+    )
+    session.add(video)
     session.commit()
     session.refresh(video)
     return video
+
+
+def referenced_file(raw: str) -> Path:
+    text = raw.strip().strip("'\"")
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        raise VideoError("use the full path to the video")
+    path = path.resolve()
+    if not path.is_file():
+        raise VideoError("that path is not a video file")
+    suffix = path.suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise VideoError(f"unsupported type {suffix or 'unknown'}; use mp4, mov, or webm")
+    if path.stat().st_size <= 0:
+        raise VideoError("empty file")
+    return path
+
+
+def accept_reference(session: Session, project_id: str, source: Path) -> VideoAsset:
+    """Remember a file where it already is. Nothing is copied."""
+    ensure_data_dirs()
+    project = session.get(Project, project_id)
+    if project is None:
+        raise VideoError("project not found")
+    path = referenced_file(str(source))
+    video = VideoAsset(
+        id=new_id(),
+        project_id=project_id,
+        original_filename=safe_filename(path.name),
+        stored_path=external_ref(path),
+        checksum_sha256="",
+        size_bytes=path.stat().st_size,
+        ingest_status="processing",
+        ingest_progress=0,
+        ingest_detail="Queued",
+    )
+    session.add(video)
+    session.commit()
+    session.refresh(video)
+    try:
+        video.thumbnail_path = _preview_still(path, video.id)
+        session.commit()
+    except VideoError as exc:
+        log.warning("preview still for %s failed: %s", video.id, exc)
+    return video
+
+
+def _preview_still(source: Path, video_id: str) -> str:
+    """One frame for the progress row. The full ingest replaces this file later."""
+    dest = data_path("thumbs", f"{video_id}.jpg")
+    try:
+        thumbnail(source, 1.0, dest)
+    except VideoError:
+        thumbnail(source, 0.0, dest)
+    return relative(dest)
+
+
+def repair_preview_paths() -> int:
+    """Fill thumbnail and contact-sheet paths when the files exist but the row lost them."""
+    from app.db import SessionLocal
+
+    session = SessionLocal()
+    fixed = 0
+    try:
+        for video in session.scalars(select(VideoAsset)):
+            changed = False
+            thumb = data_path("thumbs", f"{video.id}.jpg")
+            sheet = data_path("sheets", f"{video.id}.jpg")
+            if not video.thumbnail_path and thumb.is_file():
+                video.thumbnail_path = relative(thumb)
+                changed = True
+            if not video.contact_sheet_path and sheet.is_file():
+                video.contact_sheet_path = relative(sheet)
+                changed = True
+            if changed:
+                fixed += 1
+        if fixed:
+            session.commit()
+    finally:
+        session.close()
+    return fixed
+
+
+def schedule_ingest(video_id: str) -> None:
+    with _lock:
+        if video_id in _inflight:
+            return
+        _inflight.add(video_id)
+
+    def run() -> None:
+        try:
+            process_accepted(video_id)
+        finally:
+            with _lock:
+                _inflight.discard(video_id)
+                _cancel.discard(video_id)
+
+    threading.Thread(target=run, name=f"ingest-{video_id[:8]}", daemon=True).start()
+
+
+def cancel_ingest(video_id: str) -> None:
+    with _lock:
+        _cancel.add(video_id)
+
+
+def ingest_cancelled(video_id: str) -> bool:
+    with _lock:
+        return video_id in _cancel
+
+
+def resume_processing() -> int:
+    """Restart analysis that was still running when the process stopped."""
+    from app.db import SessionLocal
+
+    session = SessionLocal()
+    try:
+        ids = list(session.scalars(select(VideoAsset.id).where(VideoAsset.ingest_status == "processing")))
+    finally:
+        session.close()
+    for video_id in ids:
+        schedule_ingest(video_id)
+    return len(ids)
+
+
+def process_accepted(video_id: str) -> None:
+    from app.db import SessionLocal
+
+    session = SessionLocal()
+    produced: list[Path] = []
+    try:
+        video = session.get(VideoAsset, video_id)
+        if video is None or video.ingest_status != "processing":
+            return
+        if ingest_cancelled(video_id):
+            raise IngestCancelled()
+        source = resolve_stored(video.stored_path)
+
+        def on_progress(progress: float, detail: str) -> None:
+            if not _still_there(session, video_id):
+                raise IngestCancelled()
+            current = session.get(VideoAsset, video_id)
+            if current is None:
+                raise IngestCancelled()
+            current.ingest_status = "processing"
+            current.ingest_progress = progress
+            current.ingest_detail = detail
+            session.commit()
+
+        ingest_file(
+            session,
+            video.project_id,
+            video.original_filename,
+            source,
+            video.research_mode,
+            video.session_id,
+            video=video,
+            on_progress=on_progress,
+            produced=produced,
+        )
+    except IngestCancelled:
+        session.rollback()
+        _cleanup_if_gone(video_id, produced)
+    except Exception as exc:
+        session.rollback()
+        log.warning("ingest %s failed: %s", video_id, exc)
+        _mark_failed(video_id, exc)
+        _cleanup_if_gone(video_id, produced)
+    finally:
+        session.close()
+
+
+def _step(on_progress: Progress | None, progress: float, detail: str) -> None:
+    if on_progress is not None:
+        on_progress(progress, detail)
+
+
+def _keep(produced: list[Path] | None, path: Path) -> None:
+    if produced is not None:
+        produced.append(path)
+
+
+def _still_there(session: Session, video_id: str) -> bool:
+    """True when this analysis should keep going.
+
+    Only the id is read. Reloading the whole row would discard thumbnail,
+    contact sheet, and order changes that have not been committed yet.
+    """
+    if ingest_cancelled(video_id):
+        return False
+    return session.scalar(select(VideoAsset.id).where(VideoAsset.id == video_id)) is not None
+
+
+def _drop_preview_frames(session: Session, video_id: str) -> None:
+    rows = list(
+        session.scalars(
+            select(FrameAsset).where(FrameAsset.video_id == video_id, FrameAsset.run_id.is_(None), FrameAsset.reason == "upload_preview")
+        )
+    )
+    for frame in rows:
+        try:
+            path = resolve_stored(frame.path)
+        except ValueError:
+            path = None
+        if path is not None and path.is_file():
+            path.unlink()
+        session.delete(frame)
+    if rows:
+        session.flush()
+
+
+def _mark_failed(video_id: str, exc: Exception) -> None:
+    from app.db import SessionLocal
+
+    if ingest_cancelled(video_id):
+        return
+    session = SessionLocal()
+    try:
+        video = session.get(VideoAsset, video_id)
+        if video is None or video.ingest_status == "ready":
+            return
+        video.ingest_status = "failed"
+        video.ingest_error = str(exc)
+        video.ingest_detail = "Failed"
+        session.commit()
+    finally:
+        session.close()
+
+
+def _cleanup_if_gone(video_id: str, produced: list[Path]) -> None:
+    from app.db import SessionLocal
+
+    session = SessionLocal()
+    try:
+        if session.get(VideoAsset, video_id) is not None:
+            return
+    finally:
+        session.close()
+    for path in produced:
+        if path.is_file():
+            path.unlink()
+    frames = data_path("frames", video_id)
+    if frames.is_dir():
+        shutil.rmtree(frames)
 
 
 def _apply_capture(video: VideoAsset, source: Path) -> None:
@@ -174,8 +524,8 @@ def _default_session(session: Session, project: Project) -> str | None:
 
 def playback_path(video: VideoAsset) -> Path:
     if video.proxy_path:
-        return data_path(*Path(video.proxy_path).parts)
-    return data_path(*Path(video.stored_path).parts)
+        return resolve_stored(video.proxy_path)
+    return resolve_stored(video.stored_path)
 
 
 def sample_run_frames(
@@ -184,7 +534,7 @@ def sample_run_frames(
     run_id: str,
     samples,
 ) -> list[FrameAsset]:
-    original = data_path(*Path(video.stored_path).parts)
+    original = resolve_stored(video.stored_path)
     rows: list[FrameAsset] = []
     existing = {
         round(frame.timestamp, 3): frame

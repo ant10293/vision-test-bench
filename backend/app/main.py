@@ -17,6 +17,7 @@ from app.config import settings
 from app.demo.seed import seed_if_empty
 from app.jobs.worker import worker_loop
 from app.services.experiments import seed_prompts
+from app.services.ingest import repair_preview_paths, resume_processing
 from app.services.storage import ensure_data_dirs
 
 log = logging.getLogger("learnloop")
@@ -44,6 +45,8 @@ def init_database() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_database()
+    repair_preview_paths()
+    resume_processing()
     stop = asyncio.Event()
     task = None
     if settings.worker_enabled:
@@ -56,6 +59,15 @@ async def lifespan(_app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="LearnLoop Research Lab", version=__version__, lifespan=lifespan)
+
+    @app.middleware("http")
+    async def _api_json_not_cached(request, call_next):
+        response = await call_next(request)
+        content_type = response.headers.get("content-type", "")
+        if request.url.path.startswith("/api/") and "json" in content_type:
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.origin_list,

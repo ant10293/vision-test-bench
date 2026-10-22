@@ -75,28 +75,40 @@ export function ProvidersPage() {
   );
 }
 
+/** Ignore surrounding and trailing whitespace so spacing-only edits are not a new version. */
+function comparablePrompt(value: string): string {
+  return value
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+}
+
 export function PromptsPage() {
   const client = useQueryClient();
   const prompts = useQuery({ queryKey: ["prompts"], queryFn: api.prompts });
   const [key, setKey] = useState("scene");
   const current = prompts.data?.find((item) => item.key === key);
-  const [body, setBody] = useState("");
+  const [body, setBody] = useState<string | null>(null);
+  const saved = current?.body ?? "";
+  const draft = body ?? saved;
+  const unchanged = !current || comparablePrompt(draft) === comparablePrompt(saved);
   return (
     <div className="space-y-3">
       <h1 className="text-2xl font-medium">Prompt versions</h1>
       <p className="text-sm text-[var(--muted)]">Saving creates a new version. Past experiments keep the snapshot they launched with.</p>
-      <select className="field max-w-sm" value={key} onChange={(event) => { setKey(event.target.value); setBody(""); }}>
+      <select className="field max-w-sm" value={key} onChange={(event) => { setKey(event.target.value); setBody(null); }}>
         {[...new Set(prompts.data?.map((item) => item.key) ?? [])].map((item) => <option key={item}>{item}</option>)}
       </select>
-      <textarea className="field min-h-80 font-mono text-xs" value={body || current?.body || ""} onChange={(event) => setBody(event.target.value)} />
-      <button className="btn primary" onClick={async () => {
-        await api.savePrompt(key, current?.name || key, body || current?.body || "");
-        setBody("");
+      <textarea className="field min-h-80 font-mono text-xs" value={draft} onChange={(event) => setBody(event.target.value)} />
+      <button className="btn primary" disabled={unchanged} onClick={async () => {
+        if (unchanged) return;
+        await api.savePrompt(key, current?.name || key, draft);
+        setBody(null);
         await client.invalidateQueries({ queryKey: ["prompts"] });
       }}>Save new version</button>
-      <ul className="text-xs text-[var(--muted)]">
-        {prompts.data?.filter((item) => item.key === key).map((item) => <li key={item.id}>v{item.version}</li>)}
-      </ul>
+      {current && <p className="text-xs text-[var(--muted)]">v{current.version}</p>}
     </div>
   );
 }

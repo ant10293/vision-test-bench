@@ -3,6 +3,7 @@ import type { AudioModelStatus, Bundle, Dashboard, ProviderInfo, RunSummary, Vid
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
+    cache: "no-store",
     headers: {
       ...(init?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
       ...(init?.headers ?? {}),
@@ -24,6 +25,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.blob()) as T;
 }
 
+export type VideoStorage = "copy" | "reference";
+
+export interface LabSettings {
+  video_storage: VideoStorage;
+}
+
 export interface ProjectSummary {
   id: string;
   name: string;
@@ -40,13 +47,42 @@ export const api = {
   deleteProject: (id: string) => request<{ deleted: string }>(`/api/projects/${id}`, { method: "DELETE" }),
   videos: (projectId?: string) => request<VideoInfo[]>(`/api/videos${projectId ? `?project_id=${projectId}` : ""}`),
   video: (id: string) => request<VideoInfo>(`/api/videos/${id}`),
-  upload: (projectId: string, file: File) => {
-    const body = new FormData();
-    body.set("project_id", projectId);
-    body.set("file", file);
-    return request<VideoInfo>("/api/videos", { method: "POST", body });
-  },
+  upload: (
+    projectId: string,
+    file: File,
+    onProgress?: (ratio: number) => void,
+    control?: { onAbort: (abort: () => void) => void },
+  ) =>
+    new Promise<VideoInfo>((resolve, reject) => {
+      const body = new FormData();
+      body.set("project_id", projectId);
+      body.set("file", file);
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/videos");
+      xhr.responseType = "json";
+      control?.onAbort(() => xhr.abort());
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) onProgress?.(event.loaded / event.total);
+      };
+      xhr.onload = () => {
+        const payload = xhr.response as { detail?: string } | VideoInfo | null;
+        const detail = payload && typeof payload === "object" && "detail" in payload ? payload.detail : "";
+        if (xhr.status >= 200 && xhr.status < 300 && payload && !detail) {
+          resolve(payload as VideoInfo);
+          return;
+        }
+        reject(new Error(detail || xhr.statusText || `upload failed (${xhr.status})`));
+      };
+      xhr.onerror = () => reject(new Error("upload failed"));
+      xhr.onabort = () => reject(new DOMException("Upload cancelled", "AbortError"));
+      xhr.send(body);
+    }),
   deleteVideo: (id: string) => request(`/api/videos/${id}`, { method: "DELETE" }),
+  settings: () => request<LabSettings>("/api/settings"),
+  saveSettings: (payload: LabSettings) =>
+    request<LabSettings>("/api/settings", { method: "PUT", body: JSON.stringify(payload) }),
+  referenceVideo: (projectId: string, path: string) =>
+    request<VideoInfo>("/api/videos/reference", { method: "POST", body: JSON.stringify({ project_id: projectId, path }) }),
   orderVideos: (projectId: string, videoIds: string[]) =>
     request<VideoInfo[]>(`/api/projects/${projectId}/videos/order`, {
       method: "POST",
@@ -136,6 +172,11 @@ export const api = {
     for (const file of files) body.append("files", file);
     return request<TaskBundle>(`/api/tasks/${projectId}/clips`, { method: "POST", body });
   },
+  referenceClips: (projectId: string, paths: string[], researchMode: string) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/clips/reference`, {
+      method: "POST",
+      body: JSON.stringify({ paths, research_mode: researchMode }),
+    }),
   createSession: (projectId: string, name: string) =>
     request<TaskBundle>(`/api/tasks/${projectId}/sessions`, { method: "POST", body: JSON.stringify({ name }) }),
   patchSession: (projectId: string, sessionId: string, payload: Record<string, unknown>) =>

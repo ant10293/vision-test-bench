@@ -18,7 +18,7 @@ from app.models.util import new_id
 from app.schemas.analysis import AnalysisDocument
 from app.services.experiments import create_run
 from app.services.materialize import materialize
-from app.services.storage import data_path
+from app.services.storage import data_path, resolve_stored
 
 
 def export_run(session: Session, run: AnalysisRun, dest: Path) -> Path:
@@ -99,7 +99,7 @@ def export_run(session: Session, run: AnalysisRun, dest: Path) -> Path:
                     indent=2,
                 ),
             )
-            original = data_path(*Path(video.stored_path).parts)
+            original = resolve_stored(video.stored_path)
             if original.exists() and original.stat().st_size <= 80 * 1024 * 1024:
                 archive.write(original, f"media/{video.original_filename}")
     return dest

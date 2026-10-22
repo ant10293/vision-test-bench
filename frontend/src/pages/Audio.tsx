@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { api, formatTime } from "../lib/api";
-import type { AudioAlignment, Bundle, TranscriptSegment } from "../lib/types";
+import { useBundle } from "../lib/bundleContext";
+import type { AudioAlignment, TranscriptSegment } from "../lib/types";
 import { useInspector } from "../stores/ui";
 
 const FILTERS = ["all", "visually_supported", "contextual", "contradictory", "irrelevant", "uncertain"];
@@ -16,7 +17,7 @@ const TONE: Record<string, string> = {
 };
 
 export function AudioPage() {
-  const bundle = useOutletContext<Bundle>();
+  const bundle = useBundle();
   const setTime = useInspector((state) => state.setTime);
   const [filter, setFilter] = useState("all");
   const [compareId, setCompareId] = useState("");

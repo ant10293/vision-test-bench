@@ -25,6 +25,10 @@ COLUMN_UPGRADES = {
         ("has_audio", "BOOLEAN DEFAULT 0"),
         ("audio_codec", "VARCHAR(80) DEFAULT ''"),
         ("audio_channels", "INTEGER DEFAULT 0"),
+        ("ingest_status", "VARCHAR(32) DEFAULT 'ready'"),
+        ("ingest_progress", "FLOAT DEFAULT 100"),
+        ("ingest_detail", "VARCHAR(200) DEFAULT ''"),
+        ("ingest_error", "TEXT DEFAULT ''"),
     ],
 }
 

@@ -17,7 +17,7 @@ from app.providers.registry import get_provider
 from app.providers.types import FrameInput, GenerationRequest, UnsupportedMode, rough_input_tokens
 from app.schemas.analysis import AnalysisDocument, Coverage
 from app.services.credentials import load_secret
-from app.services.storage import data_path
+from app.services.storage import data_path, resolve_stored
 
 
 class BudgetExceeded(RuntimeError):
@@ -199,7 +199,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
         system_prompt=system,
         user_prompt=user,
         frames=[FrameInput(frame.timestamp, data_path(*Path(frame.path).parts)) for frame in frames],
-        video_path=data_path(*Path(video.proxy_path or video.stored_path).parts)
+        video_path=resolve_stored(video.proxy_path or video.stored_path)
         if run.modality == "native_video"
         else None,
         modality=run.modality,
