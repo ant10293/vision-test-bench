@@ -141,7 +141,7 @@ function ActionDetail({ bundle, actionId }: { bundle: Bundle; actionId: string }
       <div className="flex flex-wrap gap-2">
         {action.object_local_ids.map((id) => {
           const object = bundle.objects.find((item) => item.local_id === id);
-          return object?.primary_image_url ? <img key={id} src={object.primary_image_url} alt={object.label} title={object.label} className="h-16 w-16 rounded object-cover" /> : <span key={id} className="tag">{id}</span>;
+          return object?.primary_image_url ? <img key={id} src={object.primary_image_url} alt={object.label} title={object.label} className="h-16 w-16 rounded bg-black object-contain" /> : <span key={id} className="tag">{id}</span>;
         })}
       </div>
       <BeforeAfter bundle={bundle} action={action} />
@@ -179,7 +179,7 @@ export function ObjectsPage() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {bundle.objects.map((object) => (
           <button key={object.id} className="panel overflow-hidden text-left" onClick={() => setOpen(object.local_id)}>
-            {object.primary_image_url ? <img src={object.primary_image_url} alt="" className="h-36 w-full object-cover" /> : <div className="grid h-36 place-items-center text-xs text-[var(--muted)]">No crop yet</div>}
+            {object.primary_image_url ? <img src={object.primary_image_url} alt="" className="h-36 w-full bg-black object-contain" /> : <div className="grid h-36 place-items-center text-xs text-[var(--muted)]">No crop yet</div>}
             <div className="space-y-1 p-3 text-sm">
               <div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ background: object.color }} />{object.local_id}</div>
               <div className="font-medium">{object.label}</div>
@@ -213,7 +213,7 @@ export function ObjectsPage() {
             <div className="grid grid-cols-3 gap-2">
               {selected.images.filter((image) => image.url).map((image) => (
                 <a key={image.id} href={image.url} target="_blank" rel="noreferrer" className="block">
-                  <img src={image.url} alt={image.kind} className="h-20 w-full rounded object-cover" />
+                  <img src={image.url} alt={image.kind} className="h-20 w-full rounded bg-black object-contain" />
                   <div className="text-[10px] text-[var(--muted)]">{image.kind} · {image.timestamp.toFixed(2)}s</div>
                 </a>
               ))}
@@ -330,13 +330,13 @@ export function StepsPage() {
       <div className="grid gap-2 md:grid-cols-3">
         {[start, (start + end) / 2, end].map((stamp) => {
           const frame = bundle.frames.reduce((best, item) => Math.abs(item.timestamp - stamp) < Math.abs(best.timestamp - stamp) ? item : best, bundle.frames[0]);
-          return frame ? <img key={stamp} src={frame.url} alt="" className="panel h-40 w-full object-cover" /> : null;
+          return frame ? <img key={stamp} src={frame.url} alt="" className="panel aspect-video w-full bg-black object-contain" /> : null;
         })}
       </div>
       <div className="flex gap-2">
         {step.required_objects.map((id) => {
           const object = bundle.objects.find((item) => item.local_id === id);
-          return <div key={id} className="text-xs">{object?.primary_image_url && <img src={object.primary_image_url} alt="" className="h-16 w-16 rounded object-cover" />}<div>{object?.label ?? id}</div></div>;
+          return <div key={id} className="text-xs">{object?.primary_image_url && <img src={object.primary_image_url} alt="" className="h-16 w-16 rounded bg-black object-contain" />}<div>{object?.label ?? id}</div></div>;
         })}
       </div>
       <button className="btn" onClick={() => { useInspector.getState().setTime(start); useInspector.getState().selectStep(step.local_id); }}>Show on timeline</button>

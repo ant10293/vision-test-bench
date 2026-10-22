@@ -12,13 +12,13 @@ function ProjectCard({ project, videos, onOpen }: { project: ProjectSummary; vid
       {frames.length > 1 ? (
         <div className="grid grid-cols-2">
           {frames.map((video) => (
-            <img key={video.id} src={video.thumbnail_url} alt="" className="aspect-video w-full object-cover" />
+            <img key={video.id} src={video.thumbnail_url} alt="" className="aspect-video w-full bg-black object-contain" />
           ))}
         </div>
       ) : frames.length === 1 ? (
-        <img src={frames[0].thumbnail_url} alt="" className="h-36 w-full object-cover" />
+        <img src={frames[0].thumbnail_url} alt="" className="aspect-video w-full bg-black object-contain" />
       ) : (
-        <div className="flex h-36 items-center justify-center bg-black text-xs text-[var(--muted)]">No videos</div>
+        <div className="flex aspect-video items-center justify-center bg-black text-xs text-[var(--muted)]">No videos</div>
       )}
       <div className="space-y-1 p-3 text-sm">
         <div className="truncate">{project.name}</div>
@@ -223,7 +223,7 @@ export function VideosPage() {
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {shown?.map((video) => (
             <Link key={video.id} to={`/videos/${video.id}`} className="panel overflow-hidden">
-              {video.thumbnail_url && <img src={video.thumbnail_url} alt="" className="h-36 w-full object-cover" />}
+              {video.thumbnail_url && <img src={video.thumbnail_url} alt="" className="aspect-video w-full bg-black object-contain" />}
               <div className="space-y-1 p-3 text-sm">
                 <div className="truncate">{video.filename}</div>
                 <div className="mono text-xs text-[var(--muted)]">
@@ -293,7 +293,7 @@ export function VideoDetailPage() {
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         {item.frames?.map((frame) => (
           <figure key={frame.id} className="panel overflow-hidden">
-            <img src={frame.url} alt="" className="h-28 w-full object-cover" />
+            <img src={frame.url} alt="" className="aspect-video w-full bg-black object-contain" />
             <figcaption className="mono px-2 py-1 text-xs text-[var(--muted)]">{frame.timestamp.toFixed(2)}s · {frame.reason}</figcaption>
           </figure>
         ))}

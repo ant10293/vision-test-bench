@@ -43,7 +43,7 @@ export function DashboardPage() {
           <div className="space-y-2">
             {data.recent_runs.map((run) => (
               <Link key={run.id} to={`/runs/${run.id}`} className="grid grid-cols-[72px_1fr] gap-3 rounded-md border border-transparent p-2 hover:border-[var(--line)]">
-                {run.thumbnail_url ? <img src={run.thumbnail_url} alt="" className="h-12 w-full rounded object-cover" /> : <div className="h-12 rounded bg-[#0d1016]" />}
+                {run.thumbnail_url ? <img src={run.thumbnail_url} alt="" className="aspect-video w-full rounded bg-black object-contain" /> : <div className="aspect-video rounded bg-[#0d1016]" />}
                 <div className="min-w-0">
                   <div className="truncate">{run.name}</div>
                   <div className="text-xs text-[var(--muted)]">

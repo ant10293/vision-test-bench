@@ -215,7 +215,7 @@ button.linkish {
   width: 3rem;
   height: 3rem;
   border-radius: 8px;
-  object-fit: cover;
+  object-fit: contain;
   background: color-mix(in srgb, var(--teal) 16%, var(--panel));
   display: block;
 }
