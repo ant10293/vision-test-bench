@@ -4,7 +4,7 @@ Schema version `1.0.0` for a single-clip analysis document. A task project is th
 
 ## Entities
 
-Project, RecordingSession, VideoAsset, FrameAsset, AnalysisRun, AnalysisRevision, PipelineStageRun, Job, PromptVersion, ProviderSecret, ProviderStatus, ManualModel, ModelRequest, ModelResponse, DetectedObject, ObjectObservation, ObjectState, ObjectStateTransition, ObjectRelationship, ObjectImage, SegmentationMask, Action, Workflow, WorkflowStep, WorkflowDependency, Ambiguity, Annotation, GroundTruthDataset, EvaluationResult, Comparison, Artifact, SpatialTrackPoint, SceneChunk, CanonicalObject, IdentityLink, InterSessionTransition, ProjectRevision, OrderHypothesis, ProjectGroundTruth.
+Project, RecordingSession, VideoAsset, FrameAsset, AnalysisRun, AnalysisRevision, PipelineStageRun, Job, PromptVersion, ProviderSecret, ProviderStatus, ManualModel, ModelRequest, ModelResponse, DetectedObject, ObjectObservation, ObjectState, ObjectStateTransition, ObjectRelationship, ObjectImage, SegmentationMask, Action, Workflow, WorkflowStep, WorkflowDependency, Ambiguity, Annotation, GroundTruthDataset, EvaluationResult, Comparison, Artifact, SpatialTrackPoint, SceneChunk, CanonicalObject, IdentityLink, InterSessionTransition, ProjectRevision, OrderHypothesis, ProjectGroundTruth, TranscriptSegment, AudioAlignment.
 
 A video is stored once. Many runs point at it. Frames may belong to the upload preview (`run_id` null) or to a run's sampling plan.
 
@@ -22,13 +22,15 @@ Provenance is independent: AI prediction, computer-vision detection, determinist
 
 An observation is a box, a visibility, and a description at a timestamp. An action outcome (`completed`, `attempted`, `failed`, `unknown`) is an interpretation and must not be copied from the verb. Proximity is a relationship kind, not attachment.
 
+`TranscriptSegment` stores clip-relative speech. `text_model` is the recognizer output and stays when a person edits `text`. `AudioAlignment` links a segment to action, object, and step ids from that same clip, with a classification, an explanation, and `speech_is_not_completion`. Those rows are not visual observations. A corrected alignment keeps `local_classification`.
+
 ## Coordinates
 
 Boxes are normalized to the display frame after ffmpeg autorotation. `coordinate_frame` is `image` for the baseline. `world_coordinates_supported` is false unless a future calibrator sets it. The scene snapshot at time t returns states whose intervals cover t. It returns the nearest observation only inside 0.75 seconds and labels a larger gap instead of inventing a box.
 
 ## Export
 
-`GET /api/runs/{id}/export` writes a zip: manifest (checksum, model, prompt snapshot, coverage, app version), analysis JSON, requests, raw responses, object images, and the original video when it is under 80 MB. Secrets are not included. Import accepts schema `1.0.0` and reuses a video with the same checksum. Other schema versions are rejected until a migration exists.
+`GET /api/runs/{id}/export` writes a zip: manifest (checksum, model, prompt snapshot, coverage, app version), analysis JSON, transcripts JSON, alignments JSON, requests, raw responses, object images, and the original video when it is under 80 MB. Secrets are not included. Transcript rows are not part of the analysis document, so the document schema stays `1.0.0`. Import accepts schema `1.0.0` and reuses a video with the same checksum. Other schema versions are rejected until a migration exists.
 
 ## Ground truth
 

@@ -21,6 +21,10 @@ COLUMN_UPGRADES = {
         ("order_locked", "BOOLEAN DEFAULT 0"),
         ("order_method", "VARCHAR(32) DEFAULT ''"),
         ("order_ambiguous", "BOOLEAN DEFAULT 0"),
+        ("audio_probed", "BOOLEAN DEFAULT 0"),
+        ("has_audio", "BOOLEAN DEFAULT 0"),
+        ("audio_codec", "VARCHAR(80) DEFAULT ''"),
+        ("audio_channels", "INTEGER DEFAULT 0"),
     ],
 }
 

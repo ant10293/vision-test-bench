@@ -16,6 +16,8 @@ npm install --prefix frontend
 
 Optional SAM mask raster decoding: `backend/.venv/bin/pip install -e "./backend[sam]"`. Box parsing does not need that package.
 
+Optional local transcription: `backend/.venv/bin/pip install -e "./backend[audio]"`. See `AUDIO.md`. Visual analysis does not need it.
+
 ## Run
 
 `./scripts/dev.sh` starts the API on port 8000 with the worker inside the process, and Vite on port 5173. Vite proxies `/api`.
@@ -45,6 +47,7 @@ Playwright starts its own API with a separate `data/e2e` database and `LEARNLOOP
 ## Layout
 
 - `backend/app/video` probe, sampling, spatial baseline
+- `backend/app/audio` local transcription, alignment, and transcript persistence
 - `backend/app/providers` adapters
 - `backend/app/pipeline` prompts, parsing, validation, runner
 - `backend/app/services` ingest, materialize, corrections, export

@@ -207,5 +207,7 @@ PIPELINE_STAGES = [
     "ambiguity",
     "validation",
     "reinspection",
+    "transcription",
+    "audio_context",
     "artifacts",
 ]

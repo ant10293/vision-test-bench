@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.audio import AudioAlignment, TranscriptSegment
 from app.models.domain import (
     ActionRow,
     AmbiguityRow,
@@ -52,6 +53,9 @@ def video_dict(video: VideoAsset, frame_count: int | None = None) -> dict:
         "timestamp_reliability": video.timestamp_reliability,
         "timestamp_note": video.timestamp_note,
         "file_mtime": video.file_mtime,
+        "has_audio": video.has_audio,
+        "audio_probed": video.audio_probed,
+        "audio_codec": video.audio_codec,
         "order_index": video.order_index,
         "order_locked": video.order_locked,
         "order_method": video.order_method,
@@ -154,7 +158,60 @@ def bundle(session: Session, run: AnalysisRun) -> dict:
         "validation": (revision.document_json or {}).get("validation_issues", []) if revision else [],
         "summary": (revision.document_json or {}).get("summary", "") if revision else "",
         "camera": (revision.document_json or {}).get("camera") if revision else None,
+        "transcripts": _transcripts(session, run.id),
+        "alignments": _alignments(session, run.id),
     }
+
+
+def _transcripts(session: Session, run_id: str) -> list[dict]:
+    rows = session.scalars(
+        select(TranscriptSegment).where(TranscriptSegment.run_id == run_id).order_by(TranscriptSegment.start)
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "video_id": row.video_id,
+            "local_id": row.local_id,
+            "start": row.start,
+            "end": row.end,
+            "text": row.text,
+            "text_model": row.text_model,
+            "language": row.language,
+            "language_probability": row.language_probability,
+            "confidence": row.confidence,
+            "words": row.words_json or [],
+            "model_name": row.model_name,
+            "device": row.device,
+            "corrected": row.corrected,
+            "provenance": row.provenance,
+        }
+        for row in rows
+    ]
+
+
+def _alignments(session: Session, run_id: str) -> list[dict]:
+    rows = session.scalars(select(AudioAlignment).where(AudioAlignment.run_id == run_id)).all()
+    return [
+        {
+            "id": row.id,
+            "video_id": row.video_id,
+            "segment_id": row.segment_id,
+            "classification": row.classification,
+            "local_classification": row.local_classification,
+            "explanation": row.explanation,
+            "action_local_ids": row.action_local_ids or [],
+            "object_local_ids": row.object_local_ids or [],
+            "step_local_ids": row.step_local_ids or [],
+            "frame_timestamps": row.frame_timestamps or [],
+            "time_offset_sec": row.time_offset_sec,
+            "confidence": row.confidence,
+            "evidence_class": row.evidence_class,
+            "provenance": row.provenance,
+            "corrected": row.corrected,
+            "speech_is_not_completion": row.speech_is_not_completion,
+        }
+        for row in rows
+    ]
 
 
 def _public_config(config: dict) -> dict:

@@ -1,4 +1,4 @@
-import type { Bundle, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
+import type { AudioModelStatus, Bundle, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -151,6 +151,24 @@ export const api = {
     request<TaskBundle>(`/api/tasks/${projectId}/transitions/${transitionId}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
+    }),
+  audioModels: () => request<AudioModelStatus>("/api/audio/models"),
+  patchTranscript: (runId: string, segmentId: string, text: string) =>
+    request<Bundle>(`/api/runs/${runId}/transcript/${segmentId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ text }),
+    }),
+  patchAlignment: (runId: string, alignmentId: string, classification: string, explanation: string) =>
+    request<Bundle>(`/api/runs/${runId}/alignments/${alignmentId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ classification, explanation }),
+    }),
+  visualOnlyRun: (runId: string) =>
+    request<{ id: string; name: string; status: string }>(`/api/runs/${runId}/visual-only`, { method: "POST", body: "{}" }),
+  audioComparison: (runId: string, visualRunId: string, assistedRunId: string) =>
+    request<Record<string, unknown>>(`/api/runs/${runId}/audio-comparison`, {
+      method: "POST",
+      body: JSON.stringify({ visual_run_id: visualRunId, assisted_run_id: assistedRunId }),
     }),
 };
 

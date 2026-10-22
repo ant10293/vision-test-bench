@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import __version__
+from app.audio.engine import WHISPER_MODELS
 from app.config import REPO_ROOT
 from app.models.media import VideoAsset
 from app.models.runs import AnalysisRun, Job, PipelineStageRun, PromptVersion
@@ -52,6 +53,13 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
             f"Reasoning effort '{reasoning}' is not available on {model_id}. "
             f"Supported: {', '.join(caps.reasoning_efforts) or 'none'}."
         )
+    transcribe = bool(payload.get("transcribe"))
+    use_transcript = bool(payload.get("use_transcript"))
+    if use_transcript and not transcribe:
+        raise ValueError("Transcript-assisted analysis requires local transcription.")
+    whisper_model = payload.get("whisper_model") or "base"
+    if whisper_model not in WHISPER_MODELS:
+        raise ValueError(f"Unknown Whisper model {whisper_model}.")
     prompt = _latest_prompt(session, payload.get("prompt_key") or "scene")
     viewpoint, constraint = MODE_AXES[mode]
     config = {
@@ -77,6 +85,14 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "prompt_key": prompt.key if prompt else "scene",
         "prompt_version": prompt.version if prompt else 1,
         "prompt_snapshot": compose(prompt.key if prompt else "scene", mode),
+        "transcribe": transcribe,
+        "use_transcript": use_transcript,
+        "whisper_model": whisper_model,
+        "whisper_language": (payload.get("whisper_language") or "").strip(),
+        "whisper_vad": payload.get("whisper_vad", True) is not False,
+        "word_timestamps": bool(payload.get("word_timestamps")),
+        "align_window_sec": float(payload.get("align_window_sec") or 4),
+        "transcript_text_may_be_sent": use_transcript and provider_id not in {"fixture", "deterministic", "manual_json"},
         "capabilities": caps.as_dict(),
         "app_version": __version__,
         "git_revision": _git(),
@@ -127,6 +143,25 @@ def duplicate_run(session: Session, run: AnalysisRun, name: str | None = None) -
             "modality": run.modality,
             "research_mode": run.research_mode,
             "sampling_preset": run.sampling_preset,
+        }
+    )
+    return create_run(session, payload)
+
+
+def duplicate_visual_only(session: Session, run: AnalysisRun) -> AnalysisRun:
+    payload = dict(run.config_json or {})
+    payload.update(
+        {
+            "name": f"{run.name} · visual only",
+            "video_id": run.video_id,
+            "parent_run_id": run.id,
+            "provider_id": run.provider_id,
+            "model_id": run.model_id,
+            "modality": run.modality,
+            "research_mode": run.research_mode,
+            "sampling_preset": run.sampling_preset,
+            "transcribe": False,
+            "use_transcript": False,
         }
     )
     return create_run(session, payload)

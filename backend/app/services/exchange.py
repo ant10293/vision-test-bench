@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import SCHEMA_VERSION, __version__
+from app.models.audio import AudioAlignment, TranscriptSegment
 from app.models.domain import ObjectImage
 from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRevision, AnalysisRun, ModelRequestRow, ModelResponseRow
@@ -49,6 +50,8 @@ def export_run(session: Session, run: AnalysisRun, dest: Path) -> Path:
         archive.writestr("manifest.json", json.dumps(manifest, indent=2))
         if revision:
             archive.writestr("analysis.json", json.dumps(revision.document_json, indent=2))
+        archive.writestr("transcripts.json", json.dumps(_transcript_export(session, run.id), indent=2))
+        archive.writestr("alignments.json", json.dumps(_alignment_export(session, run.id), indent=2))
         requests = session.scalars(select(ModelRequestRow).where(ModelRequestRow.run_id == run.id)).all()
         archive.writestr(
             "requests.json",
@@ -174,6 +177,54 @@ def import_run(session: Session, project_id: str, archive_path: Path) -> Analysi
 
 def select_stages(run_id: str):
     return select(PipelineStageRun).where(PipelineStageRun.run_id == run_id)
+
+
+def _transcript_export(session: Session, run_id: str) -> list[dict]:
+    rows = session.scalars(select(TranscriptSegment).where(TranscriptSegment.run_id == run_id)).all()
+    return [
+        {
+            "id": row.id,
+            "video_id": row.video_id,
+            "local_id": row.local_id,
+            "start": row.start,
+            "end": row.end,
+            "text": row.text,
+            "text_model": row.text_model,
+            "language": row.language,
+            "confidence": row.confidence,
+            "words": row.words_json or [],
+            "model_name": row.model_name,
+            "device": row.device,
+            "corrected": row.corrected,
+            "provenance": row.provenance,
+        }
+        for row in rows
+    ]
+
+
+def _alignment_export(session: Session, run_id: str) -> list[dict]:
+    rows = session.scalars(select(AudioAlignment).where(AudioAlignment.run_id == run_id)).all()
+    return [
+        {
+            "id": row.id,
+            "segment_id": row.segment_id,
+            "video_id": row.video_id,
+            "classification": row.classification,
+            "local_classification": row.local_classification,
+            "explanation": row.explanation,
+            "action_local_ids": row.action_local_ids or [],
+            "object_local_ids": row.object_local_ids or [],
+            "step_local_ids": row.step_local_ids or [],
+            "frame_timestamps": row.frame_timestamps or [],
+            "time_offset_sec": row.time_offset_sec,
+            "confidence": row.confidence,
+            "evidence_class": row.evidence_class,
+            "provenance": row.provenance,
+            "corrected": row.corrected,
+            "speech_is_not_completion": row.speech_is_not_completion,
+        }
+        for row in rows
+    ]
 
 
 from app.models.runs import PipelineStageRun  # noqa: E402

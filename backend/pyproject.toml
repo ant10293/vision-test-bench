@@ -30,6 +30,9 @@ dev = [
 sam = [
   "meta-sam-parser>=0.0.6",
 ]
+audio = [
+  "faster-whisper>=1.1",
+]
 
 [build-system]
 requires = ["setuptools>=68"]

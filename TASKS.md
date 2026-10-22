@@ -12,3 +12,4 @@
 - [x] Phase 10 — comparison, ground truth, metrics, export
 - [x] Phase 11 — browser verification of the seeded laboratory. Playwright spec is written and not yet executed here.
 - [x] Phase 12 — multi-session tasks: capture-time order, manual order, cross-clip identity, inter-session transitions, versioned reconciliation, timeline and gallery, project metrics, task export.
+- [x] Phase 13 — optional local transcription and audio-visual context. Whisper is local and off by default. Speech does not complete a step. Live weights and live paid comparison are unverified. See `AUDIO.md`.

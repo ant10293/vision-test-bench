@@ -18,6 +18,7 @@ import {
   WorkflowPage,
 } from "./pages/RunPages";
 import { VideoDetailPage, VideosPage } from "./pages/Videos";
+import { AudioPage } from "./pages/Audio";
 import { TaskDetailPage, TasksPage } from "./pages/Tasks";
 
 const client = new QueryClient({
@@ -48,6 +49,7 @@ export function App() {
               <Route path="workflow" element={<WorkflowPage />} />
               <Route path="steps" element={<StepsPage />} />
               <Route path="pipeline" element={<PipelinePage />} />
+              <Route path="audio" element={<AudioPage />} />
               <Route path="evaluate" element={<EvaluatePage />} />
               <Route path="logs" element={<LogsPage />} />
             </Route>

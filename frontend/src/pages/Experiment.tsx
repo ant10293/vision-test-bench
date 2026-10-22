@@ -27,7 +27,15 @@ export function ExperimentPage() {
   const [segmentation, setSegmentation] = useState("boxes_only");
   const [temperature, setTemperature] = useState("");
   const [reasoning, setReasoning] = useState("");
+  const [transcribe, setTranscribe] = useState(false);
+  const [useTranscript, setUseTranscript] = useState(false);
+  const [whisperModel, setWhisperModel] = useState("base");
+  const [language, setLanguage] = useState("");
+  const [vad, setVad] = useState(true);
+  const [words, setWords] = useState(false);
+  const [windowSec, setWindowSec] = useState("4");
   const [error, setError] = useState("");
+  const whisper = useQuery({ queryKey: ["audio-models"], queryFn: api.audioModels });
   const models = useMemo(() => {
     const provider = providers.data?.find((item) => item.id === providerId);
     return provider?.models ?? [];
@@ -50,6 +58,13 @@ export function ExperimentPage() {
         reasoning_effort: reasoning || null,
         prompt_key: "scene",
         max_frames: 48,
+        transcribe,
+        use_transcript: transcribe && useTranscript,
+        whisper_model: whisperModel,
+        whisper_language: language,
+        whisper_vad: vad,
+        word_timestamps: words,
+        align_window_sec: Number(windowSec) || 4,
       }),
     onSuccess: (run) => navigate(`/runs/${run.id}/pipeline`),
     onError: (err: Error) => setError(err.message),
@@ -142,6 +157,61 @@ export function ExperimentPage() {
           ))}
         </select>
       </Field>
+      <section className="space-y-3 rounded-md border border-[var(--line)] p-3">
+        <h2 className="text-sm font-medium">Audio analysis</h2>
+        <p className="text-xs text-[var(--muted)]">
+          Off by default. Visual analysis does not wait on speech, and a recording without an audio track still runs.
+        </p>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={transcribe} onChange={(event) => {
+            setTranscribe(event.target.checked);
+            if (!event.target.checked) setUseTranscript(false);
+          }} />
+          Enable local transcription
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={useTranscript} disabled={!transcribe} onChange={(event) => setUseTranscript(event.target.checked)} />
+          Use transcript for workflow analysis
+        </label>
+        {transcribe && (
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Whisper model">
+              <select className="field" value={whisperModel} onChange={(event) => setWhisperModel(event.target.value)}>
+                {(whisper.data?.models ?? [{ model: "base", downloaded: false }]).map((item) => (
+                  <option key={item.model} value={item.model}>
+                    {item.model}{item.downloaded ? "" : " (not downloaded)"}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Language">
+              <input className="field" value={language} placeholder="auto" onChange={(event) => setLanguage(event.target.value)} />
+            </Field>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={vad} onChange={(event) => setVad(event.target.checked)} />
+              Skip silence
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={words} onChange={(event) => setWords(event.target.checked)} />
+              Word timestamps
+            </label>
+            <Field label="Alignment window (seconds)">
+              <input className="field" value={windowSec} onChange={(event) => setWindowSec(event.target.value)} />
+            </Field>
+          </div>
+        )}
+        {whisper.data && !whisper.data.installed && (
+          <p className="text-xs text-[var(--amber)]">{whisper.data.detail}</p>
+        )}
+        {whisper.data?.acceleration?.note && transcribe && (
+          <p className="text-xs text-[var(--muted)]">{whisper.data.acceleration.note}</p>
+        )}
+        {useTranscript && !["fixture", "deterministic", "manual_json"].includes(providerId) && (
+          <p className="text-xs text-[var(--amber)]">
+            Transcript text, not the audio track, will be sent to {providerId} for comparison with the visual record.
+          </p>
+        )}
+      </section>
       {error && <p className="text-sm text-[var(--rose)]">{error}</p>}
       <button className="btn primary" disabled={!videoId || create.isPending} onClick={() => create.mutate()}>
         {create.isPending ? "Starting…" : "Start analysis"}

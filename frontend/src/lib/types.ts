@@ -53,6 +53,9 @@ export interface VideoInfo {
   timestamp_source?: string;
   file_mtime?: string;
   timestamp_note?: string;
+  has_audio?: boolean;
+  audio_probed?: boolean;
+  audio_codec?: string;
 }
 
 export interface FrameInfo {
@@ -243,6 +246,55 @@ export interface Bundle {
     compensation_model?: string;
     notes?: string;
   } | null;
+  transcripts: TranscriptSegment[];
+  alignments: AudioAlignment[];
+}
+
+export interface TranscriptSegment {
+  id: string;
+  video_id: string;
+  local_id: string;
+  start: number;
+  end: number;
+  text: string;
+  text_model: string;
+  language: string;
+  language_probability: number | null;
+  confidence: number | null;
+  words: { start: number; end: number; word: string; probability?: number }[];
+  model_name: string;
+  device: string;
+  corrected: boolean;
+  provenance: string;
+}
+
+export interface AudioAlignment {
+  id: string;
+  video_id: string;
+  segment_id: string;
+  classification: string;
+  local_classification: string;
+  explanation: string;
+  action_local_ids: string[];
+  object_local_ids: string[];
+  step_local_ids: string[];
+  frame_timestamps: number[];
+  time_offset_sec: number | null;
+  confidence: number | null;
+  evidence_class: string;
+  provenance: string;
+  corrected: boolean;
+  speech_is_not_completion: boolean;
+}
+
+export interface AudioModelStatus {
+  installed: boolean;
+  detail: string;
+  models: { model: string; downloaded: boolean; repo: string; default: boolean }[];
+  acceleration: { device: string; compute_type: string; backend: string; note?: string };
+  supported_models: string[];
+  default_model: string;
+  audio_bytes_leave_machine: boolean;
 }
 
 export interface ProviderInfo {

@@ -94,7 +94,7 @@ async def execute_job(session: Session, job: Job) -> None:
                 stage.status = "failed"
                 stage.error = str(exc)[:2000]
                 stage.finished_at = utcnow()
-                if name in {"segmentation", "reinspection"}:
+                if name in {"segmentation", "reinspection", "transcription", "audio_context"}:
                     session.commit()
                     continue
                 raise
@@ -199,11 +199,113 @@ async def _dispatch(session, run: AnalysisRun, video: VideoAsset, stage: Pipelin
     if name == "reinspection":
         await _reinspect(session, run, video, stage)
         return
+    if name == "transcription":
+        await _transcription(session, run, video, stage)
+        return
+    if name == "audio_context":
+        await _audio_context(session, run, video, stage)
+        return
     if name == "artifacts":
         _artifacts(session, run, stage)
         return
     stage.status = "skipped"
     stage.checkpoint_json = {"reason": "unknown stage"}
+
+
+async def _transcription(session, run, video, stage) -> None:
+    config = run.config_json or {}
+    if not config.get("transcribe"):
+        raise StageSkipped("Local transcription is off. Whisper was not loaded.")
+    from app.audio.service import transcribe_clip
+
+    source = data_path(*Path(video.stored_path).parts)
+
+    def stop() -> bool:
+        session.refresh(run)
+        return run.status == "canceled"
+
+    stage.progress_total = 3
+    stage.progress_current = 1
+    session.commit()
+    stage.checkpoint_json = transcribe_clip(session, run, video, source, stop)
+    stage.progress_current = 3
+
+
+async def _audio_context(session, run, video, stage) -> None:
+    config = run.config_json or {}
+    if not config.get("use_transcript"):
+        raise StageSkipped("Transcript text was not sent for workflow analysis.")
+    from app.audio.service import (
+        LOCAL_PROVIDERS,
+        align_clip,
+        apply_provider_classes,
+        context_request,
+        visual_events,
+    )
+    from app.models.audio import TranscriptSegment
+    from app.providers.registry import get_provider
+    from app.providers.types import FrameInput, GenerationRequest
+    from app.services.credentials import load_secret
+
+    result = align_clip(session, run, video)
+    if run.provider_id in LOCAL_PROVIDERS:
+        result["note"] = "The selected provider is local. Transcript text stayed on this machine."
+        stage.checkpoint_json = result
+        return
+    segments = list(session.scalars(select(TranscriptSegment).where(TranscriptSegment.run_id == run.id)))
+    if not segments:
+        result["note"] = "There was no speech to send."
+        stage.checkpoint_json = result
+        return
+    request_body = context_request(run, segments, visual_events(session, run, video.id))
+    secret, _source = load_secret(session, run.provider_id)
+    if not secret or request_body is None:
+        result["note"] = "No provider key is saved. Local classification was kept and the transcript was not sent."
+        stage.checkpoint_json = result
+        return
+    frames = session.scalars(
+        select(FrameAsset).where(FrameAsset.run_id == run.id).order_by(FrameAsset.timestamp)
+    ).all()[:4]
+    frame_inputs = [
+        FrameInput(timestamp=frame.timestamp, path=data_path(*Path(frame.path).parts))
+        for frame in frames
+        if data_path(*Path(frame.path).parts).exists()
+    ]
+    response = await get_provider(run.provider_id, session).generate(
+        secret,
+        GenerationRequest(
+            model_id=run.model_id,
+            system_prompt=request_body["system_prompt"],
+            user_prompt=request_body["user_prompt"],
+            frames=frame_inputs,
+            modality="sampled_frames",
+            temperature=config.get("temperature"),
+            timeout_s=float(config.get("timeout_s") or 180),
+            image_detail=config.get("image_detail") or "low",
+        ),
+    )
+    parsed = _json_object(response.text)
+    if parsed:
+        result["provider_updates"] = apply_provider_classes(session, run.id, parsed)
+    result["transcript_text_sent_to_provider"] = True
+    result["audio_bytes_sent"] = False
+    result["note"] = "Transcript text, not the audio track, was sent to the selected model."
+    run.cost_usd = (run.cost_usd or 0) + response.usage.cost_usd
+    run.input_tokens += response.usage.input_tokens
+    run.output_tokens += response.usage.output_tokens
+    stage.checkpoint_json = result
+
+
+def _json_object(text: str) -> dict:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+    try:
+        payload = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _sample(session, run, video, stage) -> None:

@@ -1,5 +1,6 @@
 """Import all models so metadata is complete."""
 
+from app.models.audio import AudioAlignment, TranscriptSegment
 from app.models.domain import (
     ActionRow,
     AmbiguityRow,
@@ -51,6 +52,7 @@ __all__ = [
     "AnalysisRun",
     "AnnotationRow",
     "Artifact",
+    "AudioAlignment",
     "CanonicalObject",
     "ComparisonRow",
     "DetectedObject",
@@ -80,6 +82,7 @@ __all__ = [
     "SceneChunk",
     "SegmentationMask",
     "SpatialTrackPoint",
+    "TranscriptSegment",
     "VideoAsset",
     "WorkflowDependencyRow",
     "WorkflowRow",

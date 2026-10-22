@@ -67,6 +67,10 @@ class VideoAsset(Base):
     order_locked: Mapped[bool] = mapped_column(Boolean, default=False)
     order_method: Mapped[str] = mapped_column(String(32), default="")
     order_ambiguous: Mapped[bool] = mapped_column(Boolean, default=False)
+    audio_probed: Mapped[bool] = mapped_column(Boolean, default=False)
+    has_audio: Mapped[bool] = mapped_column(Boolean, default=False)
+    audio_codec: Mapped[str] = mapped_column(String(80), default="")
+    audio_channels: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     project: Mapped[Project] = relationship(back_populates="videos")

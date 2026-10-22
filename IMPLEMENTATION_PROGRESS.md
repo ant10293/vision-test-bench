@@ -14,7 +14,8 @@ Active phase: multi-session tasks on the same canonical model. Live provider cal
 - Durable jobs, restart recovery, stage retry, cancel.
 - Inspector, object library, state explorer, workflow graph, step mode, pipeline monitor, prompts, providers, comparison, ground truth, evaluation, export and import.
 - Task projects: multiple clips and sessions, capture timestamps kept apart from file modification and upload time, partial metadata order, context hypotheses, manual lock, cross-clip identity with confirm/merge/split/reject, inter-session observed change separate from hypothesis, versioned reconciliation that does not rerun clip analyses, hierarchical timeline, object history, project metrics, and a task export.
-- Backend tests (23) and frontend unit tests. Ruff is clean on `app` and `tests`.
+- Backend tests (31) and frontend unit tests. Ruff is clean on `app` and `tests`.
+- Optional local transcription and audio-visual classification. Both switches default off. See `AUDIO.md`. The automated tests use a stand-in for Whisper. A live model download and a live paid comparison of transcript text were not run.
 - Browser pass on the seeded lab: dashboard counts, inspector with attempted versus completed actions, frame step, object crops from the footage, a human label revision, and an 8-node workflow graph. All three fixture modes completed with `world_coordinates_supported` false. The unconstrained fixture keeps a second red block as an uncertain identity.
 
 ## Pending
@@ -24,6 +25,7 @@ Active phase: multi-session tasks on the same canonical model. Live provider cal
 - Visual SLAM and calibrated world coordinates. The interfaces exist; the baseline does not pretend to have them.
 - A second annotator. The ground-truth table has an annotator field; agreement is not computed yet.
 - Playwright: the spec is in `frontend/e2e/lab.spec.ts`. It was not executed in this session because port 8000 was already serving the lab and Chromium was not installed.
+- Live faster-whisper transcription on a real recording, and a live provider call that compares transcript text with frames. The local classifier and the skip paths are tested.
 
 ## Known bugs
 

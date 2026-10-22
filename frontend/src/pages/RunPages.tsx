@@ -27,7 +27,7 @@ export function RunLayout() {
   if (query.isError) return <p className="text-[var(--rose)]">{(query.error as Error).message}</p>;
   if (!query.data) return <p className="text-[var(--muted)]">Loading analysis…</p>;
   const bundle = query.data;
-  const tabs = ["", "objects", "states", "workflow", "steps", "pipeline", "evaluate", "logs"];
+  const tabs = ["", "objects", "states", "workflow", "steps", "pipeline", "audio", "evaluate", "logs"];
   return (
     <div className="space-y-3">
       <header className="flex flex-wrap items-start justify-between gap-3">
