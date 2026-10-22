@@ -313,6 +313,14 @@ export function formatTime(seconds: number | null | undefined): string {
   return `${sign}${mins}:${rest.toFixed(2).padStart(5, "0")}`;
 }
 
+export function formatWhen(raw: string | null | undefined): string {
+  const value = raw ?? "";
+  const stamped = value && !/(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? `${value}Z` : value;
+  const date = new Date(stamped);
+  if (!value || Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 export function evidenceClass(value: string | undefined): string {
   if (value === "DIRECTLY_OBSERVED") return "observed";
   if (value === "INFERRED") return "inferred";

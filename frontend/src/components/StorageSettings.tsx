@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type VideoStorage } from "../lib/api";
+import { SettingsFieldset } from "./SettingsFieldset";
 
 export function StorageSettings() {
   const client = useQueryClient();
@@ -13,9 +14,7 @@ export function StorageSettings() {
   const pending = save.isPending || settings.isLoading;
 
   return (
-    <fieldset className="panel space-y-2 p-3" disabled={pending}>
-      <legend className="px-1 text-sm font-medium">Video storage</legend>
-      <p className="text-xs text-[var(--muted)]">Choose how a new video is added. This applies to the next file you add.</p>
+    <SettingsFieldset legend="Video storage" disabled={pending}>
       <label className="flex items-start gap-2 text-sm">
         <input
           type="radio"
@@ -43,7 +42,8 @@ export function StorageSettings() {
         </span>
       </label>
       {save.isError && <p className="text-sm text-[var(--rose)]">{(save.error as Error).message}</p>}
-    </fieldset>
+      <p className="text-xs text-[var(--muted)]">Choose how a new video is added. This applies to the next file you add.</p>
+    </SettingsFieldset>
   );
 }
 

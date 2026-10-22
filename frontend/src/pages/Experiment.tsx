@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { SettingsFieldset } from "../components/SettingsFieldset";
 import { api } from "../lib/api";
 import type { Capability } from "../lib/types";
 import { videoReady } from "../lib/uploadProgress";
@@ -158,11 +159,7 @@ export function ExperimentPage() {
           ))}
         </select>
       </Field>
-      <section className="space-y-3 rounded-md border border-[var(--line)] p-3">
-        <h2 className="text-sm font-medium">Audio analysis</h2>
-        <p className="text-xs text-[var(--muted)]">
-          Off by default. Visual analysis does not wait on speech, and a recording without an audio track still runs.
-        </p>
+      <SettingsFieldset legend="Audio analysis">
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={transcribe} onChange={(event) => {
             setTranscribe(event.target.checked);
@@ -212,7 +209,10 @@ export function ExperimentPage() {
             Transcript text, not the audio track, will be sent to {providerId} for comparison with the visual record.
           </p>
         )}
-      </section>
+        <p className="text-xs text-[var(--muted)]">
+          Off by default. Visual analysis does not wait on speech, and a recording without an audio track still runs.
+        </p>
+      </SettingsFieldset>
       {error && <p className="text-sm text-[var(--rose)]">{error}</p>}
       <button className="btn primary" disabled={!videoId || create.isPending} onClick={() => create.mutate()}>
         {create.isPending ? "Starting…" : "Start analysis"}

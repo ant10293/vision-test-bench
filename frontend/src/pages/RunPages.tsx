@@ -5,7 +5,7 @@ import { BeforeAfter } from "../components/BeforeAfter";
 import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
 import { WorkflowGraph } from "../components/WorkflowGraph";
-import { api, evidenceClass, formatTime } from "../lib/api";
+import { api, evidenceClass, formatTime, formatWhen } from "../lib/api";
 import { BundleContext, useBundle } from "../lib/bundleContext";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
@@ -436,8 +436,9 @@ export function EvaluatePage() {
     <div className="space-y-3">
       <p className="text-sm text-[var(--muted)]">Promote the current revision, then score another run against it. Matching uses interval overlap. Model confidence is not accuracy.</p>
       <button className="btn" onClick={async () => { await api.promoteTruth(bundle.run.id, `Reference ${bundle.run.name}`); await client.invalidateQueries({ queryKey: ["truth", bundle.run.id] }); }}>Save current revision as ground truth</button>
-      <label className="block text-sm">Action IoU threshold
-        <input className="field mt-1 max-w-xs" type="number" step={0.05} value={iou} onChange={(event) => setIou(Number(event.target.value))} />
+      <label className="flex w-fit items-center gap-4 text-sm">
+        <span className="whitespace-nowrap">Action IoU threshold</span>
+        <input className="field max-w-xs" type="number" step={0.05} value={iou} onChange={(event) => setIou(Number(event.target.value))} />
       </label>
       <ul className="space-y-2 text-sm">
         {truths.data?.map((item) => (
@@ -484,11 +485,17 @@ export function RunsPage() {
         {["pending", "running", "completed", "failed", "canceled"].map((item) => <option key={item}>{item}</option>)}
       </select>
       <div className="space-y-2">
-        {runs.data?.map((run) => (
-          <a key={run.id} href={`/runs/${run.id}`} className="panel block p-3 text-sm">
-            {run.name} · {run.status} · {run.provider_id}/{run.model_id} · {run.object_count} objects · {run.action_count} actions
-          </a>
-        ))}
+        {runs.data?.map((run) => {
+          const when = formatWhen(run.created_at);
+          return (
+            <a key={run.id} href={`/runs/${run.id}`} className="panel flex items-baseline justify-between gap-4 p-3 text-sm">
+              <span className="min-w-0">
+                {run.name} · {run.status} · {run.provider_id}/{run.model_id} · {run.object_count} objects · {run.action_count} actions
+              </span>
+              {when && <time className="mono shrink-0 text-xs text-[var(--muted)]" dateTime={run.created_at}>{when}</time>}
+            </a>
+          );
+        })}
       </div>
     </div>
   );

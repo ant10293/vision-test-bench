@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
 import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
-import { api, formatTime, type ProjectSummary } from "../lib/api";
+import { api, formatTime, formatWhen, type ProjectSummary } from "../lib/api";
 import type { VideoInfo } from "../lib/types";
 import { videoReady } from "../lib/uploadProgress";
 import { useUploads } from "../stores/uploads";
@@ -24,15 +24,23 @@ function inDisplayOrder(videos: VideoInfo[]): VideoInfo[] {
   return [...videos].sort(compareDisplayOrder);
 }
 
+/** Columns for the project mosaic. One row for 1–3 thumbnails; two rows after that, so four are 2×2. */
+function mosaicColumns(count: number): number {
+  if (count <= 3) return Math.max(1, count);
+  return Math.min(4, Math.ceil(count / 2));
+}
+
 function ProjectCard({ project, videos, onOpen }: { project: ProjectSummary; videos: VideoInfo[]; onOpen: () => void }) {
   const listed = videos.filter((video) => video.ingest_status !== "failed");
   const frames = listed.filter((video) => video.thumbnail_url && videoReady(video));
+  const columns = mosaicColumns(frames.length);
+  const preview = frames.slice(0, columns * 2);
   const processing = listed.some((video) => video.ingest_status === "processing");
   return (
     <button type="button" className="panel overflow-hidden text-left" onClick={onOpen}>
-      {frames.length ? (
-        <div className="thumb-grid">
-          {frames.map((video) => (
+      {preview.length ? (
+        <div className="thumb-grid" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+          {preview.map((video) => (
             <img key={video.id} src={video.thumbnail_url} alt="" />
           ))}
         </div>
@@ -45,7 +53,7 @@ function ProjectCard({ project, videos, onOpen }: { project: ProjectSummary; vid
         <div className="truncate">{project.name}</div>
         <div className="mono text-xs text-[var(--muted)]">
           {listed.length} {listed.length === 1 ? "video" : "videos"}
-          {projectWhen(project) ? ` · ${projectWhen(project)}` : ""}
+          {formatWhen(project.created_at) ? ` · ${formatWhen(project.created_at)}` : ""}
         </div>
       </div>
     </button>
@@ -159,14 +167,6 @@ type DragState = {
   height: number;
   active: boolean;
 };
-
-function projectWhen(project: ProjectSummary): string {
-  const raw = project.created_at ?? "";
-  const stamped = raw && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? `${raw}Z` : raw;
-  const date = new Date(stamped);
-  if (!raw || Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
 
 export function VideosPage() {
   const client = useQueryClient();
