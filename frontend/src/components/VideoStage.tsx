@@ -131,9 +131,9 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
         <button className="btn" onClick={() => setPlaying(!playing)}>{playing ? "Pause" : "Play"}</button>
         <button className="btn" onClick={() => step(-1)}>Prev frame</button>
         <button className="btn" onClick={() => step(1)}>Next frame</button>
-        <label className="field-label">
+        <label className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
           <span>Speed</span>
-          <select className="field w-auto" value={speed} onChange={(event) => useInspector.getState().setSpeed(Number(event.target.value))}>
+          <select className="field w-auto text-[var(--text)]" value={speed} onChange={(event) => useInspector.getState().setSpeed(Number(event.target.value))}>
             {[0.25, 0.5, 1, 1.5, 2].map((value) => <option key={value} value={value}>{value}×</option>)}
           </select>
         </label>

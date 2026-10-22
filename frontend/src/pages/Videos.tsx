@@ -139,13 +139,15 @@ export function VideosPage() {
 
   return (
     <div className="space-y-4">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-medium">Video library</h1>
-          <p className="text-sm text-[var(--muted)]">Originals are stored unchanged. Playback uses a proxy only when the browser cannot decode the file.</p>
-        </div>
-        {mode === "library" && <button className="btn primary" onClick={openCreate}>New project</button>}
-      </header>
+      {mode !== "edit" && (
+        <header className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-medium">Video library</h1>
+            <p className="text-sm text-[var(--muted)]">Originals are stored unchanged. Playback uses a proxy only when the browser cannot decode the file.</p>
+          </div>
+          {mode === "library" && <button className="btn primary" onClick={openCreate}>New project</button>}
+        </header>
+      )}
 
       {mode === "library" && (
         studies.length ? (

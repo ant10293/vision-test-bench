@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { NavLink, Outlet, useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { BeforeAfter } from "../components/BeforeAfter";
 import { Timeline } from "../components/Timeline";
@@ -30,24 +30,27 @@ export function RunLayout() {
   const tabs = ["", "objects", "states", "workflow", "steps", "pipeline", "audio", "evaluate", "logs"];
   return (
     <div className="space-y-3">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-medium">{bundle.run.name}</h1>
-            <span className="tag">{bundle.run.status}</span>
-            {bundle.run.fixture && <span className="tag fixture">Fixture — authored, not model output</span>}
-            <span className="tag">{bundle.run.research_mode.replaceAll("_", " ")}</span>
+      <div>
+        <Link className="text-sm text-[var(--muted)]" to="/runs">← Back to runs</Link>
+        <header className="mt-2 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-medium">{bundle.run.name}</h1>
+              <span className="tag">{bundle.run.status}</span>
+              {bundle.run.fixture && <span className="tag fixture">Fixture — authored, not model output</span>}
+              <span className="tag">{bundle.run.research_mode.replaceAll("_", " ")}</span>
+            </div>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              {bundle.run.provider_id} / {bundle.run.model_id} · {bundle.run.modality} · {bundle.run.sampling_preset}
+              {bundle.revision ? ` · ${bundle.revision.layer} v${bundle.revision.version}` : ""}
+            </p>
+            {bundle.coverage?.temporal_coverage_note && (
+              <p className="mt-1 max-w-3xl text-xs text-[var(--amber)]">{bundle.coverage.temporal_coverage_note}</p>
+            )}
           </div>
-          <p className="mt-1 text-xs text-[var(--muted)]">
-            {bundle.run.provider_id} / {bundle.run.model_id} · {bundle.run.modality} · {bundle.run.sampling_preset}
-            {bundle.revision ? ` · ${bundle.revision.layer} v${bundle.revision.version}` : ""}
-          </p>
-          {bundle.coverage?.temporal_coverage_note && (
-            <p className="mt-1 max-w-3xl text-xs text-[var(--amber)]">{bundle.coverage.temporal_coverage_note}</p>
-          )}
-        </div>
-        <RunActions bundle={bundle} />
-      </header>
+          <RunActions bundle={bundle} />
+        </header>
+      </div>
       <nav className="flex gap-2 overflow-auto text-sm">
         {tabs.map((tab) => (
           <NavLink
