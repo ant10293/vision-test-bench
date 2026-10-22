@@ -1,0 +1,103 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import { api, formatTime } from "../lib/api";
+
+export function VideosPage() {
+  const client = useQueryClient();
+  const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
+  const videos = useQuery({ queryKey: ["videos"], queryFn: () => api.videos() });
+  const [projectId, setProjectId] = useState("");
+  const [error, setError] = useState("");
+  const create = useMutation({
+    mutationFn: () => api.createProject("Study", "Local research project"),
+    onSuccess: async (project) => {
+      setProjectId(project.id);
+      await client.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+  const upload = useMutation({
+    mutationFn: (file: File) => api.upload(projectId || projects.data?.[0]?.id || "", file),
+    onSuccess: async () => {
+      setError("");
+      await client.invalidateQueries({ queryKey: ["videos"] });
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  return (
+    <div className="space-y-4">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-medium">Video library</h1>
+          <p className="text-sm text-[var(--muted)]">Originals are stored unchanged. Playback uses a proxy only when the browser cannot decode the file.</p>
+        </div>
+        <button className="btn" onClick={() => create.mutate()}>New project</button>
+      </header>
+      <label
+        className="panel block border-dashed p-8 text-center text-sm text-[var(--muted)]"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault();
+          const file = event.dataTransfer.files[0];
+          if (file) upload.mutate(file);
+        }}
+      >
+        Drop an MP4, MOV, or WebM file, or
+        <input
+          className="ml-2"
+          type="file"
+          accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) upload.mutate(file);
+          }}
+        />
+        {upload.isPending && <div className="mt-2">Reading and probing…</div>}
+        {error && <div className="mt-2 text-[var(--rose)]">{error}</div>}
+      </label>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {videos.data?.map((video) => (
+          <Link key={video.id} to={`/videos/${video.id}`} className="panel overflow-hidden">
+            {video.thumbnail_url && <img src={video.thumbnail_url} alt="" className="h-36 w-full object-cover" />}
+            <div className="space-y-1 p-3 text-sm">
+              <div className="truncate">{video.filename}</div>
+              <div className="mono text-xs text-[var(--muted)]">
+                {formatTime(video.duration_sec)} · {video.width}×{video.height} · {video.fps.toFixed(2)} fps
+                {video.variable_frame_rate ? " · VFR" : " · CFR"} · {video.codec}
+              </div>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function VideoDetailPage() {
+  const { videoId = "" } = useParams();
+  const video = useQuery({ queryKey: ["video", videoId], queryFn: () => api.video(videoId), enabled: Boolean(videoId) });
+  if (!video.data) return <p className="text-[var(--muted)]">Loading video…</p>;
+  const item = video.data;
+  return (
+    <div className="space-y-4">
+      <h1 className="text-2xl font-medium">{item.filename}</h1>
+      <video src={item.playback_url} controls className="max-h-[480px] w-full rounded-lg bg-black" />
+      <div className="panel grid gap-2 p-3 text-sm md:grid-cols-3">
+        <div>Checksum <span className="mono text-xs">{item.checksum}</span></div>
+        <div>Duration {formatTime(item.duration_sec)}</div>
+        <div>{item.width}×{item.height} · {item.codec} · {item.container}</div>
+      </div>
+      {item.contact_sheet_url && <img src={item.contact_sheet_url} alt="Contact sheet" className="panel w-full" />}
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        {item.frames?.map((frame) => (
+          <figure key={frame.id} className="panel overflow-hidden">
+            <img src={frame.url} alt="" className="h-28 w-full object-cover" />
+            <figcaption className="mono px-2 py-1 text-xs text-[var(--muted)]">{frame.timestamp.toFixed(2)}s · {frame.reason}</figcaption>
+          </figure>
+        ))}
+      </div>
+      <Link className="btn primary inline-block" to={`/experiments/new?video=${item.id}`}>Analyze this video</Link>
+    </div>
+  );
+}
