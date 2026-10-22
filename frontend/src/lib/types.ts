@@ -47,6 +47,12 @@ export interface VideoInfo {
   playback_url: string;
   contact_sheet_url: string;
   frames?: FrameInfo[];
+  capture_time_raw?: string;
+  capture_time_utc?: string;
+  timestamp_reliability?: string;
+  timestamp_source?: string;
+  file_mtime?: string;
+  timestamp_note?: string;
 }
 
 export interface FrameInfo {

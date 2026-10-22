@@ -43,6 +43,19 @@ def video_dict(video: VideoAsset, frame_count: int | None = None) -> dict:
         "contact_sheet_url": f"/api/media/videos/{video.id}/contact-sheet" if video.contact_sheet_path else "",
         "playback_url": f"/api/media/videos/{video.id}/playback",
         "created_at": video.created_at.isoformat(),
+        "session_id": video.session_id,
+        "research_mode": video.research_mode,
+        "capture_time_raw": video.capture_time_raw,
+        "capture_time_utc": video.capture_time_utc,
+        "capture_timezone": video.capture_timezone,
+        "timestamp_source": video.timestamp_source,
+        "timestamp_reliability": video.timestamp_reliability,
+        "timestamp_note": video.timestamp_note,
+        "file_mtime": video.file_mtime,
+        "order_index": video.order_index,
+        "order_locked": video.order_locked,
+        "order_method": video.order_method,
+        "order_ambiguous": video.order_ambiguous,
     }
 
 

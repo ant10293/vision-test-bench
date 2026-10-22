@@ -25,3 +25,9 @@ It shows the ceiling of "something moved" without a semantic claim. Use it to se
 ## Limits of the current geometry
 
 Camera compensation is a partial affine estimated between samples. It is not visual SLAM and it does not produce a stable world frame. Object permanence across a scene cut is withheld unless the appearance check passes, and even then the unobserved interval stays explicit.
+
+## Several recordings of one task
+
+A task may span days and may mix camera modes. Ordering from container timestamps is partial when a clip has no reliable time, a tie, or conflicting tags. Visual context can suggest a relative order and must be labeled as a hypothesis. Similar appearance is not instance identity, including after a large change in surface or form. A process that happens between recordings (drying, curing, cooling, fermentation, or anything else the endpoint text mentions) is a hypothesis beside the observed change, not an event the footage showed.
+
+Project scores against a human ground truth cover pairwise clip order, session overlap, identity links, reidentification where the endpoint states differ, transition evidence class, unresolved-interval count, and procedural-dependency precision and recall. Matcher scores are returned in a block marked `is_accuracy: false`. Adding a clip creates a new project revision and reports what changed. The previous revision and the cached clip runs stay.

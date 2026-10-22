@@ -1,6 +1,6 @@
 # Implementation progress
 
-Active phase: usable local laboratory. Live provider calls remain unverified.
+Active phase: multi-session tasks on the same canonical model. Live provider calls remain unverified.
 
 ## Completed
 
@@ -13,7 +13,8 @@ Active phase: usable local laboratory. Live provider calls remain unverified.
 - Provider adapters for OpenAI, Anthropic, Gemini, Meta Muse, SAM 3.1 parsing, and an OpenAI-compatible endpoint. Unsupported modalities fail closed.
 - Durable jobs, restart recovery, stage retry, cancel.
 - Inspector, object library, state explorer, workflow graph, step mode, pipeline monitor, prompts, providers, comparison, ground truth, evaluation, export and import.
-- Backend tests (17) and frontend unit tests. Ruff is clean on `app` and `tests`.
+- Task projects: multiple clips and sessions, capture timestamps kept apart from file modification and upload time, partial metadata order, context hypotheses, manual lock, cross-clip identity with confirm/merge/split/reject, inter-session observed change separate from hypothesis, versioned reconciliation that does not rerun clip analyses, hierarchical timeline, object history, project metrics, and a task export.
+- Backend tests (23) and frontend unit tests. Ruff is clean on `app` and `tests`.
 - Browser pass on the seeded lab: dashboard counts, inspector with attempted versus completed actions, frame step, object crops from the footage, a human label revision, and an 8-node workflow graph. All three fixture modes completed with `world_coordinates_supported` false. The unconstrained fixture keeps a second red block as an uncertain identity.
 
 ## Pending

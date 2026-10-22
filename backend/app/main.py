@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.routes import router
+from app.api.tasks import router as task_router
 from app.config import settings
 from app.demo.seed import seed_if_empty
 from app.jobs.worker import worker_loop
@@ -27,6 +28,9 @@ def init_database() -> None:
     import app.models  # noqa: F401
 
     db.Base.metadata.create_all(db.engine)
+    from app.services.schema_upgrade import ensure_task_columns
+
+    ensure_task_columns(db.engine)
     session = db.SessionLocal()
     try:
         seed_prompts(session)
@@ -59,6 +63,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(router)
+    app.include_router(task_router)
     return app
 
 

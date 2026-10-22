@@ -11,7 +11,7 @@ from app.demo.scenarios import FPS, HEIGHT, WIDTH
 from app.video.probe import VideoError
 
 
-def write_clip(frames: list[np.ndarray], dest: Path, fps: int = FPS) -> None:
+def write_clip(frames: list[np.ndarray], dest: Path, fps: int = FPS, creation_time: str | None = None) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg",
@@ -33,8 +33,10 @@ def write_clip(frames: list[np.ndarray], dest: Path, fps: int = FPS) -> None:
         "yuv420p",
         "-movflags",
         "+faststart",
-        str(dest),
     ]
+    if creation_time:
+        cmd.extend(["-metadata", f"creation_time={creation_time}"])
+    cmd.append(str(dest))
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     assert proc.stdin is not None
     for frame in frames:

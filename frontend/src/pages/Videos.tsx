@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, formatTime } from "../lib/api";
 
 export function VideosPage() {
@@ -76,17 +76,34 @@ export function VideosPage() {
 
 export function VideoDetailPage() {
   const { videoId = "" } = useParams();
+  const [params] = useSearchParams();
+  const player = useRef<HTMLVideoElement>(null);
   const video = useQuery({ queryKey: ["video", videoId], queryFn: () => api.video(videoId), enabled: Boolean(videoId) });
+  useEffect(() => {
+    const node = player.current;
+    const time = Number(params.get("t"));
+    if (!node || !Number.isFinite(time)) return;
+    const seek = () => {
+      node.currentTime = time;
+    };
+    node.addEventListener("loadedmetadata", seek);
+    if (node.readyState >= 1) seek();
+    return () => node.removeEventListener("loadedmetadata", seek);
+  }, [params, video.data?.id]);
   if (!video.data) return <p className="text-[var(--muted)]">Loading video…</p>;
   const item = video.data;
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-medium">{item.filename}</h1>
-      <video src={item.playback_url} controls className="max-h-[480px] w-full rounded-lg bg-black" />
+      <p className="text-xs text-[var(--amber)]">Clip time starts at the beginning of this file. It is not the project capture clock.</p>
+      <video ref={player} src={item.playback_url} controls className="max-h-[480px] w-full rounded-lg bg-black" />
       <div className="panel grid gap-2 p-3 text-sm md:grid-cols-3">
         <div>Checksum <span className="mono text-xs">{item.checksum}</span></div>
         <div>Duration {formatTime(item.duration_sec)}</div>
         <div>{item.width}×{item.height} · {item.codec} · {item.container}</div>
+        <div>Capture {item.capture_time_utc || item.capture_time_raw || "not in the file"} ({item.timestamp_reliability || "absent"})</div>
+        <div>File modified {item.file_mtime || "unknown"}</div>
+        <div>Source {item.timestamp_source || "absent"}</div>
       </div>
       {item.contact_sheet_url && <img src={item.contact_sheet_url} alt="Contact sheet" className="panel w-full" />}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">

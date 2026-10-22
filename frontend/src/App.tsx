@@ -18,6 +18,7 @@ import {
   WorkflowPage,
 } from "./pages/RunPages";
 import { VideoDetailPage, VideosPage } from "./pages/Videos";
+import { TaskDetailPage, TasksPage } from "./pages/Tasks";
 
 const client = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -32,6 +33,8 @@ export function App() {
             <Route index element={<DashboardPage />} />
             <Route path="videos" element={<VideosPage />} />
             <Route path="videos/:videoId" element={<VideoDetailPage />} />
+            <Route path="tasks" element={<TasksPage />} />
+            <Route path="tasks/:projectId" element={<TaskDetailPage />} />
             <Route path="experiments/new" element={<ExperimentPage />} />
             <Route path="runs" element={<RunsPage />} />
             <Route path="library" element={<LibraryRedirect />} />

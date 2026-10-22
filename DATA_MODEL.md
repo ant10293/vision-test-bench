@@ -1,10 +1,10 @@
 # Data model
 
-Schema version `1.0.0`. The Pydantic document in `backend/app/schemas/analysis.py` is the contract. Tables materialize the active revision for querying.
+Schema version `1.0.0` for a single-clip analysis document. A task project is the same `Project` with `is_task` set, plus recording sessions and a versioned project reading. Clip analyses stay on `AnalysisRun`.
 
 ## Entities
 
-Project, VideoAsset, FrameAsset, AnalysisRun, AnalysisRevision, PipelineStageRun, Job, PromptVersion, ProviderSecret, ProviderStatus, ManualModel, ModelRequest, ModelResponse, DetectedObject, ObjectObservation, ObjectState, ObjectStateTransition, ObjectRelationship, ObjectImage, SegmentationMask, Action, Workflow, WorkflowStep, WorkflowDependency, Ambiguity, Annotation, GroundTruthDataset, EvaluationResult, Comparison, Artifact, SpatialTrackPoint, SceneChunk.
+Project, RecordingSession, VideoAsset, FrameAsset, AnalysisRun, AnalysisRevision, PipelineStageRun, Job, PromptVersion, ProviderSecret, ProviderStatus, ManualModel, ModelRequest, ModelResponse, DetectedObject, ObjectObservation, ObjectState, ObjectStateTransition, ObjectRelationship, ObjectImage, SegmentationMask, Action, Workflow, WorkflowStep, WorkflowDependency, Ambiguity, Annotation, GroundTruthDataset, EvaluationResult, Comparison, Artifact, SpatialTrackPoint, SceneChunk, CanonicalObject, IdentityLink, InterSessionTransition, ProjectRevision, OrderHypothesis, ProjectGroundTruth.
 
 A video is stored once. Many runs point at it. Frames may belong to the upload preview (`run_id` null) or to a run's sampling plan.
 
@@ -33,3 +33,11 @@ Boxes are normalized to the display frame after ffmpeg autorotation. `coordinate
 ## Ground truth
 
 Promoting a revision copies that document into `GroundTruthDataset`. Evaluation stores true positives, false positives, and false negatives for actions matched one-to-one by interval overlap, plus object matches labeled `assisted_label` unless the researcher set them. Errors point at timestamps.
+
+## Task projects
+
+A task is a project that holds many clips. Each clip keeps its own file, capture timestamp, file-modification time, and upload time. Capture time comes from QuickTime or container tags when those tags include a timezone. A naive or conflicting tag is stored and is not turned into a UTC order. Clips without a reliable time stay unordered.
+
+`CanonicalObject` and `IdentityLink` propose cross-clip identity. A proposal stays uncertain until a person confirms, merges, splits, or rejects it. Two similar objects in one clip are not given one identity. `InterSessionTransition` stores the observed before/after text apart from any hypothesis about the unfilmed interval. An unfilmed interval is `INFERRED` or `UNKNOWN`, not `DIRECTLY_OBSERVED`.
+
+`ProjectRevision` versions the project reading. Adding a clip writes a new revision and leaves earlier clip runs in place. `GET /api/tasks/{id}/export` writes `manifest.json` (`schema_version` 1.0.0, `task_extension` 1.1.0) and `task.json`. Secrets are not included. Project metrics compare that reading with human ground truth and report matcher confidence in a separate block that is not accuracy.

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { NavLink, Outlet, useNavigate, useOutletContext, useParams } from "react-router-dom";
-import { useState } from "react";
+import { NavLink, Outlet, useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { BeforeAfter } from "../components/BeforeAfter";
 import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
@@ -11,6 +11,7 @@ import { useInspector } from "../stores/ui";
 
 export function RunLayout() {
   const { runId = "" } = useParams();
+  const [params] = useSearchParams();
   const query = useQuery({
     queryKey: ["run", runId],
     queryFn: () => api.run(runId),
@@ -19,6 +20,10 @@ export function RunLayout() {
       return status === "pending" || status === "running" ? 1200 : false;
     },
   });
+  useEffect(() => {
+    const time = Number(params.get("t"));
+    if (Number.isFinite(time) && params.get("t")) useInspector.getState().setTime(time);
+  }, [params, runId]);
   if (query.isError) return <p className="text-[var(--rose)]">{(query.error as Error).message}</p>;
   if (!query.data) return <p className="text-[var(--muted)]">Loading analysis…</p>;
   const bundle = query.data;

@@ -1,9 +1,10 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, Clapperboard, FlaskConical, GitCompare, Library, ScrollText, Settings2, Waypoints } from "lucide-react";
+import { Clapperboard, FlaskConical, GitCompare, Layers, Library, ScrollText, Settings2, Waypoints, Activity } from "lucide-react";
 
 const LINKS = [
   ["/", "Dashboard", Activity],
   ["/videos", "Video library", Clapperboard],
+  ["/tasks", "Tasks", Layers],
   ["/experiments/new", "New experiment", FlaskConical],
   ["/compare", "Comparison lab", GitCompare],
   ["/providers", "Providers", Settings2],

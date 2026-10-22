@@ -112,7 +112,124 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ object_matches: objectMatches }),
     }),
+  tasks: () => request<{ id: string; name: string; description: string; created_at: string }[]>("/api/tasks"),
+  task: (id: string) => request<TaskBundle>(`/api/tasks/${id}`),
+  createTask: (name: string, description: string) =>
+    request<TaskBundle>("/api/tasks", { method: "POST", body: JSON.stringify({ name, description }) }),
+  uploadClips: (projectId: string, files: File[], researchMode: string) => {
+    const body = new FormData();
+    body.set("research_mode", researchMode);
+    for (const file of files) body.append("files", file);
+    return request<TaskBundle>(`/api/tasks/${projectId}/clips`, { method: "POST", body });
+  },
+  createSession: (projectId: string, name: string) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/sessions`, { method: "POST", body: JSON.stringify({ name }) }),
+  patchSession: (projectId: string, sessionId: string, payload: Record<string, unknown>) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  splitSession: (projectId: string, sessionId: string, videoIds: string[], name: string) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/sessions/${sessionId}/split`, {
+      method: "POST",
+      body: JSON.stringify({ video_ids: videoIds, name }),
+    }),
+  orderClips: (projectId: string, videoIds: string[]) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/order`, { method: "POST", body: JSON.stringify({ video_ids: videoIds }) }),
+  patchClip: (projectId: string, videoId: string, payload: Record<string, unknown>) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/clips/${videoId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  reconcileTask: (projectId: string) => request<TaskBundle>(`/api/tasks/${projectId}/reconcile`, { method: "POST" }),
+  confirmLink: (projectId: string, linkId: string) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/identity/confirm`, { method: "POST", body: JSON.stringify({ link_id: linkId }) }),
+  rejectLink: (projectId: string, linkId: string) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/identity/reject`, { method: "POST", body: JSON.stringify({ link_id: linkId }) }),
+  mergeIdentity: (projectId: string, keepId: string, dropId: string) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/identity/merge`, {
+      method: "POST",
+      body: JSON.stringify({ keep_id: keepId, drop_id: dropId }),
+    }),
+  splitIdentity: (projectId: string, linkId: string) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/identity/split`, { method: "POST", body: JSON.stringify({ link_id: linkId }) }),
+  patchTransition: (projectId: string, transitionId: string, payload: Record<string, unknown>) =>
+    request<TaskBundle>(`/api/tasks/${projectId}/transitions/${transitionId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
 };
+
+export interface TaskBundle {
+  project: { id: string; name: string; description: string; created_at: string };
+  sessions: { id: string; name: string; ordinal: number; locked: boolean; notes: string; video_ids: string[] }[];
+  clips: TaskClip[];
+  order: { method?: string; fact: boolean; ranked: string[][]; unordered: string[]; ambiguous_ids: string[]; notes: string[] };
+  context_hypothesis: { fact: boolean; pairs: string[][]; evidence: { support?: string }[]; note?: string };
+  canonical_objects: {
+    id: string;
+    local_id: string;
+    label: string;
+    description: string;
+    color: string;
+    uncertain: boolean;
+    history: {
+      video_id: string;
+      object_local_id: string;
+      label: string;
+      state_before: string;
+      state_after: string;
+      image_url: string;
+      status: string;
+      uncertain: boolean;
+    }[];
+  }[];
+  links: {
+    id: string;
+    canonical_id: string;
+    video_id: string;
+    object_local_id: string;
+    status: string;
+    uncertain: boolean;
+    note: string;
+    score: number;
+  }[];
+  transitions: {
+    id: string;
+    from_video_id: string;
+    to_video_id: string;
+    observed_change: string;
+    hypothesis: string;
+    evidence_class: string;
+    verified: boolean;
+    gap_note: string;
+  }[];
+  workflow: {
+    steps: { id: string; kind: string; label: string; video_ids?: string[]; evidence_class?: string; note?: string; observed_change?: string; hypothesis?: string }[];
+    procedural_dependencies: { before: string; after: string; evidence_class: string; accepted: boolean; note: string }[];
+    continuous_sequence: boolean;
+  };
+  revision: { id: string; version: number; change_summary: string; document: Record<string, unknown> } | null;
+  revisions: { id: string; version: number; change_summary: string; trigger: string; document: Record<string, unknown> }[];
+  time_basis: { project_time: string; clip_time: string };
+  jobs_created?: number;
+}
+
+export interface TaskClip {
+  id: string;
+  filename: string;
+  duration_sec: number;
+  session_id: string | null;
+  research_mode: string;
+  capture_time_raw: string;
+  capture_time_utc: string;
+  timestamp_source: string;
+  timestamp_reliability: string;
+  timestamp_note: string;
+  file_mtime: string;
+  uploaded_at: string;
+  order_locked: boolean;
+  order_ambiguous: boolean;
+  order_method: string;
+  playback_url: string;
+  thumbnail_url: string;
+  run_id: string;
+  actions: { local_id: string; action_type: string; description: string; start: number; end: number; evidence_class: string }[];
+}
 
 export function formatTime(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined || Number.isNaN(seconds)) return "—";

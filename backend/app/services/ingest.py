@@ -9,8 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.media import FrameAsset, Project, VideoAsset
+from app.models.sessions import RecordingSession
 from app.models.util import new_id
 from app.services.storage import data_path, ensure_data_dirs, relative, safe_filename
+from app.video.capture_time import read_capture
 from app.video.frames import contact_sheet, extract_frame, make_proxy, thumbnail
 from app.video.probe import (
     VideoError,
@@ -25,7 +27,14 @@ from app.video.sampling import plan_uniform
 ALLOWED_SUFFIXES = {".mp4", ".mov", ".webm", ".m4v"}
 
 
-def ingest_file(session: Session, project_id: str, filename: str, source: Path) -> VideoAsset:
+def ingest_file(
+    session: Session,
+    project_id: str,
+    filename: str,
+    source: Path,
+    research_mode: str = "",
+    session_id: str | None = None,
+) -> VideoAsset:
     ensure_data_dirs()
     project = session.get(Project, project_id)
     if project is None:
@@ -41,6 +50,11 @@ def ingest_file(session: Session, project_id: str, filename: str, source: Path) 
         )
     )
     if existing is not None:
+        if existing.timestamp_source in {"", "absent"} and not existing.capture_time_raw:
+            _apply_capture(existing, source)
+            if project.is_task and not existing.session_id:
+                existing.session_id = session_id or _default_session(session, project)
+            session.commit()
         return existing
     meta = probe(source)
     if meta.duration_sec <= 0 or meta.width <= 0:
@@ -59,6 +73,7 @@ def ingest_file(session: Session, project_id: str, filename: str, source: Path) 
         proxy_rel = relative(proxy)
     pts_cache = data_path("originals", f"{checksum[:12]}.pts.json")
     pts = presentation_timestamps(original, pts_cache)
+    stamp = read_capture(original)
     video = VideoAsset(
         id=new_id(),
         project_id=project_id,
@@ -81,6 +96,15 @@ def ingest_file(session: Session, project_id: str, filename: str, source: Path) 
         variable_frame_rate=meta.variable_frame_rate,
         frame_count=meta.frame_count or len(pts),
         size_bytes=original.stat().st_size,
+        session_id=session_id or _default_session(session, project),
+        research_mode=research_mode,
+        capture_time_raw=stamp.raw,
+        capture_time_utc=stamp.utc_iso,
+        capture_timezone=stamp.timezone_name,
+        timestamp_source=stamp.source,
+        timestamp_reliability=stamp.reliability,
+        timestamp_note=stamp.note,
+        file_mtime=stamp.file_mtime,
     )
     session.add(video)
     session.flush()
@@ -113,6 +137,30 @@ def ingest_file(session: Session, project_id: str, filename: str, source: Path) 
     session.commit()
     session.refresh(video)
     return video
+
+
+def _apply_capture(video: VideoAsset, source: Path) -> None:
+    stamp = read_capture(source)
+    video.capture_time_raw = stamp.raw
+    video.capture_time_utc = stamp.utc_iso
+    video.capture_timezone = stamp.timezone_name
+    video.timestamp_source = stamp.source
+    video.timestamp_reliability = stamp.reliability
+    video.timestamp_note = stamp.note
+    video.file_mtime = stamp.file_mtime
+
+
+def _default_session(session: Session, project: Project) -> str | None:
+    if not project.is_task:
+        return None
+    row = session.scalar(
+        select(RecordingSession).where(RecordingSession.project_id == project.id).order_by(RecordingSession.ordinal)
+    )
+    if row is None:
+        row = RecordingSession(project_id=project.id, name="Session 1", ordinal=0)
+        session.add(row)
+        session.flush()
+    return row.id
 
 
 def playback_path(video: VideoAsset) -> Path:

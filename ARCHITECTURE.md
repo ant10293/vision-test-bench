@@ -44,6 +44,12 @@ Adapters implement one interface and register capabilities. The experiment form 
 
 `DIRECTLY_OBSERVED`, `INFERRED`, and `UNKNOWN` are separate from provenance (`AI_PREDICTION`, `CV_DETECTION`, `DETERMINISTIC`, `HUMAN_ANNOTATION`, `HUMAN_CORRECTION`). An observation ("the region is visible at 6.4s") is not stored as an interpretation ("the part was installed correctly").
 
+## Task projects
+
+A task is a project with several videos. Reconciliation reads the latest completed run for each clip and writes a `ProjectRevision`. It does not enqueue a new analysis job. Capture order uses timezone-aware container timestamps. Context order is stored as a hypothesis with `fact: false` and does not move a locked manual order. Cross-clip identity links stay `proposed` until a person confirms, merges, splits, or rejects them. An inter-session transition keeps the visible before/after text separate from a hypothesis about the gap. The gap is not marked directly observed.
+
+Session-level actions remain on each clip's analysis. The project workflow adds session markers, unobserved intervals, parallel ties, and inferred procedural edges that stay unaccepted.
+
 ## Where files live
 
 `data/originals` immutable uploads, `data/proxies`, `data/frames`, `data/runs/{id}` working JSON and crops, `data/learnloop.db`. API keys, if saved in the app, are Fernet-encrypted under `data/.credential_key` (mode 0600) or read from the environment. Exports omit them.
