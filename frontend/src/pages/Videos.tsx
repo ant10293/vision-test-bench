@@ -453,24 +453,30 @@ export function VideosPage() {
           <div>
             <button className="text-sm text-[var(--muted)] disabled:opacity-45" onClick={requestBackToLibrary} disabled={saving}>← Back to library</button>
             {creating ? (
-              <input
-                className="field mt-2 mb-2 block"
-                value={name}
-                onChange={(event) => setView({ name: event.target.value })}
-                placeholder="Project name"
-                aria-label="Project name"
-                autoFocus
-              />
+              <div className="mt-3.5 mb-2 grid w-fit max-w-full gap-2">
+                <input
+                  className="field stretch block min-w-0"
+                  value={name}
+                  onChange={(event) => setView({ name: event.target.value })}
+                  placeholder="Project name"
+                  aria-label="Project name"
+                  autoFocus
+                />
+                <p className="text-sm text-[var(--muted)]">Add a name and at least one video. After you save, upload and analysis keep going if you leave this page.</p>
+              </div>
             ) : (
-              <h2 className="mt-2 text-lg">{editing?.name}</h2>
+              <>
+                <div className="mt-2 flex items-end justify-between gap-4">
+                  <h2 className="min-w-0 text-lg">{editing?.name}</h2>
+                  {mode === "edit" && editId && <ProjectCosts projectId={editId} className="is-end" />}
+                </div>
+                <p className="text-sm text-[var(--muted)]">
+                  {reference
+                    ? "Add a path or drop a file, depending on the storage setting. Analysis keeps running if you switch pages. Drag a card to reorder it."
+                    : "Drop videos to add them. Upload and analysis keep running if you switch pages. Drag a card to reorder it."}
+                </p>
+              </>
             )}
-            <p className="text-sm text-[var(--muted)]">
-              {creating
-                ? "Add a name and at least one video. After you save, upload and analysis keep going if you leave this page."
-                : reference
-                  ? "Add a path or drop a file, depending on the storage setting. Analysis keeps running if you switch pages. Drag a card to reorder it."
-                  : "Drop videos to add them. Upload and analysis keep running if you switch pages. Drag a card to reorder it."}
-            </p>
           </div>
           <StorageSettings />
           {reference ? (
@@ -505,8 +511,6 @@ export function VideosPage() {
           />}
         </section>
       )}
-
-      {mode === "edit" && editId && <ProjectCosts projectId={editId} />}
 
       {mode === "edit" && (
         <div

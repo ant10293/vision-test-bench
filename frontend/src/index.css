@@ -179,6 +179,11 @@ select.field.stretch {
   font-size: 0.95rem;
   text-wrap: balance;
 }
+.drop-zone-supported {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
 button.linkish {
   border: 0;
   padding: 0;
@@ -378,6 +383,38 @@ body.is-sorting * { cursor: grabbing; }
 }
 .video-card-delete:hover { background: var(--rose); }
 .video-card-delete:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.cost-total {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+}
+.cost-total.is-end {
+  align-items: flex-end;
+  text-align: right;
+}
+.cost-total-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.2;
+}
+.cost-total:hover { color: var(--teal); }
+.cost-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+.cost-overlay-panel {
+  position: fixed;
+  z-index: 81;
+  overflow: auto;
+}
 
 /* Full-screen image preview, from potheads-ceramics' admin image overlay. */
 .asset-preview {

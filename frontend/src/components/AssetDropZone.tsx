@@ -163,6 +163,7 @@ export function AssetDropZone({
             {chooseLabel}
           </button>
         </p>
+        <p className="drop-zone-supported">{supported}</p>
         <input
           ref={input}
           type="file"
@@ -175,10 +176,11 @@ export function AssetDropZone({
           }}
         />
       </div>
-      <div className="drop-zone-foot">
-        <span>{supported}</span>
-        {hint ? <span>{hint}</span> : <span />}
-      </div>
+      {hint ? (
+        <div className="drop-zone-foot">
+          <span>{hint}</span>
+        </div>
+      ) : null}
       </>}
       {shown.map((item) => {
         const percent = item.progress == null ? null : Math.round(item.progress);

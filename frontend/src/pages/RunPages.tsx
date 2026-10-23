@@ -9,6 +9,7 @@ import { WorkflowGraph } from "../components/WorkflowGraph";
 import { api, evidenceClass, formatTime, formatUsd, formatWhen } from "../lib/api";
 import { formatLogText } from "../lib/formatLog";
 import { humanize, humanizeText, labeledId } from "../lib/humanize";
+import { objectScene } from "../lib/sceneSlice";
 import { BundleContext, useBundle } from "../lib/bundleContext";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
@@ -322,6 +323,8 @@ export function StatesPage() {
   const states = bundle.states.filter((item) => item.object_local_id === localId);
   const transitions = bundle.transitions.filter((item) => item.object_local_id === localId);
   const relations = bundle.relationships.filter((item) => item.subject_local_id === localId || item.other_local_id === localId);
+  const selected = bundle.objects.find((item) => item.local_id === localId);
+  const record = objectScene(scene.data, bundle, localId, time);
   return (
     <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
       <div className="space-y-1">
@@ -348,8 +351,10 @@ export function StatesPage() {
           <div key={item.id} className="text-sm">{humanize(item.subject_local_id)} {humanize(item.kind)} {humanize(item.other_local_id ?? "")} · {item.description}</div>
         ))}
         <div className="panel p-3 text-sm">
-          <div className="mb-2 text-xs uppercase tracking-wide text-[var(--muted)]">Scene at {time.toFixed(2)}s</div>
-          <pre className="mono max-h-64 overflow-auto text-xs">{JSON.stringify(scene.data ?? {}, null, 2)}</pre>
+          <div className="mb-2 text-xs uppercase tracking-wide text-[var(--muted)]">
+            {selected ? labeledId(selected.local_id, selected.label) : "Object"} · scene at {time.toFixed(2)}s
+          </div>
+          <pre className="mono max-h-64 overflow-auto text-xs">{JSON.stringify(record, null, 2)}</pre>
         </div>
       </div>
     </div>

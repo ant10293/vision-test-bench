@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.demo.scenarios import SCENARIOS, build_document
 from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRun, ModelRequestRow
+from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
 from app.providers.registry import get_provider
@@ -171,13 +172,14 @@ async def produce_document(
         run,
         stage,
         system,
-        "Merge these partial JSON analyses in time order. Do not invent events from gaps between windows.\n\n"
+        "Merge these partial JSON analyses in time order. Do not invent events from gaps between windows. "
+        "Keep every state, transition, relationship, workflow step, dependency, and ambiguity from the windows.\n\n"
         + "\n\n".join(item.model_dump_json() for item in partials),
         [],
         video,
         schema,
     )
-    return merged
+    return restore_omitted_records(merged, partials)
 
 
 async def _call(session, run, stage, system, user, frames, video, schema) -> AnalysisDocument:
