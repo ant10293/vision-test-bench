@@ -180,6 +180,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ force }),
     }),
+  submitClaudeCode: (code: string) =>
+    request<ClaudeCodeStatus>("/api/providers/anthropic/claude-code/link/code", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
   prompts: () =>
     request<{ id: string; key: string; name: string; version: number; body: string }[]>("/api/prompts"),
   savePrompt: (key: string, name: string, body: string) =>

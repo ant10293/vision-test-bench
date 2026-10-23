@@ -21,11 +21,13 @@ args = sys.argv[1:]
 if args[:1] == ["--version"]:
     print("9.9.9 (Claude Code)")
 elif args[:2] == ["auth", "status"]:
-    logged = "true" if mode == "in" else "false"
+    logged = mode == "in"
     print(
         '{"loggedIn": %s, "authMethod": "claude.ai", "subscriptionType": "pro", '
-        '"email": "ada@example.com"}' % logged
+        '"email": "ada@example.com"}' % ("true" if logged else "false")
     )
+    if not logged:
+        sys.exit(1)
 elif args[:2] == ["auth", "login"]:
     print("Open https://claude.ai/oauth/authorize?code=local", flush=True)
     time.sleep(60)
@@ -104,6 +106,13 @@ def test_subscription_env_hides_the_api_key(monkeypatch):
     env = subscription_env()
     assert "ANTHROPIC_API_KEY" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
+
+
+def test_claude_code_uses_the_model_output_maximum(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "32000")
+    from app.providers.claude_code import generation_env
+
+    assert generation_env()["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "128000"
 
 
 def test_cli_result_is_unpriced_plan_usage(tmp_path: Path):
@@ -234,6 +243,27 @@ def test_provider_page_saves_claude_code_without_removing_api_settings(client: T
     assert again["configured"] is True
     assert again["claude_code"]["transport"] == "claude_code"
     assert again["hint"]
+
+
+def test_signed_out_status_is_a_sentence_not_the_json_blob(client: TestClient, tmp_path: Path, monkeypatch):
+    from app.providers.claude_code import login_url_from
+
+    wrapped = (
+        "If the browser didn't open, visit: \x1b]8;;https://claude.com/cai/oauth/authorize?code=true&state=abc\x07"
+        "https://claude.com/cai/oauth/authorize?code=true&state=abc\x1b]8;;\x07"
+    )
+    assert login_url_from(wrapped) == "https://claude.com/cai/oauth/authorize?code=true&state=abc"
+    fake = tmp_path / "claude"
+    _fake(fake)
+    monkeypatch.setenv("CLAUDE_FAKE", "out")
+    assert client.put(
+        "/api/providers/anthropic/claude-code",
+        json={"binary": str(fake), "transport": "claude_code"},
+    ).status_code == 200
+    body = client.get("/api/providers/anthropic/claude-code").json()
+    assert body["logged_in"] is False
+    assert body["error"] == "Claude Code is installed and not signed in."
+    assert "loggedIn" not in body["error"]
 
 
 def test_link_starts_sign_in_when_claude_code_is_signed_out(client: TestClient, tmp_path: Path, monkeypatch):

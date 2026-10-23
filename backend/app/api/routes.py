@@ -53,7 +53,7 @@ from app.models.sessions import (
 )
 from app.models.util import utcnow
 from app.providers.catalog import lookup, models_for
-from app.providers.claude_code import begin_login, load_claude_code, probe, save_claude_code
+from app.providers.claude_code import begin_login, load_claude_code, probe, save_claude_code, submit_login_code
 from app.providers.registry import get_provider, provider_ids
 from app.providers.types import ProviderError, UnsupportedMode
 from app.schemas.analysis import AnalysisDocument
@@ -582,6 +582,14 @@ async def link_claude_code(payload: dict | None = Body(default=None)) -> dict:
     force = bool((payload or {}).get("force"))
     try:
         return await begin_login(force=force)
+    except ProviderError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/providers/anthropic/claude-code/link/code")
+async def claude_code_login_code(payload: dict | None = Body(default=None)) -> dict:
+    try:
+        return await submit_login_code((payload or {}).get("code") or "")
     except ProviderError as exc:
         raise HTTPException(400, str(exc)) from exc
 

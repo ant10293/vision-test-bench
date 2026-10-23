@@ -10,6 +10,7 @@ function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
   const [transport, setTransport] = useState(settings.transport);
   const [awaiting, setAwaiting] = useState(false);
   const [loginUrl, setLoginUrl] = useState("");
+  const [loginCode, setLoginCode] = useState("");
   const [note, setNote] = useState("");
   const status = useQuery({
     queryKey: ["claude-code"],
@@ -24,6 +25,7 @@ function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
     if (awaiting && status.data?.logged_in) {
       setAwaiting(false);
       setLoginUrl("");
+      setLoginCode("");
       setNote("Claude Code is linked.");
     }
   }, [awaiting, status.data?.logged_in]);
@@ -47,7 +49,7 @@ function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
           {status.data?.account ? ` · ${status.data.account}` : ""}
         </p>
       )}
-      {status.data?.error && <p className="text-sm text-[var(--rose)]">{status.data.error}</p>}
+      {status.data?.error && !awaiting && <p className="text-sm text-[var(--rose)]">{status.data.error}</p>}
       <div className="grid gap-2 md:grid-cols-2">
         <label className="field-label">
           Executable
@@ -77,7 +79,7 @@ function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
             const result = await api.linkClaudeCode(false);
             setLoginUrl(result.login_url || "");
             setAwaiting(Boolean(result.login_started) && !result.logged_in);
-            setNote(result.logged_in ? "Claude Code is linked." : "Finish sign-in in the browser. This page updates when the login completes.");
+            setNote(result.logged_in ? "Claude Code is linked." : "Open the sign-in page and choose the Pro or Max account. Paste the code it shows here.");
             await client.invalidateQueries({ queryKey: ["claude-code"] });
           } catch (error) {
             setAwaiting(false);
@@ -99,6 +101,27 @@ function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
         )}
       </div>
       {loginUrl && <a className="text-sm text-[var(--blue)]" href={loginUrl} target="_blank" rel="noreferrer">Open the Claude sign-in page</a>}
+      {awaiting && (
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="field" spellCheck={false} placeholder="Paste the sign-in code" value={loginCode} onChange={(event) => setLoginCode(event.target.value)} />
+          <button className="btn" disabled={!loginCode.trim()} onClick={async () => {
+            try {
+              const result = await api.submitClaudeCode(loginCode.trim());
+              setLoginCode("");
+              if (result.logged_in) {
+                setAwaiting(false);
+                setLoginUrl("");
+                setNote("Claude Code is linked.");
+              } else {
+                setNote(result.error || "That code was not accepted. Paste the code from the Pro or Max account.");
+              }
+              await client.invalidateQueries({ queryKey: ["claude-code"] });
+            } catch (error) {
+              setNote(error instanceof Error ? error.message : "sign-in failed");
+            }
+          }}>Submit code</button>
+        </div>
+      )}
       {note && <p className="text-sm">{note}</p>}
     </div>
   );

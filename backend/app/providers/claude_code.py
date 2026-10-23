@@ -11,6 +11,7 @@ import asyncio
 import base64
 import json
 import os
+import pty
 import re
 import shutil
 import subprocess
@@ -36,6 +37,8 @@ _API_ENV = (
     "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
 )
 _login_proc: asyncio.subprocess.Process | None = None
+_login_master: int | None = None
+_login_url = ""
 _login_lock = asyncio.Lock()
 
 
@@ -86,6 +89,17 @@ def subscription_env() -> dict[str, str]:
     env = os.environ.copy()
     for name in _API_ENV:
         env.pop(name, None)
+    return env
+
+
+# Above every model's upper limit. The CLI clamps this to that model's maximum,
+# so a subscription run is not stopped at Claude Code's lower default.
+_MODEL_OUTPUT_MAXIMUM = "128000"
+
+
+def generation_env() -> dict[str, str]:
+    env = subscription_env()
+    env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = _MODEL_OUTPUT_MAXIMUM
     return env
 
 
@@ -155,7 +169,10 @@ def probe_sync() -> dict:
         payload = {}
     logged_in = bool(payload.get("loggedIn"))
     error = ""
-    if auth.returncode != 0 and not logged_in:
+    if not logged_in and payload:
+        # A signed-out status exits non-zero and prints the JSON document.
+        error = "Claude Code is installed and not signed in."
+    elif auth.returncode != 0 and not logged_in:
         error = (auth.stderr or auth.stdout or "claude auth status failed").strip()[:500]
     elif not logged_in:
         error = "Claude Code is installed and not signed in."
@@ -178,65 +195,147 @@ async def probe() -> dict:
     return await asyncio.to_thread(probe_sync)
 
 
+def login_url_from(text: str) -> str:
+    """Pull the authorize URL out of a terminal login prompt.
+
+    Current Claude Code wraps the URL in an OSC 8 hyperlink, so a raw
+    ``https://`` match runs into the escape and the visible copy.
+    """
+    cleaned = re.sub(r"\x1b\]8;;.*?\x07", "", text)
+    cleaned = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", cleaned)
+    match = re.search(r"https://[^\s<>\"']+", cleaned)
+    if not match:
+        return ""
+    return match.group(0).rstrip(").,")
+
+
+def _close_login_master() -> None:
+    global _login_master
+    master = _login_master
+    _login_master = None
+    if master is None:
+        return
+    try:
+        os.close(master)
+    except OSError:
+        pass
+
+
 async def stop_login() -> None:
-    global _login_proc
+    global _login_proc, _login_url
     proc = _login_proc
     _login_proc = None
+    _login_url = ""
+    _close_login_master()
     if proc is not None and proc.returncode is None:
         proc.kill()
         await proc.wait()
 
 
+async def _read_login_output(master: int, timeout: float) -> tuple[str, str]:
+    os.set_blocking(master, False)
+    loop = asyncio.get_running_loop()
+    collected = bytearray()
+    found: asyncio.Future[str] = loop.create_future()
+
+    def on_readable() -> None:
+        while True:
+            try:
+                chunk = os.read(master, 4096)
+            except BlockingIOError:
+                return
+            except OSError:
+                break
+            if not chunk:
+                break
+            collected.extend(chunk)
+            url = login_url_from(collected.decode(errors="replace"))
+            if url and not found.done():
+                found.set_result(url)
+                return
+        if not found.done():
+            found.set_result(login_url_from(collected.decode(errors="replace")))
+
+    loop.add_reader(master, on_readable)
+    try:
+        url = await asyncio.wait_for(found, timeout)
+    except TimeoutError:
+        url = login_url_from(collected.decode(errors="replace"))
+    finally:
+        loop.remove_reader(master)
+        os.set_blocking(master, True)
+    return url, collected.decode(errors="replace")
+
+
 async def begin_login(force: bool = False) -> dict:
     """Refresh a signed-in CLI, or start `claude auth login` and keep it alive."""
-    global _login_proc
+    global _login_proc, _login_url, _login_master
     status = await probe()
     if not status["installed"]:
         raise ProviderError(status["error"] or "Claude Code executable not found")
     if status["logged_in"] and not force:
         return status
     async with _login_lock:
-        if _login_proc is not None and _login_proc.returncode is None:
+        if not force and _login_proc is not None and _login_proc.returncode is None:
             status["login_started"] = True
+            status["login_url"] = _login_url
+            status["error"] = ""
             return status
+        await stop_login()
         resolved = resolve_binary(status["binary"])
         if resolved is None:
             raise ProviderError(status["error"] or "Claude Code executable not found")
-        proc = await asyncio.create_subprocess_exec(
-            resolved,
-            "auth",
-            "login",
-            "--claudeai",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,
-            env=subscription_env(),
-        )
-        _login_proc = proc
-        url = ""
-        collected: list[str] = []
-        assert proc.stdout is not None
+        master, slave = pty.openpty()
         try:
-            while True:
-                line = await asyncio.wait_for(proc.stdout.readline(), timeout=8)
-                if not line:
-                    break
-                text = line.decode(errors="replace")
-                collected.append(text)
-                match = re.search(r"https://\S+", text)
-                if match:
-                    url = match.group(0).rstrip(").,")
-                    break
-        except TimeoutError:
-            pass
+            proc = await asyncio.create_subprocess_exec(
+                resolved,
+                "auth",
+                "login",
+                "--claudeai",
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                env=subscription_env(),
+            )
+        except OSError:
+            os.close(master)
+            os.close(slave)
+            raise
+        os.close(slave)
+        _login_proc = proc
+        _login_master = master
+        url, collected = await _read_login_output(master, 8)
+        _login_url = url
         if proc.returncode is not None and not url:
-            detail = "".join(collected).strip()
+            detail = login_url_from(collected) or collected.strip()
             raise ProviderError(detail[-500:] or "Claude Code login exited before a sign-in link was shown")
         status["logged_in"] = False
         status["login_started"] = True
         status["login_url"] = url
-        status["error"] = ""
+        status["error"] = "" if url else "Claude Code did not show a sign-in link."
         return status
+
+
+async def submit_login_code(code: str) -> dict:
+    """Write the browser sign-in code into the waiting Claude Code login."""
+    code = (code or "").strip()
+    if not code or any(char in code for char in "\r\n\0"):
+        raise ProviderError("Paste the sign-in code from the browser.")
+    proc = _login_proc
+    master = _login_master
+    if proc is None or master is None or proc.returncode is not None:
+        raise ProviderError("Sign-in is not waiting for a code. Use Link Claude Code first.")
+    os.write(master, (code + "\n").encode())
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=30)
+    except TimeoutError:
+        pass
+    status = await probe()
+    if status["logged_in"]:
+        status["login_started"] = False
+        status["login_url"] = ""
+        status["error"] = ""
+    return status
 
 
 def build_argv(
@@ -428,7 +527,7 @@ async def complete(request: GenerationRequest) -> ProviderResponse:
             code, out, err = await run_process(
                 argv,
                 build_stdin(request),
-                subscription_env(),
+                generation_env(),
                 request.timeout_s,
                 directory,
             )
