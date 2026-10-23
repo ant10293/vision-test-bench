@@ -51,7 +51,7 @@ class IngestCancelled(Exception):
 
 def ingest_file(
     session: Session,
-    project_id: str,
+    project_id: str | None,
     filename: str,
     source: Path,
     research_mode: str = "",
@@ -62,9 +62,7 @@ def ingest_file(
     reference: bool = False,
 ) -> VideoAsset:
     ensure_data_dirs()
-    project = session.get(Project, project_id)
-    if project is None:
-        raise VideoError("project not found")
+    project = _project_or_library(session, project_id)
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise VideoError(f"unsupported type {suffix or 'unknown'}; use mp4, mov, or webm")
@@ -86,17 +84,17 @@ def ingest_file(
     checksum = sha256_file(source, on_hashed)
     existing = session.scalar(
         select(VideoAsset).where(
-            VideoAsset.project_id == project_id,
+            _same_project(project_id),
             VideoAsset.checksum_sha256 == checksum,
             VideoAsset.id != (video.id if video is not None else ""),
         )
     )
     if existing is not None:
         if video is not None:
-            raise VideoError("this file is already in the project")
+            raise VideoError("this file is already in the project" if project_id else "this file is already in the library")
         if existing.timestamp_source in {"", "absent"} and not existing.capture_time_raw:
             _apply_capture(existing, source)
-            if project.is_task and not existing.session_id:
+            if project is not None and project.is_task and not existing.session_id:
                 existing.session_id = session_id or _default_session(session, project)
             session.commit()
         return existing
@@ -152,7 +150,10 @@ def ingest_file(
     video.variable_frame_rate = meta.variable_frame_rate
     video.frame_count = meta.frame_count or len(pts)
     video.size_bytes = original.stat().st_size
-    video.session_id = session_id or video.session_id or _default_session(session, project)
+    if project is None:
+        video.session_id = session_id or video.session_id
+    else:
+        video.session_id = session_id or video.session_id or _default_session(session, project)
     video.research_mode = research_mode or video.research_mode
     video.capture_time_raw = stamp.raw
     video.capture_time_utc = stamp.utc_iso
@@ -201,7 +202,7 @@ def ingest_file(
         contact_sheet(frame_paths, sheet)
         _keep(produced, sheet)
         video.contact_sheet_path = relative(sheet)
-    if not project.is_task and video.order_index is None:
+    if project is not None and not project.is_task and video.order_index is None:
         peak = session.scalar(
             select(func.max(VideoAsset.order_index)).where(
                 VideoAsset.project_id == project_id,
@@ -223,12 +224,10 @@ def ingest_file(
     return video
 
 
-def accept_upload(session: Session, project_id: str, filename: str, source: Path) -> VideoAsset:
+def accept_upload(session: Session, project_id: str | None, filename: str, source: Path) -> VideoAsset:
     """Store the bytes and return before probing or frame extraction."""
     ensure_data_dirs()
-    project = session.get(Project, project_id)
-    if project is None:
-        raise VideoError("project not found")
+    _project_or_library(session, project_id)
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise VideoError(f"unsupported type {suffix or 'unknown'}; use mp4, mov, or webm")
@@ -271,12 +270,10 @@ def referenced_file(raw: str) -> Path:
     return path
 
 
-def accept_reference(session: Session, project_id: str, source: Path) -> VideoAsset:
+def accept_reference(session: Session, project_id: str | None, source: Path) -> VideoAsset:
     """Remember a file where it already is. Nothing is copied."""
     ensure_data_dirs()
-    project = session.get(Project, project_id)
-    if project is None:
-        raise VideoError("project not found")
+    _project_or_library(session, project_id)
     path = referenced_file(str(source))
     video = VideoAsset(
         id=new_id(),
@@ -507,6 +504,26 @@ def _apply_capture(video: VideoAsset, source: Path) -> None:
     video.timestamp_reliability = stamp.reliability
     video.timestamp_note = stamp.note
     video.file_mtime = stamp.file_mtime
+
+
+def ensure_default_session(session: Session, project: Project) -> str | None:
+    """The session a clip joins. A single sitting has none."""
+    return _default_session(session, project)
+
+
+def _project_or_library(session: Session, project_id: str | None) -> Project | None:
+    if not project_id:
+        return None
+    project = session.get(Project, project_id)
+    if project is None:
+        raise VideoError("project not found")
+    return project
+
+
+def _same_project(project_id: str | None):
+    if project_id:
+        return VideoAsset.project_id == project_id
+    return VideoAsset.project_id.is_(None)
 
 
 def _default_session(session: Session, project: Project) -> str | None:

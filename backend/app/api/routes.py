@@ -176,8 +176,18 @@ def list_projects(session: Session = Depends(db)) -> list[dict]:
 
 @router.post("/projects")
 def create_project(payload: dict, session: Session = Depends(db)) -> dict:
-    row = Project(name=payload.get("name") or "Untitled study", description=payload.get("description") or "")
+    from app.services.reconcile import new_session
+
+    spans_days = bool(payload.get("is_task"))
+    row = Project(
+        name=payload.get("name") or "Untitled study",
+        description=payload.get("description") or "",
+        is_task=spans_days,
+    )
     session.add(row)
+    session.flush()
+    if spans_days:
+        new_session(session, row.id, "Session 1")
     session.commit()
     session.refresh(row)
     return _project_payload(row)
@@ -318,7 +328,7 @@ def delete_project(project_id: str, session: Session = Depends(db)) -> dict:
 
 @router.post("/videos")
 async def upload_video(
-    project_id: str = Form(...),
+    project_id: str = Form(""),
     file: UploadFile = File(...),
     session: Session = Depends(db),
 ) -> dict:
@@ -338,10 +348,11 @@ async def upload_video(
                 handle.write(chunk)
         if size == 0:
             raise HTTPException(400, "empty upload")
+        target = project_id or None
         if settings.ingest_inline:
-            video = ingest_file(session, project_id, file.filename or "video.mp4", temp)
+            video = ingest_file(session, target, file.filename or "video.mp4", temp)
         else:
-            video = accept_upload(session, project_id, file.filename or "video.mp4", temp)
+            video = accept_upload(session, target, file.filename or "video.mp4", temp)
     except VideoError as exc:
         raise HTTPException(400, str(exc)) from exc
     finally:
@@ -370,10 +381,10 @@ def reference_video(payload: dict, session: Session = Depends(db)) -> dict:
     from app.config import settings
     from app.video.probe import VideoError
 
-    project_id = str(payload.get("project_id") or "")
+    project_id = str(payload.get("project_id") or "") or None
     raw = str(payload.get("path") or "").strip()
-    if not project_id or not raw:
-        raise HTTPException(400, "project and path are required")
+    if not raw:
+        raise HTTPException(400, "path is required")
     try:
         path = referenced_file(raw)
         if settings.ingest_inline:
@@ -401,12 +412,45 @@ def _videos_in_display_order(project_id: str):
 
 
 @router.get("/videos")
-def list_videos(project_id: str | None = None, session: Session = Depends(db)) -> list[dict]:
-    if project_id:
+def list_videos(
+    project_id: str | None = None,
+    unassigned: bool = False,
+    session: Session = Depends(db),
+) -> list[dict]:
+    if unassigned and project_id:
+        raise HTTPException(400, "choose a project or the library, not both")
+    if unassigned:
+        query = select(VideoAsset).where(VideoAsset.project_id.is_(None)).order_by(VideoAsset.created_at.desc())
+    elif project_id:
         query = _videos_in_display_order(project_id)
     else:
         query = select(VideoAsset).order_by(VideoAsset.created_at.desc())
     return [video_dict(video) for video in session.scalars(query)]
+
+
+@router.post("/projects/{project_id}/videos/attach")
+def attach_project_videos(project_id: str, payload: dict, session: Session = Depends(db)) -> list[dict]:
+    from app.services.membership import MembershipError, attach_videos
+
+    requested = payload.get("video_ids")
+    if not isinstance(requested, list) or any(not isinstance(video_id, str) or not video_id for video_id in requested):
+        raise HTTPException(400, "video_ids must be a list of ids")
+    try:
+        videos = attach_videos(session, project_id, requested)
+    except MembershipError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    return [video_dict(video) for video in videos]
+
+
+@router.post("/videos/{video_id}/detach")
+def detach_project_video(video_id: str, session: Session = Depends(db)) -> dict:
+    from app.services.membership import MembershipError, detach_video
+
+    try:
+        video = detach_video(session, video_id)
+    except MembershipError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    return video_dict(video)
 
 
 @router.post("/projects/{project_id}/videos/order")

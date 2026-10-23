@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
+import { LibraryPicker } from "../components/LibraryPicker";
 import { ProjectCosts } from "../components/ProjectCosts";
 import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
 import { api, evidenceClass, formatTime, type TaskBundle, type TaskClip } from "../lib/api";
@@ -9,46 +10,6 @@ import { humanize, labeledId } from "../lib/humanize";
 import { clipPosition } from "../lib/taskOrder";
 
 const MODES = ["", "fixed_camera", "constrained_head_mounted", "unconstrained_head_mounted"];
-
-export function TasksPage() {
-  const client = useQueryClient();
-  const tasks = useQuery({ queryKey: ["tasks"], queryFn: api.tasks });
-  const [name, setName] = useState("Multi-day task");
-  const [description, setDescription] = useState("");
-  const create = useMutation({
-    mutationFn: () => api.createTask(name, description),
-    onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }),
-  });
-  return (
-    <div className="space-y-4">
-      <header>
-        <h1 className="text-2xl font-medium">Task projects</h1>
-        <p className="text-sm text-[var(--muted)]">
-          A task keeps each recording as its own file. Sessions, clips, and later reconciliations hang off that project.
-        </p>
-      </header>
-      <form
-        className="panel grid gap-2 p-3 md:grid-cols-[1fr_1fr_auto]"
-        onSubmit={(event) => {
-          event.preventDefault();
-          create.mutate();
-        }}
-      >
-        <input className="field" value={name} onChange={(event) => setName(event.target.value)} aria-label="Task name" />
-        <input className="field" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What the recordings are of" aria-label="Task description" />
-        <button className="btn primary" type="submit">Create task</button>
-      </form>
-      <div className="grid gap-2">
-        {tasks.data?.map((task) => (
-          <Link key={task.id} to={`/tasks/${task.id}`} className="panel block p-3">
-            <div className="font-medium">{task.name}</div>
-            <div className="text-sm text-[var(--muted)]">{task.description || "No description"}</div>
-          </Link>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 export function TaskDetailPage() {
   const { projectId = "" } = useParams();
@@ -62,8 +23,15 @@ export function TaskDetailPage() {
   const [openSessions, setOpenSessions] = useState<Record<string, boolean>>({});
   const [compare, setCompare] = useState<string[]>([]);
   const [dragId, setDragId] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const library = useQuery({
+    queryKey: ["videos", "library"],
+    queryFn: api.unassignedVideos,
+    enabled: pickerOpen,
+  });
   const refresh = async () => {
     await client.invalidateQueries({ queryKey: ["task", projectId] });
+    await client.invalidateQueries({ queryKey: ["videos"] });
   };
   const upload = useMutation({
     mutationFn: (files: File[]) => api.uploadClips(projectId, files, mode),
@@ -95,7 +63,8 @@ export function TaskDetailPage() {
     <div className="space-y-5">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-medium">{task.project.name}</h1>
+          <Link className="text-sm text-[var(--muted)]" to="/projects">← Back to projects</Link>
+          <h1 className="mt-2 text-2xl font-medium">{task.project.name}</h1>
           <p className="text-sm text-[var(--muted)]">{task.project.description}</p>
           <p className="mt-1 text-xs text-[var(--amber)]">
             Project time is the capture clock. Clip time is seconds from the start of that recording. File modification time and upload time are stored separately.
@@ -128,13 +97,25 @@ export function TaskDetailPage() {
               await refresh();
             }}
           />
+          <AssetDropZone
+            chooser={false}
+            accept="video/mp4,video/quicktime,video/webm"
+            prompt=""
+            chooseLabel="Choose files"
+            libraryLabel="Choose from library"
+            onChooseLibrary={() => setPickerOpen(true)}
+            supported=""
+            onFiles={() => undefined}
+          />
         </>
       ) : (
       <AssetDropZone
         multiple
         accept="video/mp4,video/quicktime,video/webm"
-        prompt="Drag and drop recordings here or"
+        prompt="Drag and drop recordings here,"
         chooseLabel="Choose files"
+        libraryLabel="Choose from library"
+        onChooseLibrary={() => setPickerOpen(true)}
         supported="Supported: MP4, MOV, WebM"
         hint="Each clip can use a different camera configuration after upload."
         pending={upload.isPending}
@@ -330,6 +311,25 @@ export function TaskDetailPage() {
           </div>
         ))}
       </section>
+      {pickerOpen && (
+        <LibraryPicker
+          videos={library.data ?? []}
+          loading={library.isLoading}
+          error={library.isError ? (library.error as Error).message : ""}
+          onClose={() => setPickerOpen(false)}
+          onOpen={async (chosen) => {
+            setPickerOpen(false);
+            if (!chosen.length) return;
+            try {
+              await api.attachVideos(projectId, chosen.map((video) => video.id));
+              setError("");
+              await refresh();
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Could not add those videos");
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -401,6 +401,16 @@ function ClipRow({
           }}
         />
         <Link className="btn" to={clip.run_id ? `/runs/${clip.run_id}?t=0` : `/videos/${clip.id}?t=0`}>Open clip</Link>
+        <button
+          className="btn"
+          onClick={async () => {
+            if (!window.confirm(`Remove “${clip.filename}” from this project? It stays in the video library.`)) return;
+            await api.detachVideo(clip.id);
+            await onChange();
+          }}
+        >
+          Remove from project
+        </button>
       </div>
     </div>
   );

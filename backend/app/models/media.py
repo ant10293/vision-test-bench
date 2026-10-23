@@ -32,7 +32,9 @@ class VideoAsset(Base):
     __tablename__ = "video_assets"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     original_filename: Mapped[str] = mapped_column(String(500))
     stored_path: Mapped[str] = mapped_column(String(1000))
     proxy_path: Mapped[str] = mapped_column(String(1000), default="")
@@ -77,7 +79,7 @@ class VideoAsset(Base):
     ingest_error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
-    project: Mapped[Project] = relationship(back_populates="videos")
+    project: Mapped[Project | None] = relationship(back_populates="videos")
     frames: Mapped[list["FrameAsset"]] = relationship(
         back_populates="video", cascade="all, delete-orphan"
     )

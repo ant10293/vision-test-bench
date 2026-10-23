@@ -34,7 +34,7 @@ export function DashboardPage() {
             What models claim about an unfamiliar procedure, and which claims the pictures support.
           </p>
         </div>
-        <Link className="btn primary" to="/experiments/new">New experiment</Link>
+        <Link className="btn primary" to="/projects?new=1">New project</Link>
       </header>
       {dash.isError && !data && <p className="text-[var(--rose)]">{(dash.error as Error).message}</p>}
       {(data || loading) && (
@@ -48,11 +48,6 @@ export function DashboardPage() {
               </div>
             ))}
           </section>
-          {data && data.unpriced_calls > 0 && (
-            <p className="text-xs text-[var(--amber)]">
-              {data.unpriced_calls} provider {data.unpriced_calls === 1 ? "call has" : "calls have"} no catalog price, so the total is a partial estimate.
-            </p>
-          )}
           <section className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
             <div className="panel p-4">
               <h2 className="mb-3 text-sm font-medium">Recent experiments</h2>

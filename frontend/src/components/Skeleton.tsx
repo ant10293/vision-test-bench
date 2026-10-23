@@ -5,3 +5,12 @@ export function Bone({ className = "", width }: { className?: string; width?: st
   const style: CSSProperties | undefined = width ? { width } : undefined;
   return <span className={className ? `bone ${className}` : "bone"} style={style} aria-hidden="true" />;
 }
+
+/** The media block a project card shows while its preview is not ready. */
+export function MediaPlaceholder() {
+  return (
+    <div className="thumb-grid is-single">
+      <Bone className="bone-fill" />
+    </div>
+  );
+}

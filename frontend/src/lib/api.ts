@@ -70,21 +70,31 @@ export interface ProjectCosts {
 export const api = {
   dashboard: () => request<Dashboard>("/api/dashboard"),
   projects: () => request<ProjectSummary[]>("/api/projects"),
-  createProject: (name: string, description = "") =>
-    request<ProjectSummary>("/api/projects", { method: "POST", body: JSON.stringify({ name, description }) }),
+  createProject: (name: string, description = "", spansDays = false) =>
+    request<ProjectSummary>("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name, description, is_task: spansDays }),
+    }),
   deleteProject: (id: string) => request<{ deleted: string }>(`/api/projects/${id}`, { method: "DELETE" }),
   projectCosts: (id: string) => request<ProjectCosts>(`/api/projects/${id}/costs`),
   videos: (projectId?: string) => request<VideoInfo[]>(`/api/videos${projectId ? `?project_id=${projectId}` : ""}`),
+  unassignedVideos: () => request<VideoInfo[]>("/api/videos?unassigned=true"),
+  attachVideos: (projectId: string, videoIds: string[]) =>
+    request<VideoInfo[]>(`/api/projects/${projectId}/videos/attach`, {
+      method: "POST",
+      body: JSON.stringify({ video_ids: videoIds }),
+    }),
+  detachVideo: (id: string) => request<VideoInfo>(`/api/videos/${id}/detach`, { method: "POST" }),
   video: (id: string) => request<VideoInfo>(`/api/videos/${id}`),
   upload: (
-    projectId: string,
+    projectId: string | null,
     file: File,
     onProgress?: (ratio: number) => void,
     control?: { onAbort: (abort: () => void) => void },
   ) =>
     new Promise<VideoInfo>((resolve, reject) => {
       const body = new FormData();
-      body.set("project_id", projectId);
+      if (projectId) body.set("project_id", projectId);
       body.set("file", file);
       const xhr = new XMLHttpRequest();
       xhr.open("POST", "/api/videos");
@@ -110,8 +120,11 @@ export const api = {
   settings: () => request<LabSettings>("/api/settings"),
   saveSettings: (payload: LabSettings) =>
     request<LabSettings>("/api/settings", { method: "PUT", body: JSON.stringify(payload) }),
-  referenceVideo: (projectId: string, path: string) =>
-    request<VideoInfo>("/api/videos/reference", { method: "POST", body: JSON.stringify({ project_id: projectId, path }) }),
+  referenceVideo: (projectId: string | null, path: string) =>
+    request<VideoInfo>("/api/videos/reference", {
+      method: "POST",
+      body: JSON.stringify({ ...(projectId ? { project_id: projectId } : {}), path }),
+    }),
   orderVideos: (projectId: string, videoIds: string[]) =>
     request<VideoInfo[]>(`/api/projects/${projectId}/videos/order`, {
       method: "POST",

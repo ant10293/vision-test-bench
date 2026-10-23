@@ -21,6 +21,7 @@ type ViewState = {
   mode: "library" | "create" | "edit";
   editId: string;
   name: string;
+  spansDays: boolean;
 };
 
 type UploadStore = {
@@ -31,14 +32,23 @@ type UploadStore = {
   stagePaths: (paths: string[]) => void;
   enqueue: (projectId: string, files: File[]) => void;
   enqueuePaths: (projectId: string, paths: string[]) => void;
+  enqueueUnassigned: (files: File[]) => void;
+  enqueueUnassignedPaths: (paths: string[]) => void;
   removeItem: (key: string) => void;
   clearDraft: () => void;
   forgetProject: (projectId: string) => void;
-  beginCreate: (name: string) => Promise<string>;
+  beginCreate: (name: string, options?: { spansDays?: boolean; allowEmpty?: boolean }) => Promise<string>;
   adoptServer: (projectId: string, videos: VideoInfo[]) => void;
 };
 
+export const LIBRARY_QUEUE = "library";
 const files = new Map<string, File>();
+
+function destination(projectId: string): string | null | undefined {
+  if (projectId === LIBRARY_QUEUE) return null;
+  if (!projectId) return undefined;
+  return projectId;
+}
 const paths = new Map<string, string>();
 const aborters = new Map<string, () => void>();
 const cancelled = new Set<string>();
@@ -175,10 +185,11 @@ async function settle(key: string, video: VideoInfo) {
 async function runReference(key: string) {
   const item = useUploads.getState().items.find((entry) => entry.key === key);
   const path = paths.get(key);
-  if (!item || !path || !item.projectId) return;
+  const projectId = item ? destination(item.projectId) : undefined;
+  if (!item || !path || projectId === undefined) return;
   patchItem(key, { phase: "analyzing", progress: 0, subtitle: progressText(2, 2, "Reading the file") });
   try {
-    const video = await api.referenceVideo(item.projectId, path);
+    const video = await api.referenceVideo(projectId, path);
     paths.delete(key);
     await settle(key, video);
   } catch (error) {
@@ -193,11 +204,12 @@ async function runReference(key: string) {
 async function runUpload(key: string) {
   const item = useUploads.getState().items.find((entry) => entry.key === key);
   const file = files.get(key);
-  if (!item || !file || !item.projectId) return;
+  const projectId = item ? destination(item.projectId) : undefined;
+  if (!item || !file || projectId === undefined) return;
   patchItem(key, { phase: "uploading", progress: 0, subtitle: progressText(1, 2, "Uploading") });
   try {
     const video = await api.upload(
-      item.projectId,
+      projectId,
       file,
       (ratio) => {
         if (cancelled.has(key)) return;
@@ -296,7 +308,7 @@ if (typeof window !== "undefined" && !pollFlag.__learnloopUploadPoll) {
 }
 
 export const useUploads = create<UploadStore>((set, get) => ({
-  view: { mode: "library", editId: "", name: "" },
+  view: { mode: "library", editId: "", name: "", spansDays: false },
   items: [],
   setView: (patch) => set((state) => ({ view: { ...state.view, ...patch } })),
   stageFiles: (fileList) => addItems("", fileList, "Ready"),
@@ -309,6 +321,14 @@ export const useUploads = create<UploadStore>((set, get) => ({
     addPaths(projectId, pathList, "Queued");
     kick(projectId);
   },
+  enqueueUnassigned: (fileList) => {
+    addItems(LIBRARY_QUEUE, fileList, "Queued");
+    kick(LIBRARY_QUEUE);
+  },
+  enqueueUnassignedPaths: (pathList) => {
+    addPaths(LIBRARY_QUEUE, pathList, "Queued");
+    kick(LIBRARY_QUEUE);
+  },
   removeItem: (key) => release(key, true),
   clearDraft: () => {
     for (const item of get().items.filter((entry) => entry.projectId === "")) release(item.key, false);
@@ -316,19 +336,21 @@ export const useUploads = create<UploadStore>((set, get) => ({
   forgetProject: (projectId) => {
     for (const item of get().items.filter((entry) => entry.projectId === projectId)) release(item.key, false);
   },
-  beginCreate: async (name) => {
+  beginCreate: async (name, options) => {
     const trimmed = name.trim();
     const pending = get().items.some((item) => item.projectId === "" && item.phase === "staged");
-    if (!trimmed || !pending) throw new Error("Name the project and add at least one video.");
-    const project = await api.createProject(trimmed, "");
-    set((state) => ({
-      items: state.items.map((item) =>
-        item.projectId === "" && item.phase === "staged"
-          ? { ...item, projectId: project.id, subtitle: "Queued" }
-          : item,
-      ),
-    }));
-    kick(project.id);
+    if (!trimmed || (!pending && !options?.allowEmpty)) throw new Error("Name the project and add at least one video.");
+    const project = await api.createProject(trimmed, "", Boolean(options?.spansDays));
+    if (pending) {
+      set((state) => ({
+        items: state.items.map((item) =>
+          item.projectId === "" && item.phase === "staged"
+            ? { ...item, projectId: project.id, subtitle: "Queued" }
+            : item,
+        ),
+      }));
+      kick(project.id);
+    }
     return project.id;
   },
   adoptServer: (projectId, videos) => {

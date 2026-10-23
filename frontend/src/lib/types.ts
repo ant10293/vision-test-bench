@@ -2,7 +2,7 @@ export type RunStatus = "pending" | "running" | "completed" | "failed" | "cancel
 
 export interface RunSummary {
   id: string;
-  project_id: string;
+  project_id: string | null;
   video_id: string;
   name: string;
   status: RunStatus;
@@ -32,7 +32,7 @@ export interface RunSummary {
 
 export interface VideoInfo {
   id: string;
-  project_id: string;
+  project_id: string | null;
   filename: string;
   checksum: string;
   duration_sec: number;

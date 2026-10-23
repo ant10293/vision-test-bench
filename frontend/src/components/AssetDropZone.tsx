@@ -28,6 +28,8 @@ type Props = {
   rows?: DropRow[];
   onRemove?: (id: string) => void;
   chooser?: boolean;
+  libraryLabel?: string;
+  onChooseLibrary?: () => void;
 };
 
 export function AssetDropZone({
@@ -47,6 +49,8 @@ export function AssetDropZone({
   rows,
   onRemove,
   chooser = true,
+  libraryLabel,
+  onChooseLibrary,
 }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const wasPending = useRef(false);
@@ -123,20 +127,21 @@ export function AssetDropZone({
         progress: null,
         failed: Boolean(error),
       }));
+  const showZone = chooser || Boolean(onChooseLibrary);
 
   return (
     <div>
-      {chooser && <>
+      {showZone && <>
       <div
-        className={`drop-zone${dragOver ? " is-dragover" : ""}`}
+        className={`drop-zone${dragOver ? " is-dragover" : ""}${chooser ? "" : " is-compact"}`}
         tabIndex={0}
         onDragEnter={(event) => {
-          if (!isFileDrag(event)) return;
+          if (!chooser || !isFileDrag(event)) return;
           event.preventDefault();
           setDragOver(true);
         }}
         onDragOver={(event) => {
-          if (!isFileDrag(event)) return;
+          if (!chooser || !isFileDrag(event)) return;
           event.preventDefault();
           setDragOver(true);
         }}
@@ -146,35 +151,48 @@ export function AssetDropZone({
         onDrop={(event) => {
           event.preventDefault();
           setDragOver(false);
-          if (!isFileDrag(event)) return;
+          if (!chooser || !isFileDrag(event)) return;
           take(event.dataTransfer.files);
         }}
         onKeyDown={(event) => {
+          if (!chooser) return;
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             input.current?.click();
           }
         }}
       >
-        <div className="drop-zone-icon" aria-hidden="true" />
+        {chooser && <div className="drop-zone-icon" aria-hidden="true" />}
         <p className="drop-zone-copy">
-          {prompt}{" "}
-          <button type="button" className="linkish" onClick={() => input.current?.click()}>
-            {chooseLabel}
-          </button>
+          {[
+            prompt ? `${prompt} ` : null,
+            chooser ? (
+              <button key="files" type="button" className="linkish" onClick={() => input.current?.click()}>
+                {chooseLabel}
+              </button>
+            ) : null,
+            chooser && onChooseLibrary ? ", or " : null,
+            onChooseLibrary ? (
+              <button key="library" type="button" className="linkish" onClick={onChooseLibrary}>
+                {libraryLabel}
+              </button>
+            ) : null,
+          ]}
         </p>
-        <p className="drop-zone-supported">{supported}</p>
-        <input
-          ref={input}
-          type="file"
-          hidden
-          multiple={multiple}
-          accept={accept}
-          onChange={(event) => {
-            take(event.target.files);
-            event.currentTarget.value = "";
-          }}
-        />
+        {chooser && <p className="drop-zone-supported">{supported}</p>}
+        {chooser && (
+          <input
+            ref={input}
+            type="file"
+            hidden
+            multiple={multiple}
+            accept={accept}
+            onChange={(event) => {
+              take(event.target.files);
+              event.currentTarget.value = "";
+            }}
+          />
+        )}
       </div>
       {hint ? (
         <div className="drop-zone-foot">
@@ -197,7 +215,7 @@ export function AssetDropZone({
               )}
               <div className="drop-item-meta">
                 <strong>{item.name}</strong>
-                <span className={item.failed ? "is-error" : undefined}>{item.subtitle}</span>
+                {item.subtitle ? <span className={item.failed ? "is-error" : undefined}>{item.subtitle}</span> : null}
               </div>
               {removable && (
                 <button

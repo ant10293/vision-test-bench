@@ -66,7 +66,9 @@ class AnalysisRun(Base):
     __tablename__ = "analysis_runs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     video_id: Mapped[str] = mapped_column(ForeignKey("video_assets.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(300))
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
@@ -99,7 +101,7 @@ class AnalysisRun(Base):
     git_revision: Mapped[str] = mapped_column(String(80), default="")
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
-    project: Mapped["Project"] = relationship(back_populates="runs")
+    project: Mapped["Project | None"] = relationship(back_populates="runs")
     stages: Mapped[list["PipelineStageRun"]] = relationship(
         back_populates="run", cascade="all, delete-orphan"
     )
