@@ -9,15 +9,15 @@ const TRACKS = ["frames", "objects", "actions", "states", "ambiguities", "steps"
 
 export function Timeline({ bundle = null }: { bundle?: Bundle | null }) {
   const duration = Math.max(bundle?.video?.duration_sec ?? 1, 0.1);
-  const { time, setTime, selectAction, selectStep, selectObject } = useInspector();
+  const { time, setTime, selectAction, selectStep, selectObject, selectedStep } = useInspector();
 
   return (
     <div className="space-y-1">
-      <div className="relative h-4 overflow-hidden">
+      <div className="relative">
         {bundle ? (
           <input
             aria-label="Seek"
-            className="w-full"
+            className="seek"
             type="range"
             min={0}
             max={duration}
@@ -26,12 +26,14 @@ export function Timeline({ bundle = null }: { bundle?: Bundle | null }) {
             onChange={(event) => setTime(Number(event.target.value))}
           />
         ) : (
-          <Bone className="bone-fill" />
+          <div className="h-4">
+            <Bone className="bone-fill" />
+          </div>
         )}
       </div>
       {TRACKS.map((track) =>
         bundle ? (
-          <Track key={track} name={track} duration={duration} bundle={bundle} onSeek={setTime} onAction={selectAction} onStep={selectStep} onObject={selectObject} />
+          <Track key={track} name={track} duration={duration} bundle={bundle} selectedStep={selectedStep} onSeek={setTime} onAction={selectAction} onStep={selectStep} onObject={selectObject} />
         ) : (
           <TrackLane key={track} name={track}>
             <Bone className="bone-fill" />
@@ -55,6 +57,7 @@ function Track({
   name,
   duration,
   bundle,
+  selectedStep,
   onSeek,
   onAction,
   onStep,
@@ -63,6 +66,7 @@ function Track({
   name: (typeof TRACKS)[number];
   duration: number;
   bundle: Bundle;
+  selectedStep: string | null;
   onSeek: (time: number) => void;
   onAction: (id: string) => void;
   onStep: (id: string) => void;
@@ -74,11 +78,13 @@ function Track({
           <button
             key={item.key}
             title={`${item.label} · ${formatTime(item.start)}–${formatTime(item.end)}`}
+            aria-current={item.stepId != null && item.stepId === selectedStep ? "true" : undefined}
             className="absolute top-1 h-4 rounded-sm text-left"
             style={{
               left: `${(item.start / duration) * 100}%`,
               width: `${Math.max(((item.end - item.start) / duration) * 100, 0.8)}%`,
               background: item.color,
+              boxShadow: item.stepId != null && item.stepId === selectedStep ? "inset 0 0 0 2px var(--teal)" : undefined,
             }}
             onClick={() => {
               onSeek(item.start);

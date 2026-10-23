@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { AssetPreview } from "../components/AssetPreview";
 import { BeforeAfter } from "../components/BeforeAfter";
 import { Bone } from "../components/Skeleton";
@@ -36,6 +36,12 @@ function analysisTab(pathname: string, runId: string): string {
   return (ANALYSIS_TABS as readonly string[]).includes(head) ? head : "";
 }
 
+const OpenInspectContext = createContext<() => void>(() => {});
+
+function useOpenInspect() {
+  return useContext(OpenInspectContext);
+}
+
 export function RunLayout() {
   const { runId = "" } = useParams();
   return <RunAnalysis runId={runId} />;
@@ -44,7 +50,12 @@ export function RunLayout() {
 export function RunAnalysis({ runId, embedded = false }: { runId: string; embedded?: boolean }) {
   const [params] = useSearchParams();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const [tab, setTab] = useState("objects");
+  const openInspect = () => {
+    if (embedded) setTab("");
+    else navigate(`/runs/${runId}`);
+  };
   const query = useQuery({
     queryKey: ["run", runId],
     queryFn: () => api.run(runId),
@@ -62,11 +73,13 @@ export function RunAnalysis({ runId, embedded = false }: { runId: string; embedd
   if (!query.data) return <AnalysisPending embedded={embedded} runId={runId} tab={activeTab} onTab={setTab} />;
   const bundle = query.data;
   return (
-    <BundleContext.Provider value={bundle}>
-      <AnalysisFrame embedded={embedded} runId={runId} tab={activeTab} onTab={setTab} bundle={bundle}>
-        {embedded ? <AnalysisTab tab={tab} /> : <Outlet />}
-      </AnalysisFrame>
-    </BundleContext.Provider>
+    <OpenInspectContext.Provider value={openInspect}>
+      <BundleContext.Provider value={bundle}>
+        <AnalysisFrame embedded={embedded} runId={runId} tab={activeTab} onTab={setTab} bundle={bundle}>
+          {embedded ? <AnalysisTab tab={tab} /> : <Outlet />}
+        </AnalysisFrame>
+      </BundleContext.Provider>
+    </OpenInspectContext.Provider>
   );
 }
 
@@ -603,6 +616,7 @@ export function WorkflowPage() {
 
 export function StepsPage() {
   const bundle = useBundle();
+  const openInspect = useOpenInspect();
   const [index, setIndex] = useState(0);
   const step = bundle.steps[index];
   if (!step) return <p className="text-[var(--muted)]">No workflow steps.</p>;
@@ -625,13 +639,28 @@ export function StepsPage() {
           return frame ? <img key={stamp} src={frame.url} alt="" className="panel aspect-video w-full bg-black object-contain" /> : null;
         })}
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap items-start gap-4">
         {step.required_objects.map((id) => {
           const object = bundle.objects.find((item) => item.local_id === id);
-          return <div key={id} className="text-xs">{object?.primary_image_url && <img src={object.primary_image_url} alt="" className="h-16 w-16 rounded bg-black object-contain" />}<div>{humanize(object?.label ?? id)}</div></div>;
+          return (
+            <div key={id} className="w-28 shrink-0 text-xs">
+              {object?.primary_image_url && <img src={object.primary_image_url} alt="" className="mb-2 h-16 w-16 rounded bg-black object-contain" />}
+              <div className="leading-snug">{humanize(object?.label ?? id)}</div>
+            </div>
+          );
         })}
       </div>
-      <button className="btn" onClick={() => { useInspector.getState().setTime(start); useInspector.getState().selectStep(step.local_id); }}>Show on timeline</button>
+      <button className="btn" type="button" onClick={() => {
+        const inspector = useInspector.getState();
+        const linked = bundle.actions.find((item) => step.action_local_ids.includes(item.local_id));
+        const covering = bundle.actions.find((item) => item.start <= end && item.end >= start);
+        inspector.setPlaying(false);
+        inspector.setTime(start);
+        inspector.selectStep(step.local_id);
+        inspector.selectAction((linked ?? covering)?.local_id ?? null);
+        inspector.setLoop(end > start ? { start, end } : null);
+        openInspect();
+      }}>Show on timeline</button>
     </div>
   );
 }

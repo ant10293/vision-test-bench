@@ -2,7 +2,22 @@ import { useEffect, useRef, useState } from "react";
 import type { Bundle } from "../lib/types";
 import { observationsAt } from "../lib/analysis";
 import { labeledId } from "../lib/humanize";
+import { labelSpan, wrapLines } from "../lib/wrapText";
 import { useInspector } from "../stores/ui";
+
+const LABEL_SIZE = 14;
+const LABEL_LINE = LABEL_SIZE * 1.2;
+const LABEL_FONT = `${LABEL_SIZE}px "IBM Plex Sans", sans-serif`;
+
+let labelCanvas: HTMLCanvasElement | null = null;
+
+function labelWidth(text: string): number {
+  labelCanvas ??= document.createElement("canvas");
+  const context = labelCanvas.getContext("2d");
+  if (!context) return text.length * LABEL_SIZE * 0.5;
+  context.font = LABEL_FONT;
+  return context.measureText(text).width;
+}
 
 export function VideoStage({ bundle }: { bundle: Bundle }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -11,11 +26,18 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [content, setContent] = useState({ x: 0, y: 0, w: 1, h: 1, vw: 640, vh: 360 });
+  const [fontReady, setFontReady] = useState(false);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (Math.abs(video.currentTime - time) > 0.08) video.currentTime = time;
+    const seek = () => {
+      const target = useInspector.getState().time;
+      if (Number.isFinite(target) && Math.abs(video.currentTime - target) > 0.08) video.currentTime = target;
+    };
+    seek();
+    video.addEventListener("loadedmetadata", seek);
+    return () => video.removeEventListener("loadedmetadata", seek);
   }, [time]);
 
   useEffect(() => {
@@ -54,6 +76,16 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
       : [...ordered].reverse().find((frame) => frame.timestamp < now - 0.01);
     setTime(next?.timestamp ?? Math.max(0, now + direction / 10));
   }
+
+  useEffect(() => {
+    let cancel = false;
+    document.fonts.load(LABEL_FONT).then(() => {
+      if (!cancel) setFontReady(true);
+    });
+    return () => {
+      cancel = true;
+    };
+  }, []);
 
   const visible = overlay ? observationsAt(bundle, time) : [];
   const src = bundle.video ? bundle.video.playback_url : "";
@@ -118,21 +150,37 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
               if (!obs.bbox) return null;
               const object = bundle.objects.find((item) => item.local_id === obs.object_local_id);
               const color = object?.color ?? "#7EB6FF";
+              const x = obs.bbox.x * content.vw;
+              const y = obs.bbox.y * content.vh;
+              const w = obs.bbox.w * content.vw;
+              const h = obs.bbox.h * content.vh;
+              const others = visible.flatMap((item) => (
+                item.bbox && item.id !== obs.id ? [{ x: item.bbox.x * content.vw, width: item.bbox.w * content.vw }] : []
+              ));
+              const span = labelSpan(x, w, others, LABEL_SIZE);
+              const label = object ? labeledId(object.local_id, object.label) : "";
+              const lines = label ? wrapLines(label, span.width, labelWidth) : [];
+              const anchor = Math.max(LABEL_SIZE, y - 4);
+              const firstBaseline = Math.max(LABEL_SIZE, anchor - Math.max(0, lines.length - 1) * LABEL_LINE);
               return (
-                <g key={obs.id}>
+                <g key={`${obs.id}-${fontReady ? "font" : "fallback"}`}>
                   <rect
-                    x={obs.bbox.x * content.vw}
-                    y={obs.bbox.y * content.vh}
-                    width={obs.bbox.w * content.vw}
-                    height={obs.bbox.h * content.vh}
+                    x={x}
+                    y={y}
+                    width={w}
+                    height={h}
                     fill={color}
                     fillOpacity={0.12}
                     stroke={color}
                     strokeWidth={2}
                   />
-                  <text x={obs.bbox.x * content.vw + 4} y={Math.max(14, obs.bbox.y * content.vh - 4)} fill={color} fontSize={14}>
-                    {object ? labeledId(object.local_id, object.label) : ""}
-                  </text>
+                  {lines.length > 0 && (
+                    <text x={span.x} y={firstBaseline} fill={color} fontSize={LABEL_SIZE} fontFamily="IBM Plex Sans, sans-serif">
+                      {lines.map((line, index) => (
+                        <tspan key={index} x={span.x} dy={index === 0 ? 0 : LABEL_LINE}>{line}</tspan>
+                      ))}
+                    </text>
+                  )}
                 </g>
               );
             })}
