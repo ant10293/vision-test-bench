@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
 import { ProjectCosts } from "../components/ProjectCosts";
+import { Bone } from "../components/Skeleton";
 import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
 import { api, formatTime, formatWhen, type ProjectSummary } from "../lib/api";
 import type { VideoInfo } from "../lib/types";
@@ -31,32 +32,56 @@ function mosaicColumns(count: number): number {
   return Math.min(4, Math.ceil(count / 2));
 }
 
-function ProjectCard({ project, videos, onOpen }: { project: ProjectSummary; videos: VideoInfo[]; onOpen: () => void }) {
+const PROJECT_PLACEHOLDERS = 2;
+
+function ProjectCard({
+  project,
+  videos = [],
+  videosPending = false,
+  onOpen,
+}: {
+  project?: ProjectSummary;
+  videos?: VideoInfo[];
+  videosPending?: boolean;
+  onOpen?: () => void;
+}) {
+  const pending = project == null;
   const listed = videos.filter((video) => video.ingest_status !== "failed");
   const frames = listed.filter((video) => video.thumbnail_url && videoReady(video));
   const columns = mosaicColumns(frames.length);
   const preview = frames.slice(0, columns * 2);
   const processing = listed.some((video) => video.ingest_status === "processing");
-  return (
-    <button type="button" className="panel overflow-hidden text-left" onClick={onOpen}>
-      {preview.length ? (
-        <div className={preview.length === 1 ? "thumb-grid is-single" : "thumb-grid"} style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
-          {preview.map((video) => (
-            <img key={video.id} src={video.thumbnail_url} alt="" />
-          ))}
-        </div>
-      ) : (
-        <div className="thumb-empty">
-          {processing ? "Processing…" : "No videos"}
-        </div>
-      )}
+  const media = pending || videosPending ? (
+    <div className="thumb-grid is-single">
+      <Bone className="bone-fill" />
+    </div>
+  ) : preview.length ? (
+    <div className={preview.length === 1 ? "thumb-grid is-single" : "thumb-grid"} style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+      {preview.map((video) => (
+        <img key={video.id} src={video.thumbnail_url} alt="" />
+      ))}
+    </div>
+  ) : (
+    <div className="thumb-empty">
+      {processing ? "Processing…" : "No videos"}
+    </div>
+  );
+  const body = (
+    <>
+      {media}
       <div className="space-y-1 p-3 text-sm">
-        <div className="truncate">{project.name}</div>
+        <div className="truncate">{pending ? <Bone width="58%" /> : project.name}</div>
         <div className="mono text-xs text-[var(--muted)]">
-          {listed.length} {listed.length === 1 ? "video" : "videos"}
-          {formatWhen(project.created_at) ? ` · ${formatWhen(project.created_at)}` : ""}
+          {pending || videosPending ? <Bone width="9ch" /> : `${listed.length} ${listed.length === 1 ? "video" : "videos"}`}
+          {!pending && formatWhen(project.created_at) ? ` · ${formatWhen(project.created_at)}` : ""}
         </div>
       </div>
+    </>
+  );
+  if (pending || !onOpen) return <div className="panel overflow-hidden text-left" aria-hidden="true">{body}</div>;
+  return (
+    <button type="button" className="panel overflow-hidden text-left" onClick={onOpen}>
+      {body}
     </button>
   );
 }
@@ -99,7 +124,25 @@ function slotIndexAtPoint(grid: HTMLElement, x: number, y: number): number | nul
   return best;
 }
 
-function VideoFace({ video, order }: { video: VideoInfo; order: number }) {
+const VIDEO_PLACEHOLDERS = 3;
+
+function VideoFace({ video, order }: { video?: VideoInfo; order?: number }) {
+  if (!video || order == null) {
+    return (
+      <>
+        <div className="aspect-video w-full bg-black">
+          <Bone className="bone-fill" />
+        </div>
+        <div className="flex items-end gap-3 p-3 text-sm" aria-hidden="true">
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="truncate"><Bone width="72%" /></div>
+            <div className="mono truncate text-xs text-[var(--muted)]"><Bone width="92%" /></div>
+          </div>
+          <div className="mono shrink-0 text-xs text-[var(--muted)]"><Bone width="1.5ch" /></div>
+        </div>
+      </>
+    );
+  }
   return (
     <>
       {video.thumbnail_url && <img src={video.thumbnail_url} alt="" className="aspect-video w-full bg-black object-contain" />}
@@ -188,8 +231,8 @@ export function VideosPage() {
   const clearDraft = useUploads((state) => state.clearDraft);
   const forgetProject = useUploads((state) => state.forgetProject);
   const adoptServer = useUploads((state) => state.adoptServer);
-  const mode = view.mode;
-  const editId = view.editId;
+  const mode = requestedProject ? "edit" : view.mode;
+  const editId = mode === "edit" ? (requestedProject || view.editId) : "";
   const name = view.name;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -279,6 +322,11 @@ export function VideosPage() {
   const draftItems = items.filter((item) => item.projectId === "");
   const canSave = Boolean(name.trim()) && draftItems.some((item) => item.phase === "staged") && !saving;
   const creating = mode === "create";
+  const studiesReady = projects.data !== undefined && (tasks.data !== undefined || tasks.isError);
+  const libraryLoading = mode === "library" && !projects.isError && !studiesReady;
+  const projectPending = mode === "edit" && Boolean(editId) && projects.data === undefined && !projects.isError;
+  const storagePending = labSettings.data === undefined && !labSettings.isError;
+  const videosPending = mode === "edit" && Boolean(editId) && projectVideos.data === undefined && !projectVideos.isError;
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragLive = useRef<DragState | null>(null);
   const suppressClick = useRef(false);
@@ -431,7 +479,18 @@ export function VideosPage() {
 
       {mode === "library" && <StorageSettings />}
 
-      {mode === "library" && (
+      {mode === "library" && projects.isError && (
+        <p className="text-sm text-[var(--rose)]">{(projects.error as Error).message}</p>
+      )}
+      {libraryLoading && (
+        <div aria-busy="true">
+          <p className="sr-only">Loading projects</p>
+          <div className="project-grid">
+            {Array.from({ length: PROJECT_PLACEHOLDERS }, (_, index) => <ProjectCard key={index} />)}
+          </div>
+        </div>
+      )}
+      {mode === "library" && studiesReady && (
         studies.length ? (
           <div className="project-grid">
             {studies.map((project) => (
@@ -439,6 +498,7 @@ export function VideosPage() {
                 key={project.id}
                 project={project}
                 videos={videosByProject.get(project.id) ?? []}
+                videosPending={libraryVideos.data === undefined && !libraryVideos.isError}
                 onOpen={() => openEdit(project.id)}
               />
             ))}
@@ -448,7 +508,7 @@ export function VideosPage() {
         )
       )}
 
-      {(creating || (mode === "edit" && editing)) && (
+      {(creating || (mode === "edit" && editing) || projectPending) && (
         <section className="space-y-3">
           <div>
             <button className="text-sm text-[var(--muted)] disabled:opacity-45" onClick={requestBackToLibrary} disabled={saving}>← Back to library</button>
@@ -467,11 +527,11 @@ export function VideosPage() {
             ) : (
               <>
                 <div className="mt-2 flex items-end justify-between gap-4">
-                  <h2 className="min-w-0 text-lg">{editing?.name}</h2>
+                  <h2 className="min-w-0 text-lg">{editing ? editing.name : <Bone width="12rem" />}</h2>
                   {mode === "edit" && editId && <ProjectCosts projectId={editId} className="is-end" />}
                 </div>
                 <p className="text-sm text-[var(--muted)]">
-                  {reference
+                  {storagePending ? <Bone width="80%" /> : reference
                     ? "Add a path or drop a file, depending on the storage setting. Analysis keeps running if you switch pages. Drag a card to reorder it."
                     : "Drop videos to add them. Upload and analysis keep running if you switch pages. Drag a card to reorder it."}
                 </p>
@@ -479,7 +539,12 @@ export function VideosPage() {
             )}
           </div>
           <StorageSettings />
-          {reference ? (
+          {storagePending ? (
+            <div className="drop-zone" aria-hidden="true">
+              <Bone width="16rem" />
+              <Bone width="10rem" />
+            </div>
+          ) : reference ? (
             <VideoPathForm
               onAdd={(paths) => {
                 if (creating) stagePaths(paths);
@@ -487,7 +552,7 @@ export function VideosPage() {
               }}
             />
           ) : null}
-          {(!reference || assetRows.length > 0) && <AssetDropZone
+          {!storagePending && (!reference || assetRows.length > 0) && <AssetDropZone
             chooser={!reference}
             accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
             multiple
@@ -512,7 +577,19 @@ export function VideosPage() {
         </section>
       )}
 
-      {mode === "edit" && (
+      {videosPending && (
+        <div aria-busy="true">
+          <p className="sr-only">Loading videos</p>
+          <div className="video-grid">
+            {Array.from({ length: VIDEO_PLACEHOLDERS }, (_, index) => (
+              <div key={index} className="video-card panel overflow-hidden">
+                <VideoFace />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {mode === "edit" && !videosPending && (
         <div
           ref={gridRef}
           className="video-grid"
@@ -560,7 +637,7 @@ export function VideosPage() {
         document.body,
       )}
       {libraryVideos.isError && <p className="text-sm text-[var(--rose)]">{(libraryVideos.error as Error).message}</p>}
-      {mode === "edit" && !projectVideos.isLoading && !editingVideos.length && !assetRows.length && (
+      {mode === "edit" && projectVideos.isSuccess && !editingVideos.length && !assetRows.length && (
         <p className="text-sm text-[var(--muted)]" aria-live="polite">
           {reference ? "This project has no videos yet. Add a path above." : "This project has no videos yet. Drop one above."}
         </p>

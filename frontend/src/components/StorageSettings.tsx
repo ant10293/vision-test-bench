@@ -10,7 +10,7 @@ export function StorageSettings() {
     mutationFn: (videoStorage: VideoStorage) => api.saveSettings({ video_storage: videoStorage }),
     onSuccess: (data) => client.setQueryData(["settings"], data),
   });
-  const mode = settings.data?.video_storage ?? "copy";
+  const mode = settings.data?.video_storage;
   const pending = save.isPending || settings.isLoading;
 
   return (

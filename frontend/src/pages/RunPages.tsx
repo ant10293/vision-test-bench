@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, NavLink, Outlet, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useEffect, useState, type ReactNode } from "react";
 import { AssetPreview } from "../components/AssetPreview";
 import { BeforeAfter } from "../components/BeforeAfter";
+import { Bone } from "../components/Skeleton";
 import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
 import { WorkflowGraph } from "../components/WorkflowGraph";
@@ -20,6 +21,20 @@ function label(tab: string) {
 }
 
 const ANALYSIS_TABS = ["", "objects", "states", "workflow", "steps", "pipeline", "audio", "evaluate", "logs"];
+const OBJECT_GRID = "grid gap-3 sm:grid-cols-2 xl:grid-cols-4";
+const OBJECT_PLACEHOLDERS = 4;
+const INSPECT_LAYOUT = "grid min-h-[70vh] min-w-0 gap-3 xl:grid-cols-[280px_minmax(0,1fr)_320px]";
+const INSPECT_SIDE = "panel max-h-[78vh] space-y-3 overflow-auto p-3";
+const INSPECT_STAGE = "panel min-w-0 p-3";
+const INSPECT_DETAIL = "panel max-h-[78vh] space-y-3 overflow-auto p-3 text-sm";
+const ACTION_PLACEHOLDERS = 5;
+
+function analysisTab(pathname: string, runId: string): string {
+  const base = `/runs/${runId}`;
+  if (!pathname.startsWith(base)) return "";
+  const head = pathname.slice(base.length).replace(/^\//, "").split("/")[0] ?? "";
+  return (ANALYSIS_TABS as readonly string[]).includes(head) ? head : "";
+}
 
 export function RunLayout() {
   const { runId = "" } = useParams();
@@ -28,6 +43,7 @@ export function RunLayout() {
 
 export function RunAnalysis({ runId, embedded = false }: { runId: string; embedded?: boolean }) {
   const [params] = useSearchParams();
+  const { pathname } = useLocation();
   const [tab, setTab] = useState("objects");
   const query = useQuery({
     queryKey: ["run", runId],
@@ -41,70 +57,215 @@ export function RunAnalysis({ runId, embedded = false }: { runId: string; embedd
     const time = Number(params.get("t"));
     if (Number.isFinite(time) && params.get("t")) useInspector.getState().setTime(time);
   }, [params, runId]);
+  const activeTab = embedded ? tab : analysisTab(pathname, runId);
   if (query.isError) return <p className="text-[var(--rose)]">{(query.error as Error).message}</p>;
-  if (!query.data) return <p className="text-[var(--muted)]">Loading analysis…</p>;
+  if (!query.data) return <AnalysisPending embedded={embedded} runId={runId} tab={activeTab} onTab={setTab} />;
   const bundle = query.data;
   return (
     <BundleContext.Provider value={bundle}>
-    <div className="space-y-3">
+      <AnalysisFrame embedded={embedded} runId={runId} tab={activeTab} onTab={setTab} bundle={bundle}>
+        {embedded ? <AnalysisTab tab={tab} /> : <Outlet />}
+      </AnalysisFrame>
+    </BundleContext.Provider>
+  );
+}
+
+export function AnalysisPending({
+  embedded,
+  runId = "",
+  tab,
+  onTab,
+}: {
+  embedded: boolean;
+  runId?: string;
+  tab: string;
+  onTab?: (tab: string) => void;
+}) {
+  return (
+    <AnalysisFrame embedded={embedded} runId={runId} tab={tab} onTab={onTab} bundle={null} pending>
+      <PendingPane tab={tab} />
+    </AnalysisFrame>
+  );
+}
+
+function AnalysisFrame({
+  embedded,
+  runId,
+  tab,
+  onTab,
+  bundle,
+  pending = false,
+  children,
+}: {
+  embedded: boolean;
+  runId: string;
+  tab: string;
+  onTab?: (tab: string) => void;
+  bundle: Bundle | null;
+  pending?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-3" aria-busy={pending || undefined}>
       <div>
         {!embedded && <Link className="text-sm text-[var(--muted)]" to="/runs">← Back to runs</Link>}
-        <header className={`${embedded ? "" : "mt-2 "}flex flex-wrap items-start justify-between gap-3`}>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              {embedded ? (
-                <h2 className="text-xl font-medium">{humanizeText(bundle.run.name)}</h2>
-              ) : (
-                <h1 className="text-xl font-medium">{humanizeText(bundle.run.name)}</h1>
-              )}
+        <AnalysisHeader bundle={bundle} embedded={embedded} />
+      </div>
+      <AnalysisNav embedded={embedded} runId={runId} tab={tab} pending={pending} onTab={onTab} />
+      {children}
+      {pending && <span className="sr-only">Loading analysis</span>}
+    </div>
+  );
+}
+
+function AnalysisHeader({ bundle, embedded }: { bundle: Bundle | null; embedded: boolean }) {
+  const Title = embedded ? "h2" : "h1";
+  return (
+    <header className={`${embedded ? "" : "mt-2 "}flex flex-wrap items-start justify-between gap-3`}>
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Title className="text-xl font-medium">
+            {bundle ? humanizeText(bundle.run.name) : <Bone width="14rem" />}
+          </Title>
+          {bundle ? (
+            <>
               <span className="tag">{humanize(bundle.run.status)}</span>
               {bundle.run.fixture && <span className="tag fixture">Fixture — authored, not model output</span>}
               <span className="tag">{humanize(bundle.run.research_mode)}</span>
-            </div>
-            <p className="mt-1 text-xs text-[var(--muted)]">
+            </>
+          ) : (
+            <>
+              <span className="tag"><Bone width="5.5rem" /></span>
+              <span className="tag"><Bone width="6.5rem" /></span>
+            </>
+          )}
+        </div>
+        <p className="mt-1 text-xs text-[var(--muted)]">
+          {bundle ? (
+            <>
               {humanize(bundle.run.provider_id)} / {humanize(bundle.run.model_id)} · {humanize(bundle.run.modality)} · {humanize(bundle.run.sampling_preset)}
               {bundle.revision ? ` · ${humanize(bundle.revision.layer)} v${bundle.revision.version}` : ""}
               {" · "}{formatUsd(bundle.run.cost_usd)}
               {bundle.run.unpriced_calls > 0 ? ` · ${bundle.run.unpriced_calls} unpriced` : ""}
-            </p>
-            {bundle.coverage?.temporal_coverage_note && (
-              <p className="mt-1 max-w-3xl text-xs text-[var(--amber)]">{bundle.coverage.temporal_coverage_note}</p>
-            )}
-          </div>
-          <RunActions bundle={bundle} />
-        </header>
+            </>
+          ) : (
+            <Bone width="28rem" />
+          )}
+        </p>
+        {bundle?.coverage?.temporal_coverage_note && (
+          <p className="mt-1 max-w-3xl text-xs text-[var(--amber)]">{bundle.coverage.temporal_coverage_note}</p>
+        )}
       </div>
-      <nav className="flex gap-2 overflow-auto text-sm">
-        {ANALYSIS_TABS.map((item) => {
-          const name = label(item || "inspect");
-          if (embedded) {
-            const selected = tab === item;
-            return (
-              <button
-                key={item || "inspect"}
-                type="button"
-                className={`rounded-md px-2 py-1 ${selected ? "bg-[#1a221d] text-[var(--teal)]" : "text-[var(--muted)]"}`}
-                onClick={() => setTab(item)}
-              >
-                {name}
-              </button>
-            );
-          }
+      <RunActions bundle={bundle} />
+    </header>
+  );
+}
+
+function AnalysisNav({
+  embedded,
+  runId,
+  tab,
+  pending,
+  onTab,
+}: {
+  embedded: boolean;
+  runId: string;
+  tab: string;
+  pending: boolean;
+  onTab?: (tab: string) => void;
+}) {
+  return (
+    <nav className="flex gap-2 overflow-auto text-sm">
+      {ANALYSIS_TABS.map((item) => {
+        const name = label(item || "inspect");
+        const key = item || "inspect";
+        if (embedded) {
+          const selected = tab === item;
           return (
-            <NavLink
-              key={item || "inspect"}
-              end={item === ""}
-              to={item ? `/runs/${runId}/${item}` : `/runs/${runId}`}
-              className={({ isActive }) => `rounded-md px-2 py-1 ${isActive ? "bg-[#1a221d] text-[var(--teal)]" : "text-[var(--muted)]"}`}
+            <button
+              key={key}
+              type="button"
+              disabled={pending}
+              className={`rounded-md px-2 py-1 ${selected ? "bg-[#1a221d] text-[var(--teal)]" : "text-[var(--muted)]"}`}
+              onClick={() => onTab?.(item)}
             >
               {name}
-            </NavLink>
+            </button>
           );
-        })}
-      </nav>
-      {embedded ? <AnalysisTab tab={tab} /> : <Outlet />}
+        }
+        return (
+          <NavLink
+            key={key}
+            end={item === ""}
+            to={item ? `/runs/${runId}/${item}` : `/runs/${runId}`}
+            className={({ isActive }) => `rounded-md px-2 py-1 ${isActive ? "bg-[#1a221d] text-[var(--teal)]" : "text-[var(--muted)]"}`}
+          >
+            {name}
+          </NavLink>
+        );
+      })}
+    </nav>
+  );
+}
+
+function PendingPane({ tab }: { tab: string }) {
+  if (tab === "objects") return <ObjectsSkeleton />;
+  if (tab === "") return <InspectSkeleton />;
+  return <PanelSkeleton />;
+}
+
+function ObjectsSkeleton() {
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        <input className="field max-w-xs" placeholder="Add a missed object" disabled />
+        <button className="btn" type="button" disabled>Add</button>
+      </div>
+      <div className={OBJECT_GRID}>
+        {Array.from({ length: OBJECT_PLACEHOLDERS }, (_, index) => <ObjectTile key={index} object={null} />)}
+      </div>
     </div>
-    </BundleContext.Provider>
+  );
+}
+
+function InspectSkeleton() {
+  return (
+    <div className={INSPECT_LAYOUT}>
+      <section className={INSPECT_SIDE}>
+        <Timeline />
+        <div className="space-y-1" aria-hidden="true">
+          {Array.from({ length: ACTION_PLACEHOLDERS }, (_, index) => (
+            <div key={index} className="block w-full rounded-md px-2 py-1 text-left text-sm">
+              <Bone width="78%" />
+              <div className="mono text-[10px]"><Bone width="6rem" /></div>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className={INSPECT_STAGE}>
+        <div className="stage-slot flex min-h-0 w-full flex-col gap-2">
+          <div className="stage-frame overflow-hidden rounded-lg bg-black">
+            <Bone className="bone-fill" />
+          </div>
+        </div>
+      </section>
+      <section className={INSPECT_DETAIL} aria-hidden="true">
+        <Bone width="32%" />
+        <div className="font-medium"><Bone width="70%" /></div>
+        <div className="text-xs"><Bone width="48%" /></div>
+        <Bone width="92%" />
+      </section>
+    </div>
+  );
+}
+
+function PanelSkeleton() {
+  return (
+    <div className="panel space-y-2 p-3 text-sm" aria-hidden="true">
+      <Bone width="36%" />
+      <Bone width="88%" />
+      <Bone width="70%" />
+    </div>
   );
 }
 
@@ -131,9 +292,20 @@ function AnalysisTab({ tab }: { tab: string }) {
   }
 }
 
-function RunActions({ bundle }: { bundle: Bundle }) {
+function RunActions({ bundle }: { bundle: Bundle | null }) {
   const client = useQueryClient();
   const navigate = useNavigate();
+  if (!bundle) {
+    return (
+      <div className="flex flex-wrap gap-2" aria-hidden="true">
+        <span className="btn">Duplicate</span>
+        <span className="btn">Cancel</span>
+        <span className="btn">Delete</span>
+        <span className="btn">Export archive</span>
+        <span className="btn">Analysis JSON</span>
+      </div>
+    );
+  }
   const refresh = () => client.invalidateQueries({ queryKey: ["run", bundle.run.id] });
   return (
     <div className="flex flex-wrap gap-2">
@@ -151,8 +323,8 @@ export function InspectPage() {
   const actionId = useInspector((state) => state.selectedAction);
   const action = bundle.actions.find((item) => item.local_id === actionId) ?? bundle.actions[0];
   return (
-    <div className="grid min-h-[70vh] min-w-0 gap-3 xl:grid-cols-[280px_minmax(0,1fr)_320px]">
-      <section className="panel max-h-[78vh] space-y-3 overflow-auto p-3">
+    <div className={INSPECT_LAYOUT}>
+      <section className={INSPECT_SIDE}>
         <Timeline bundle={bundle} />
         <div className="space-y-1">
           {bundle.actions.map((item, index) => (
@@ -171,8 +343,8 @@ export function InspectPage() {
           ))}
         </div>
       </section>
-      <section className="panel min-w-0 p-3"><VideoStage bundle={bundle} /></section>
-      <section className="panel max-h-[78vh] space-y-3 overflow-auto p-3 text-sm">
+      <section className={INSPECT_STAGE}><VideoStage bundle={bundle} /></section>
+      <section className={INSPECT_DETAIL}>
         {action ? <ActionDetail bundle={bundle} actionId={action.local_id} /> : <p className="text-[var(--muted)]">No actions yet.</p>}
       </section>
     </div>
@@ -222,6 +394,42 @@ function ActionDetail({ bundle, actionId }: { bundle: Bundle; actionId: string }
   );
 }
 
+function ObjectTile({ object, onOpen }: { object: Bundle["objects"][number] | null; onOpen?: () => void }) {
+  const media = object?.primary_image_url ? (
+    <img src={object.primary_image_url} alt="" className="h-36 w-full bg-black object-contain" />
+  ) : object ? (
+    <div className="grid h-36 place-items-center text-xs text-[var(--muted)]">No crop yet</div>
+  ) : (
+    <div className="h-36 w-full bg-black"><Bone className="bone-fill" /></div>
+  );
+  const body = (
+    <>
+      {media}
+      <div className="space-y-1 p-3 text-sm">
+        {object ? (
+          <>
+            <div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ background: object.color }} />{humanize(object.local_id)}</div>
+            <div className="font-medium">{humanize(object.label)}</div>
+            <div className="text-xs text-[var(--muted)]">{object.observation_count} observations · {object.uncertain_identity ? "identity uncertain" : "identity stated"}</div>
+          </>
+        ) : (
+          <>
+            <div><Bone width="38%" /></div>
+            <div className="font-medium"><Bone width="64%" /></div>
+            <div className="text-xs"><Bone width="80%" /></div>
+          </>
+        )}
+      </div>
+    </>
+  );
+  if (!object) return <div className="panel overflow-hidden text-left" aria-hidden="true">{body}</div>;
+  return (
+    <button type="button" className="panel overflow-hidden text-left" onClick={onOpen}>
+      {body}
+    </button>
+  );
+}
+
 export function ObjectsPage() {
   const bundle = useBundle();
   const [open, setOpen] = useState<string | null>(null);
@@ -237,16 +445,9 @@ export function ObjectsPage() {
         <input className="field max-w-xs" placeholder="Add a missed object" value={label} onChange={(event) => setLabel(event.target.value)} />
         <button className="btn" disabled={!label} onClick={async () => { await api.addObject(bundle.run.id, label, "Added by the researcher."); setLabel(""); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Add</button>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className={OBJECT_GRID}>
         {bundle.objects.map((object) => (
-          <button key={object.id} className="panel overflow-hidden text-left" onClick={() => { setOpen(object.local_id); setPreview(null); }}>
-            {object.primary_image_url ? <img src={object.primary_image_url} alt="" className="h-36 w-full bg-black object-contain" /> : <div className="grid h-36 place-items-center text-xs text-[var(--muted)]">No crop yet</div>}
-            <div className="space-y-1 p-3 text-sm">
-              <div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ background: object.color }} />{humanize(object.local_id)}</div>
-              <div className="font-medium">{humanize(object.label)}</div>
-              <div className="text-xs text-[var(--muted)]">{object.observation_count} observations · {object.uncertain_identity ? "identity uncertain" : "identity stated"}</div>
-            </div>
-          </button>
+          <ObjectTile key={object.id} object={object} onOpen={() => { setOpen(object.local_id); setPreview(null); }} />
         ))}
       </div>
       {selected && (

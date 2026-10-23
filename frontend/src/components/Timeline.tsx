@@ -1,31 +1,52 @@
+import type { ReactNode } from "react";
 import { formatTime } from "../lib/api";
+import { Bone } from "./Skeleton";
 import { humanize } from "../lib/humanize";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
 
 const TRACKS = ["frames", "objects", "actions", "states", "ambiguities", "steps"] as const;
 
-export function Timeline({ bundle }: { bundle: Bundle }) {
-  const duration = Math.max(bundle.video?.duration_sec ?? 1, 0.1);
+export function Timeline({ bundle = null }: { bundle?: Bundle | null }) {
+  const duration = Math.max(bundle?.video?.duration_sec ?? 1, 0.1);
   const { time, setTime, selectAction, selectStep, selectObject } = useInspector();
 
   return (
     <div className="space-y-1">
-      <div className="relative h-4">
-        <input
-          aria-label="Seek"
-          className="w-full"
-          type="range"
-          min={0}
-          max={duration}
-          step={0.01}
-          value={Math.min(time, duration)}
-          onChange={(event) => setTime(Number(event.target.value))}
-        />
+      <div className="relative h-4 overflow-hidden">
+        {bundle ? (
+          <input
+            aria-label="Seek"
+            className="w-full"
+            type="range"
+            min={0}
+            max={duration}
+            step={0.01}
+            value={Math.min(time, duration)}
+            onChange={(event) => setTime(Number(event.target.value))}
+          />
+        ) : (
+          <Bone className="bone-fill" />
+        )}
       </div>
-      {TRACKS.map((track) => (
-        <Track key={track} name={track} duration={duration} bundle={bundle} onSeek={setTime} onAction={selectAction} onStep={selectStep} onObject={selectObject} />
-      ))}
+      {TRACKS.map((track) =>
+        bundle ? (
+          <Track key={track} name={track} duration={duration} bundle={bundle} onSeek={setTime} onAction={selectAction} onStep={selectStep} onObject={selectObject} />
+        ) : (
+          <TrackLane key={track} name={track}>
+            <Bone className="bone-fill" />
+          </TrackLane>
+        ),
+      )}
+    </div>
+  );
+}
+
+function TrackLane({ name, children }: { name: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[88px_1fr] items-center gap-2">
+      <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{name}</div>
+      <div className="relative h-6 overflow-hidden rounded bg-[#0d1016]">{children}</div>
     </div>
   );
 }
@@ -48,10 +69,8 @@ function Track({
   onObject: (id: string) => void;
 }) {
   return (
-    <div className="grid grid-cols-[88px_1fr] items-center gap-2">
-      <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{name}</div>
-      <div className="relative h-6 rounded bg-[#0d1016]">
-        {segments(name, bundle).map((item) => (
+    <TrackLane name={name}>
+      {segments(name, bundle).map((item) => (
           <button
             key={item.key}
             title={`${item.label} · ${formatTime(item.start)}–${formatTime(item.end)}`}
@@ -74,8 +93,7 @@ function Track({
             }}
           />
         ))}
-      </div>
-    </div>
+    </TrackLane>
   );
 }
 

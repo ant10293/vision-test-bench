@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
+import { Bone } from "./Skeleton";
 import { api, formatUsd, formatWhen } from "../lib/api";
 import { humanize } from "../lib/humanize";
 
@@ -16,7 +17,6 @@ export function ProjectCosts({ projectId, className = "" }: { projectId: string;
   });
   if (!projectId) return null;
   const data = costs.data;
-  const amount = data ? formatUsd(data.cost_usd) : costs.isError ? "—" : "…";
 
   function close() {
     setOpen(false);
@@ -34,7 +34,7 @@ export function ProjectCosts({ projectId, className = "" }: { projectId: string;
         onClick={() => setOpen(true)}
       >
         <span className="cost-total-label">Provider API cost</span>
-        <span className="mono text-xl">{amount}</span>
+        <span className="mono text-xl">{data ? formatUsd(data.cost_usd) : costs.isError ? "—" : <Bone width="7ch" />}</span>
       </button>
       {open && (
         <CostBreakdown

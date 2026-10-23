@@ -555,3 +555,41 @@ body.is-sorting * { cursor: grabbing; }
   height: 100%;
   object-fit: contain;
 }
+
+/* Height follows the surrounding type, so a bone stays the size of the text it replaces. */
+.bone {
+  display: inline-block;
+  height: 0.7em;
+  max-width: 100%;
+  border-radius: 0.25rem;
+  vertical-align: middle;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--text) 8%, var(--panel-2)) 0%,
+    color-mix(in srgb, var(--text) 18%, var(--panel-2)) 50%,
+    color-mix(in srgb, var(--text) 8%, var(--panel-2)) 100%
+  );
+  background-size: 220% 100%;
+  animation: bone-shine 1.4s ease-in-out infinite;
+}
+.bone-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+.thumb-grid > .bone {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+@keyframes bone-shine {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bone {
+    animation: none;
+    background: color-mix(in srgb, var(--text) 10%, var(--panel-2));
+  }
+}
