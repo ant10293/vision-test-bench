@@ -86,6 +86,11 @@ def test_catalog_lists_current_claude_models_ahead_of_older_ids():
     assert sonnet.native_video is False
     assert sonnet.image is True
     assert sonnet.supports_temperature is False
+    assert sonnet.reasoning_efforts == ("low", "medium", "high", "xhigh", "max")
+    assert "xhigh" not in lookup("anthropic", "claude-sonnet-4-6").reasoning_efforts
+    assert "max" in lookup("anthropic", "claude-opus-4-6").reasoning_efforts
+    assert lookup("anthropic", "claude-opus-4-5-20251101").reasoning_efforts == ("low", "medium", "high")
+    assert lookup("anthropic", "claude-sonnet-4-5").reasoning_efforts == ()
     cost, known = estimate_cost(sonnet, 1_000_000, 1_000_000)
     assert known is True
     assert cost == 12.0
@@ -117,8 +122,11 @@ def test_cli_result_is_unpriced_plan_usage(tmp_path: Path):
     )
     argv = build_argv("/usr/bin/claude", request.model_id, tmp_path / "system.txt", "{}")
     assert "--model" in argv and "claude-sonnet-5-5" in argv
+    assert "--effort" not in argv
     assert argv[argv.index("--max-turns") + 1] == "1"
     assert argv[argv.index("--tools") + 1] == ""
+    with_effort = build_argv("/usr/bin/claude", request.model_id, tmp_path / "system.txt", "{}", "xhigh")
+    assert with_effort[with_effort.index("--effort") + 1] == "xhigh"
     message = json.loads(build_stdin(request))
     blocks = message["message"]["content"]
     assert blocks[0]["text"] == "Frame timestamp 1.500 seconds."

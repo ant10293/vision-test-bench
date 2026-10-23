@@ -44,6 +44,8 @@ export function ExperimentPage() {
     return provider?.models ?? [];
   }, [providers.data, providerId]);
   const selected: Capability | undefined = models.find((item) => item.model_id === modelId) ?? models[0];
+  const reasoningOptions = selected?.reasoning_efforts ?? [];
+  const effort = reasoningOptions.includes(reasoning) ? reasoning : "";
 
   const create = useMutation({
     mutationFn: () =>
@@ -58,7 +60,7 @@ export function ExperimentPage() {
         analysis_pass: pass,
         segmentation_mode: segmentation,
         temperature: temperature === "" ? null : Number(temperature),
-        reasoning_effort: reasoning || null,
+        reasoning_effort: effort || null,
         prompt_key: "scene",
         max_frames: 48,
         transcribe,
@@ -110,7 +112,7 @@ export function ExperimentPage() {
       {selected && (
         <div className="panel space-y-1 p-3 text-xs text-[var(--muted)]">
           <div>Image {yes(selected.image)} · Native video {yes(selected.native_video)} · Structured JSON {yes(selected.structured_output)} · Temperature {yes(selected.supports_temperature)}</div>
-          <div>Max images per call {selected.max_images}. Reasoning: {selected.reasoning_efforts.join(", ") || "not offered"}.</div>
+          <div>Max images per call {selected.max_images}. Reasoning: {selected.reasoning_efforts.map(effortLabel).join(", ") || "not offered"}.</div>
           <div>{selected.notes}</div>
           {providerId === "anthropic" && providers.data?.find((item) => item.id === "anthropic")?.claude_code?.transport === "claude_code" && (
             <div>This run uses the linked Claude Code subscription. Spend counts against the plan, and the lab records the call as unpriced.</div>
@@ -150,9 +152,9 @@ export function ExperimentPage() {
           <input className="field stretch" disabled={!selected?.supports_temperature} value={temperature} placeholder={selected?.supports_temperature ? "model default" : "unsupported"} onChange={(event) => setTemperature(event.target.value)} />
         </Field>
         <Field label="Reasoning effort">
-          <select className="field stretch" value={reasoning} disabled={!selected?.reasoning_efforts.length} onChange={(event) => setReasoning(event.target.value)}>
+          <select className="field stretch" value={effort} disabled={!reasoningOptions.length} onChange={(event) => setReasoning(event.target.value)}>
             <option value="">default</option>
-            {selected?.reasoning_efforts.map((effort) => <option key={effort} value={effort}>{humanize(effort)}</option>)}
+            {reasoningOptions.map((option) => <option key={option} value={option}>{effortLabel(option)}</option>)}
           </select>
         </Field>
       </div>
@@ -232,6 +234,11 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       {children}
     </label>
   );
+}
+
+function effortLabel(value: string) {
+  if (value === "xhigh") return "Extra high";
+  return humanize(value);
 }
 
 function yes(value: boolean) {

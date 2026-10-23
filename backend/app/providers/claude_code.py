@@ -239,8 +239,14 @@ async def begin_login(force: bool = False) -> dict:
         return status
 
 
-def build_argv(binary: str, model_id: str, prompt_path: Path, schema: str) -> list[str]:
-    return [
+def build_argv(
+    binary: str,
+    model_id: str,
+    prompt_path: Path,
+    schema: str,
+    effort: str | None = None,
+) -> list[str]:
+    argv = [
         binary,
         "--print",
         "--input-format",
@@ -249,6 +255,10 @@ def build_argv(binary: str, model_id: str, prompt_path: Path, schema: str) -> li
         "json",
         "--model",
         model_id,
+    ]
+    if effort:
+        argv.extend(["--effort", effort])
+    argv.extend([
         "--system-prompt-file",
         str(prompt_path),
         "--json-schema",
@@ -266,7 +276,8 @@ def build_argv(binary: str, model_id: str, prompt_path: Path, schema: str) -> li
         "--safe-mode",
         "--strict-mcp-config",
         "--restricted",
-    ]
+    ])
+    return argv
 
 
 def _media_type(path: Path, head: bytes) -> str:
@@ -411,7 +422,7 @@ async def complete(request: GenerationRequest) -> ProviderResponse:
     with tempfile.TemporaryDirectory(prefix="claude-code-") as directory:
         prompt_path = Path(directory) / "system.txt"
         prompt_path.write_text(request.system_prompt, encoding="utf-8")
-        argv = build_argv(resolved, request.model_id, prompt_path, schema)
+        argv = build_argv(resolved, request.model_id, prompt_path, schema, request.reasoning_effort or None)
         try:
             code, out, err = await run_process(
                 argv,

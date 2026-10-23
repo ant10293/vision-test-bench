@@ -59,6 +59,7 @@ class AnthropicProvider:
                 f"{request.model_id} is limited to {caps.max_images} images per request. "
                 "The pipeline windows longer sequences before calling the provider."
             )
+        effort = _require_effort(request, caps)
         if request.metadata.get("transport") == "claude_code":
             if request.temperature is not None:
                 raise UnsupportedMode(
@@ -85,6 +86,8 @@ class AnthropicProvider:
         }
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature
+        if effort:
+            kwargs["output_config"] = {"effort": effort}
         schema = request.json_schema or {"type": "object"}
         kwargs["tools"] = [
             {
@@ -121,6 +124,15 @@ class AnthropicProvider:
             model_id=request.model_id,
             sdk_version=_sdk(),
         )
+
+
+def _require_effort(request: GenerationRequest, caps: ModelCapabilities) -> str | None:
+    effort = request.reasoning_effort or None
+    if effort and effort not in caps.reasoning_efforts:
+        raise UnsupportedMode(
+            f"Reasoning effort '{effort}' is not available on {request.model_id}."
+        )
+    return effort
 
 
 def _sdk() -> str:

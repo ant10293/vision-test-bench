@@ -23,6 +23,60 @@ def test_openai_refuses_native_video():
         asyncio.run(provider.generate("sk-test", request))
 
 
+def test_anthropic_sends_reasoning_effort(monkeypatch):
+    captured: dict = {}
+
+    class _Usage:
+        input_tokens = 3
+        output_tokens = 2
+
+    class _Block:
+        type = "tool_use"
+        name = "record_analysis"
+        input = {"ok": True}
+
+    class _Response:
+        content = [_Block()]
+        usage = _Usage()
+        id = "msg_1"
+
+        def model_dump(self):
+            return {"id": "msg_1", "model": "claude-sonnet-5-5", "usage": {}, "stop_reason": "tool_use"}
+
+    class _Messages:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return _Response()
+
+    class _Client:
+        messages = _Messages()
+
+    monkeypatch.setattr(AnthropicProvider, "_client", lambda self, secret, timeout: _Client())
+    request = GenerationRequest(
+        model_id="claude-sonnet-5-5",
+        system_prompt="s",
+        user_prompt="u",
+        reasoning_effort="xhigh",
+    )
+    import asyncio
+
+    asyncio.run(AnthropicProvider().generate("sk-test", request))
+    assert captured["output_config"] == {"effort": "xhigh"}
+
+
+def test_anthropic_refuses_effort_the_model_does_not_list():
+    request = GenerationRequest(
+        model_id="claude-sonnet-4-6",
+        system_prompt="s",
+        user_prompt="u",
+        reasoning_effort="xhigh",
+    )
+    with pytest.raises(UnsupportedMode, match="not available"):
+        import asyncio
+
+        asyncio.run(AnthropicProvider().generate("sk-test", request))
+
+
 def test_anthropic_refuses_native_video():
     provider = AnthropicProvider()
     request = GenerationRequest(

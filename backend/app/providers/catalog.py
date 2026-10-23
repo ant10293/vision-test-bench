@@ -26,6 +26,27 @@ _ANTHROPIC_NOTE = (
     "An API key run uses the catalog list rate when one is set."
 )
 
+# Messages API output_config.effort. xhigh is the "extra high" level.
+# Opus 4.6 and Sonnet 4.6 accept max but not xhigh. Opus 4.5 accepts the original three.
+# Older 4.5 and 4.1 ids are omitted because the effort parameter is not offered there.
+_EFFORT_ALL = ("low", "medium", "high", "xhigh", "max")
+_EFFORT_NO_XHIGH = ("low", "medium", "high", "max")
+_EFFORT_CORE = ("low", "medium", "high")
+_ANTHROPIC_EFFORTS: dict[str, tuple[str, ...]] = {
+    "claude-sonnet-5-5": _EFFORT_ALL,
+    "claude-opus-5-5": _EFFORT_ALL,
+    "claude-haiku-5-5": _EFFORT_ALL,
+    "claude-fable-5-1": _EFFORT_ALL,
+    "claude-opus-5": _EFFORT_ALL,
+    "claude-sonnet-5": _EFFORT_ALL,
+    "claude-fable-5": _EFFORT_ALL,
+    "claude-opus-4-8": _EFFORT_ALL,
+    "claude-opus-4-7": _EFFORT_ALL,
+    "claude-sonnet-4-6": _EFFORT_NO_XHIGH,
+    "claude-opus-4-6": _EFFORT_NO_XHIGH,
+    "claude-opus-4-5-20251101": _EFFORT_CORE,
+}
+
 # model id, context, temperature, input $/MTok, output $/MTok, extra note.
 # Current ids match the Claude Code /model list and the claude.ai picker.
 _ANTHROPIC_MODELS: tuple[tuple, ...] = (
@@ -207,6 +228,7 @@ for _model_id, _context, _temperature, _input_price, _output_price, _extra in _A
         structured_output=True,
         max_images=20,
         context_tokens=_context,
+        reasoning_efforts=_ANTHROPIC_EFFORTS.get(_model_id, ()),
         supports_temperature=_temperature,
         input_price_per_mtok=_input_price,
         output_price_per_mtok=_output_price,
