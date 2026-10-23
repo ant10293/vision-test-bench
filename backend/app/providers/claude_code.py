@@ -252,7 +252,8 @@ def build_argv(
         "--input-format",
         "stream-json",
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
         "--model",
         model_id,
     ]

@@ -107,7 +107,7 @@ def test_subscription_env_hides_the_api_key(monkeypatch):
 
 
 def test_cli_result_is_unpriced_plan_usage(tmp_path: Path):
-    from app.providers.claude_code import build_argv, build_stdin, response_from_payload
+    from app.providers.claude_code import build_argv, build_stdin, parse_cli_payload, response_from_payload
     from app.providers.types import FrameInput, GenerationRequest
 
     frame = tmp_path / "frame.png"
@@ -122,6 +122,9 @@ def test_cli_result_is_unpriced_plan_usage(tmp_path: Path):
     )
     argv = build_argv("/usr/bin/claude", request.model_id, tmp_path / "system.txt", "{}")
     assert "--model" in argv and "claude-sonnet-5-5" in argv
+    assert argv[argv.index("--input-format") + 1] == "stream-json"
+    assert argv[argv.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in argv
     assert "--effort" not in argv
     assert argv[argv.index("--max-turns") + 1] == "1"
     assert argv[argv.index("--tools") + 1] == ""
@@ -132,6 +135,14 @@ def test_cli_result_is_unpriced_plan_usage(tmp_path: Path):
     assert blocks[0]["text"] == "Frame timestamp 1.500 seconds."
     assert blocks[1]["source"]["media_type"] == "image/png"
     assert blocks[2]["text"] == "look"
+    streamed = "\n".join(
+        [
+            json.dumps({"type": "system", "subtype": "init"}),
+            json.dumps({"type": "assistant", "message": {"content": []}}),
+            json.dumps({"type": "result", "subtype": "success", "structured_output": {"objects": []}}),
+        ]
+    )
+    assert parse_cli_payload(streamed)["structured_output"] == {"objects": []}
     response = response_from_payload(
         {
             "type": "result",
