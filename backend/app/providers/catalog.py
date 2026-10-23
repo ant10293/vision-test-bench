@@ -21,8 +21,38 @@ _OPENAI_NOTE = (
     "unless a future capability record explicitly enables it for that model id."
 )
 _ANTHROPIC_NOTE = (
-    "Claude vision is an image API. Native video is disabled because current Messages API "
-    "documentation does not accept video files. Long sequences are split into ordered windows."
+    "Claude vision accepts images, not video files. Long sequences are windowed. "
+    "A Claude Code subscription run is recorded as unpriced plan usage. "
+    "An API key run uses the catalog list rate when one is set."
+)
+
+# model id, context, temperature, input $/MTok, output $/MTok, extra note.
+# Current ids match the Claude Code /model list and the claude.ai picker.
+_ANTHROPIC_MODELS: tuple[tuple, ...] = (
+    ("claude-sonnet-5-5", 1_000_000, False, 2.0, 10.0, ""),
+    ("claude-opus-5-5", 1_000_000, False, 4.0, 20.0, ""),
+    (
+        "claude-haiku-5-5",
+        1_000_000,
+        False,
+        0.10,
+        0.50,
+        "The Haiku 5.5 figures are the short-context list rate. API input over 100k tokens costs more.",
+    ),
+    ("claude-fable-5-1", 1_000_000, False, 10.0, 50.0, ""),
+    ("claude-opus-5", 1_000_000, False, None, None, ""),
+    ("claude-sonnet-5", 1_000_000, False, None, None, ""),
+    ("claude-fable-5", 1_000_000, False, None, None, ""),
+    ("claude-opus-4-8", 1_000_000, False, None, None, ""),
+    ("claude-opus-4-7", 1_000_000, False, None, None, ""),
+    ("claude-sonnet-4-6", 200_000, False, None, None, ""),
+    ("claude-opus-4-6", 200_000, False, None, None, ""),
+    ("claude-opus-4-5-20251101", 200_000, True, None, None, ""),
+    ("claude-haiku-4-5-20251001", 200_000, True, None, None, ""),
+    ("claude-sonnet-4-5-20250929", 200_000, True, None, None, ""),
+    ("claude-sonnet-4-5", 200_000, True, 3.0, 15.0, ""),
+    ("claude-opus-4-1", 200_000, True, 15.0, 75.0, ""),
+    ("claude-haiku-4-5", 200_000, True, 1.0, 5.0, ""),
 )
 
 MUSE_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
@@ -66,39 +96,6 @@ CATALOG: dict[tuple[str, str], ModelCapabilities] = {
         input_price_per_mtok=2.5,
         output_price_per_mtok=10.0,
         notes=_OPENAI_NOTE,
-    ),
-    ("anthropic", "claude-sonnet-4-5"): _caps(
-        model_id="claude-sonnet-4-5",
-        provider_id="anthropic",
-        image=True,
-        structured_output=True,
-        max_images=20,
-        context_tokens=200_000,
-        input_price_per_mtok=3.0,
-        output_price_per_mtok=15.0,
-        notes=_ANTHROPIC_NOTE,
-    ),
-    ("anthropic", "claude-opus-4-1"): _caps(
-        model_id="claude-opus-4-1",
-        provider_id="anthropic",
-        image=True,
-        structured_output=True,
-        max_images=20,
-        context_tokens=200_000,
-        input_price_per_mtok=15.0,
-        output_price_per_mtok=75.0,
-        notes=_ANTHROPIC_NOTE,
-    ),
-    ("anthropic", "claude-haiku-4-5"): _caps(
-        model_id="claude-haiku-4-5",
-        provider_id="anthropic",
-        image=True,
-        structured_output=True,
-        max_images=20,
-        context_tokens=200_000,
-        input_price_per_mtok=1.0,
-        output_price_per_mtok=5.0,
-        notes=_ANTHROPIC_NOTE,
     ),
     ("gemini", "gemini-2.5-flash"): _caps(
         model_id="gemini-2.5-flash",
@@ -201,6 +198,20 @@ CATALOG: dict[tuple[str, str], ModelCapabilities] = {
         notes="User-supplied JSON. Not a model call.",
     ),
 }
+
+for _model_id, _context, _temperature, _input_price, _output_price, _extra in _ANTHROPIC_MODELS:
+    CATALOG[("anthropic", _model_id)] = _caps(
+        model_id=_model_id,
+        provider_id="anthropic",
+        image=True,
+        structured_output=True,
+        max_images=20,
+        context_tokens=_context,
+        supports_temperature=_temperature,
+        input_price_per_mtok=_input_price,
+        output_price_per_mtok=_output_price,
+        notes=_ANTHROPIC_NOTE + (f" {_extra}" if _extra else ""),
+    )
 
 
 def lookup(provider_id: str, model_id: str) -> ModelCapabilities:

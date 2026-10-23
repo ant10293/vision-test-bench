@@ -11,6 +11,7 @@ import time
 import anthropic
 
 from app.providers.catalog import lookup
+from app.providers.claude_code import complete
 from app.providers.common import translate
 from app.providers.types import (
     GenerationRequest,
@@ -58,6 +59,13 @@ class AnthropicProvider:
                 f"{request.model_id} is limited to {caps.max_images} images per request. "
                 "The pipeline windows longer sequences before calling the provider."
             )
+        if request.metadata.get("transport") == "claude_code":
+            if request.temperature is not None:
+                raise UnsupportedMode(
+                    "Claude Code does not accept temperature. Leave it unset, "
+                    "or switch Anthropic runs to the API key."
+                )
+            return await complete(request)
         blocks: list[dict] = []
         for frame in request.frames:
             payload = __import__("base64").b64encode(frame.path.read_bytes()).decode("ascii")

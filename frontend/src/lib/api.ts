@@ -1,4 +1,4 @@
-import type { AudioModelStatus, Bundle, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
+import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -169,6 +169,17 @@ export const api = {
     ),
   addModel: (providerId: string, modelId: string) =>
     request(`/api/providers/${providerId}/models`, { method: "POST", body: JSON.stringify({ model_id: modelId }) }),
+  claudeCode: () => request<ClaudeCodeStatus>("/api/providers/anthropic/claude-code"),
+  saveClaudeCode: (binary: string, transport: ClaudeCodeSettings["transport"]) =>
+    request<ClaudeCodeSettings>("/api/providers/anthropic/claude-code", {
+      method: "PUT",
+      body: JSON.stringify({ binary, transport }),
+    }),
+  linkClaudeCode: (force = false) =>
+    request<ClaudeCodeStatus>("/api/providers/anthropic/claude-code/link", {
+      method: "POST",
+      body: JSON.stringify({ force }),
+    }),
   prompts: () =>
     request<{ id: string; key: string; name: string; version: number; body: string }[]>("/api/prompts"),
   savePrompt: (key: string, name: string, body: string) =>

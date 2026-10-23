@@ -303,6 +303,23 @@ export interface AudioModelStatus {
   audio_bytes_leave_machine: boolean;
 }
 
+export interface ClaudeCodeSettings {
+  binary: string;
+  transport: "api" | "claude_code";
+}
+
+export interface ClaudeCodeStatus extends ClaudeCodeSettings {
+  installed: boolean;
+  version: string;
+  logged_in: boolean;
+  auth_method: string;
+  subscription: string;
+  account: string;
+  error: string;
+  login_started: boolean;
+  login_url: string;
+}
+
 export interface ProviderInfo {
   id: string;
   configured: boolean;
@@ -312,6 +329,7 @@ export interface ProviderInfo {
   last_error: string;
   base_url: string;
   models: Capability[];
+  claude_code?: ClaudeCodeSettings;
 }
 
 export interface Capability {

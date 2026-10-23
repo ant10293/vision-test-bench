@@ -15,6 +15,7 @@ from app.models.runs import AnalysisRun, Job, PipelineStageRun, PromptVersion
 from app.models.util import new_id
 from app.pipeline.prompts import TEMPLATES, compose
 from app.providers.catalog import lookup
+from app.providers.claude_code import load_claude_code
 from app.providers.types import UnsupportedMode
 from app.schemas.enums import PIPELINE_STAGES, ResearchMode
 
@@ -47,6 +48,14 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
     temperature = payload.get("temperature")
     if temperature is not None and not caps.supports_temperature:
         raise UnsupportedMode(f"{model_id} does not accept temperature. Leave it unset.")
+    anthropic_transport = "api"
+    if provider_id == "anthropic":
+        anthropic_transport = load_claude_code()["transport"]
+        if anthropic_transport == "claude_code" and temperature is not None:
+            raise UnsupportedMode(
+                "Claude Code does not accept temperature. Leave it unset, "
+                "or switch Anthropic runs to the API key."
+            )
     reasoning = payload.get("reasoning_effort") or None
     if reasoning and reasoning not in caps.reasoning_efforts:
         raise UnsupportedMode(
@@ -97,6 +106,8 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "app_version": __version__,
         "git_revision": _git(),
     }
+    if provider_id == "anthropic":
+        config["anthropic_transport"] = anthropic_transport
     run = AnalysisRun(
         id=new_id(),
         project_id=video.project_id,

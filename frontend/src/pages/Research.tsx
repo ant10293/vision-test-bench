@@ -1,8 +1,108 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { humanize, humanizeText } from "../lib/humanize";
-import type { RunSummary } from "../lib/types";
+import type { ClaudeCodeSettings, RunSummary } from "../lib/types";
+
+function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
+  const client = useQueryClient();
+  const [binary, setBinary] = useState(settings.binary);
+  const [transport, setTransport] = useState(settings.transport);
+  const [awaiting, setAwaiting] = useState(false);
+  const [loginUrl, setLoginUrl] = useState("");
+  const [note, setNote] = useState("");
+  const status = useQuery({
+    queryKey: ["claude-code"],
+    queryFn: api.claudeCode,
+    refetchInterval: awaiting ? 3000 : false,
+  });
+  useEffect(() => {
+    setBinary(settings.binary);
+    setTransport(settings.transport);
+  }, [settings.binary, settings.transport]);
+  useEffect(() => {
+    if (awaiting && status.data?.logged_in) {
+      setAwaiting(false);
+      setLoginUrl("");
+      setNote("Claude Code is linked.");
+    }
+  }, [awaiting, status.data?.logged_in]);
+  const linked = status.data?.logged_in ?? false;
+  const dirty = binary !== settings.binary || transport !== settings.transport;
+  return (
+    <div className="space-y-2 rounded-lg border border-[var(--line)] p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-medium">Claude Code</h3>
+        <span className={`tag ${linked ? "observed" : "unknown"}`}>{linked ? "linked" : "not linked"}</span>
+        <span className="tag">{settings.transport === "claude_code" ? "runs use Claude Code" : "runs use API key"}</span>
+        {status.data?.version && <span className="tag">{status.data.version}</span>}
+      </div>
+      <p className="text-xs text-[var(--muted)]">
+        Uses the Claude plan signed in through the Claude Code executable on this machine. The API key above still calls the Anthropic API when runs are set to API key.
+      </p>
+      {linked && (
+        <p className="text-sm">
+          {status.data?.subscription ? humanize(status.data.subscription) : "Signed in"}
+          {status.data?.auth_method ? ` · ${status.data.auth_method}` : ""}
+          {status.data?.account ? ` · ${status.data.account}` : ""}
+        </p>
+      )}
+      {status.data?.error && <p className="text-sm text-[var(--rose)]">{status.data.error}</p>}
+      <div className="grid gap-2 md:grid-cols-2">
+        <label className="field-label">
+          Executable
+          <input className="field" value={binary} spellCheck={false} onChange={(event) => setBinary(event.target.value)} />
+        </label>
+        <label className="field-label">
+          Anthropic runs
+          <select className="field stretch" value={transport} onChange={(event) => setTransport(event.target.value as ClaudeCodeSettings["transport"])}>
+            <option value="api">API key</option>
+            <option value="claude_code">Claude Code subscription</option>
+          </select>
+        </label>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn" disabled={!dirty} onClick={async () => {
+          try {
+            await api.saveClaudeCode(binary, transport);
+            setNote("Claude Code settings saved.");
+            await client.invalidateQueries({ queryKey: ["providers"] });
+            await client.invalidateQueries({ queryKey: ["claude-code"] });
+          } catch (error) {
+            setNote(error instanceof Error ? error.message : "save failed");
+          }
+        }}>Save</button>
+        <button className="btn" onClick={async () => {
+          try {
+            const result = await api.linkClaudeCode(false);
+            setLoginUrl(result.login_url || "");
+            setAwaiting(Boolean(result.login_started) && !result.logged_in);
+            setNote(result.logged_in ? "Claude Code is linked." : "Finish sign-in in the browser. This page updates when the login completes.");
+            await client.invalidateQueries({ queryKey: ["claude-code"] });
+          } catch (error) {
+            setAwaiting(false);
+            setNote(error instanceof Error ? error.message : "link failed");
+          }
+        }}>{linked ? "Refresh link" : "Link Claude Code"}</button>
+        {linked && (
+          <button className="btn" onClick={async () => {
+            try {
+              const result = await api.linkClaudeCode(true);
+              setLoginUrl(result.login_url || "");
+              setAwaiting(false);
+              setNote("Finish the new sign-in in the browser to replace the linked account.");
+            } catch (error) {
+              setAwaiting(false);
+              setNote(error instanceof Error ? error.message : "sign-in failed");
+            }
+          }}>Sign in again</button>
+        )}
+      </div>
+      {loginUrl && <a className="text-sm text-[var(--blue)]" href={loginUrl} target="_blank" rel="noreferrer">Open the Claude sign-in page</a>}
+      {note && <p className="text-sm">{note}</p>}
+    </div>
+  );
+}
 
 export function ProvidersPage() {
   const client = useQueryClient();
@@ -37,6 +137,9 @@ export function ProvidersPage() {
               {provider.configured && <span className="tag">key {humanize(provider.secret_source)} {provider.hint}</span>}
             </div>
             {provider.last_error && <p className="text-sm text-[var(--rose)]">{provider.last_error}</p>}
+            {provider.id === "anthropic" && (
+              <p className="text-sm text-[var(--muted)]">API key. Analysis runs use it when Anthropic runs is set to API key.</p>
+            )}
             {!["deterministic", "fixture", "manual_json"].includes(provider.id) && (
               <div className="flex flex-wrap items-center gap-2">
                 <input className="field" type="password" autoComplete="off" placeholder="API key" value={keys[provider.id] ?? ""} onChange={(event) => setKeys({ ...keys, [provider.id]: event.target.value })} />
@@ -53,6 +156,7 @@ export function ProvidersPage() {
                 }}>Validate</button>
               </div>
             )}
+            {provider.id === "anthropic" && provider.claude_code && <ClaudeCodePanel settings={provider.claude_code} />}
             {["deterministic", "fixture", "manual_json"].includes(provider.id) && (
               <button className="btn" onClick={async () => { await api.validateProvider(provider.id); await client.invalidateQueries({ queryKey: ["providers"] }); }}>Mark local provider ready</button>
             )}

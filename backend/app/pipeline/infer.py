@@ -189,12 +189,19 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
     sent = session.query(ModelRequestRow).filter(ModelRequestRow.run_id == run.id).count()
     if sent >= int(config.get("max_requests") or 12):
         raise BudgetExceeded("request budget reached; no further model calls were made")
-    secret, _source = load_secret(session, run.provider_id)
-    if run.provider_id not in {"deterministic", "fixture"} and not secret:
-        raise UnsupportedMode(
-            f"No API key is configured for {run.provider_id}. "
-            "Add one on the provider page or export the documented environment variable."
-        )
+    transport = "api"
+    if run.provider_id == "anthropic":
+        transport = str(config.get("anthropic_transport") or "api")
+        if transport not in {"api", "claude_code"}:
+            transport = "api"
+    secret = ""
+    if transport != "claude_code":
+        secret, _source = load_secret(session, run.provider_id)
+        if run.provider_id not in {"deterministic", "fixture"} and not secret:
+            raise UnsupportedMode(
+                f"No API key is configured for {run.provider_id}. "
+                "Add one on the provider page or export the documented environment variable."
+            )
     provider = get_provider(run.provider_id, session)
     request = GenerationRequest(
         model_id=run.model_id,
@@ -210,6 +217,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
         reasoning_effort=config.get("reasoning_effort"),
         image_detail=config.get("image_detail") or "high",
         timeout_s=float(config.get("timeout_s") or 180),
+        metadata={"transport": transport} if run.provider_id == "anthropic" else {},
     )
     estimate = rough_input_tokens(request)
     ceiling = config.get("cost_ceiling_usd")
@@ -231,6 +239,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
             "image_detail": request.image_detail,
             "estimated_input_tokens": estimate,
             "sdk_note": "recorded on the response",
+            **({"anthropic_transport": transport} if run.provider_id == "anthropic" else {}),
         },
         frame_timestamps=[frame.timestamp for frame in frames],
     )

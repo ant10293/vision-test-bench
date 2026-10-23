@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.orm import Session
@@ -53,6 +53,7 @@ from app.models.sessions import (
 )
 from app.models.util import utcnow
 from app.providers.catalog import lookup, models_for
+from app.providers.claude_code import begin_login, load_claude_code, probe, save_claude_code
 from app.providers.registry import get_provider, provider_ids
 from app.providers.types import ProviderError, UnsupportedMode
 from app.schemas.analysis import AnalysisDocument
@@ -557,9 +558,32 @@ def list_providers(session: Session = Depends(db)) -> list[dict]:
                 "last_validated_at": status.last_validated_at.isoformat() if status and status.last_validated_at else None,
                 "base_url": status.extra_base_url if status else "",
                 "models": [caps.as_dict() for caps in models_for(provider_id)],
+                **({"claude_code": load_claude_code()} if provider_id == "anthropic" else {}),
             }
         )
     return payload
+
+
+@router.get("/providers/anthropic/claude-code")
+async def claude_code_status() -> dict:
+    return await probe()
+
+
+@router.put("/providers/anthropic/claude-code")
+def put_claude_code(payload: dict) -> dict:
+    try:
+        return save_claude_code(payload.get("binary") or "claude", payload.get("transport") or "api")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/providers/anthropic/claude-code/link")
+async def link_claude_code(payload: dict | None = Body(default=None)) -> dict:
+    force = bool((payload or {}).get("force"))
+    try:
+        return await begin_login(force=force)
+    except ProviderError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.post("/providers/{provider_id}/credentials")

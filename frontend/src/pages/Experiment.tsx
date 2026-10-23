@@ -112,6 +112,9 @@ export function ExperimentPage() {
           <div>Image {yes(selected.image)} · Native video {yes(selected.native_video)} · Structured JSON {yes(selected.structured_output)} · Temperature {yes(selected.supports_temperature)}</div>
           <div>Max images per call {selected.max_images}. Reasoning: {selected.reasoning_efforts.join(", ") || "not offered"}.</div>
           <div>{selected.notes}</div>
+          {providerId === "anthropic" && providers.data?.find((item) => item.id === "anthropic")?.claude_code?.transport === "claude_code" && (
+            <div>This run uses the linked Claude Code subscription. Spend counts against the plan, and the lab records the call as unpriced.</div>
+          )}
         </div>
       )}
       <Field label="Input modality">
