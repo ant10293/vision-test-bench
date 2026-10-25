@@ -96,7 +96,8 @@ select.field {
   background-position: right 0.7rem center;
   background-size: 1rem;
 }
-select.field.w-auto {
+select.field.w-auto,
+input.field.w-auto {
   width: auto;
 }
 select.field.stretch {

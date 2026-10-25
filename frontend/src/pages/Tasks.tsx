@@ -8,6 +8,7 @@ import { Bone } from "../components/Skeleton";
 import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
 import { VideoCard, VideoFace } from "../components/VideoCard";
 import { api, evidenceClass, formatTime, type TaskBundle, type TaskClip } from "../lib/api";
+import { captureToLocalInput, localInputToCapture } from "../lib/captureTime";
 import { humanize, labeledId } from "../lib/humanize";
 import { clipPosition } from "../lib/taskOrder";
 import type { VideoInfo } from "../lib/types";
@@ -451,6 +452,38 @@ export function TaskDetailPage() {
   );
 }
 
+function CaptureTimeField({
+  clip,
+  projectId,
+  onChange,
+}: {
+  clip: TaskClip;
+  projectId: string;
+  onChange: () => Promise<void>;
+}) {
+  const stored = captureToLocalInput(clip.capture_time_raw, clip.capture_time_utc);
+  const [value, setValue] = useState(stored);
+  useEffect(() => setValue(stored), [stored]);
+
+  async function commit(next: string) {
+    if (!next || next === stored) return;
+    await api.patchClip(projectId, clip.id, { capture_time_raw: localInputToCapture(next) });
+    await onChange();
+  }
+
+  return (
+    <input
+      type="datetime-local"
+      step={1}
+      className="field w-auto"
+      value={value}
+      aria-label={`Capture time for ${clip.filename}`}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={(event) => { void commit(event.currentTarget.value); }}
+    />
+  );
+}
+
 function ClipRow({
   task,
   clip,
@@ -513,17 +546,7 @@ function ClipRow({
             >
               {MODES.map((item) => <option key={item || "unset"} value={item}>{humanize(item) || "Unset"}</option>)}
             </select>
-            <input
-              className="field w-64"
-              defaultValue={clip.capture_time_raw}
-              aria-label={`Capture time for ${clip.filename}`}
-              onBlur={async (event) => {
-                if (event.target.value && event.target.value !== clip.capture_time_raw) {
-                  await api.patchClip(task.project.id, clip.id, { capture_time_raw: event.target.value });
-                  await onChange();
-                }
-              }}
-            />
+            <CaptureTimeField clip={clip} projectId={task.project.id} onChange={onChange} />
           </div>
         </div>
       </div>
