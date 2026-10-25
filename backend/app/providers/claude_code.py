@@ -95,6 +95,18 @@ def subscription_env() -> dict[str, str]:
 # Above every model's upper limit. The CLI clamps this to that model's maximum,
 # so a subscription run is not stopped at Claude Code's lower default.
 _MODEL_OUTPUT_MAXIMUM = "128000"
+# The shared request timeout (default 180s) is also the HTTP deadline for API
+# providers. Claude Code keeps a longer ceiling: image analysis with reasoning
+# often outlasts 180s. A configured timeout above this still applies.
+HARD_TIMEOUT_S = 600
+# Partial message events reset this. A quiet CLI is killed; one that keeps
+# streaming is stopped only by the hard ceiling.
+IDLE_TIMEOUT_S = 120
+_OUTPUT_POLL_S = 0.25
+
+
+def hard_timeout(requested: float) -> float:
+    return max(float(requested), HARD_TIMEOUT_S)
 
 
 def generation_env() -> dict[str, str]:
@@ -353,6 +365,7 @@ def build_argv(
         "--output-format",
         "stream-json",
         "--verbose",
+        "--include-partial-messages",
         "--model",
         model_id,
     ]
@@ -484,7 +497,14 @@ async def run_process(
     env: dict[str, str],
     timeout: float,
     cwd: str,
+    idle_timeout: float = IDLE_TIMEOUT_S,
 ) -> tuple[int, str, str]:
+    """Run Claude Code until it exits, goes quiet, or hits the hard ceiling.
+
+    ``timeout`` is wall-clock time from process start. ``idle_timeout`` resets
+    whenever stdout or stderr receives bytes, so thinking deltas keep the
+    process alive. A slow trickle still dies at ``timeout``.
+    """
     proc = await asyncio.create_subprocess_exec(
         *argv,
         stdin=asyncio.subprocess.PIPE,
@@ -493,13 +513,81 @@ async def run_process(
         env=env,
         cwd=cwd,
     )
+    assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+    out_parts: list[bytes] = []
+    err_parts: list[bytes] = []
+    started = time.monotonic()
+    last_output = started
+
+    async def feed_stdin() -> None:
+        try:
+            if stdin:
+                proc.stdin.write(stdin)
+                await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        finally:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+    async def copy_output(stream: asyncio.StreamReader, parts: list[bytes]) -> None:
+        nonlocal last_output
+        while True:
+            chunk = await stream.read(65536)
+            if not chunk:
+                return
+            parts.append(chunk)
+            last_output = time.monotonic()
+
+    feed = asyncio.create_task(feed_stdin())
+    copying = [
+        asyncio.create_task(copy_output(proc.stdout, out_parts)),
+        asyncio.create_task(copy_output(proc.stderr, err_parts)),
+    ]
     try:
-        out, err = await asyncio.wait_for(proc.communicate(stdin), timeout=timeout)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise ProviderError(f"Claude Code timed out after {timeout:.0f}s") from None
-    return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
+        while True:
+            now = time.monotonic()
+            if now - started >= timeout:
+                raise ProviderError(f"Claude Code timed out after {timeout:.0f}s")
+            if now - last_output >= idle_timeout:
+                raise ProviderError(f"Claude Code produced no output for {idle_timeout:.0f}s")
+            tasks = (feed, *copying)
+            for task in tasks:
+                if task.done() and not task.cancelled():
+                    exc = task.exception()
+                    if exc is not None:
+                        raise exc
+            if all(task.done() for task in copying):
+                remaining_run = timeout - (time.monotonic() - started)
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=max(remaining_run, 0))
+                except TimeoutError:
+                    raise ProviderError(f"Claude Code timed out after {timeout:.0f}s") from None
+                break
+            remaining = min(
+                timeout - (now - started),
+                idle_timeout - (now - last_output),
+                _OUTPUT_POLL_S,
+            )
+            await asyncio.wait(
+                set(copying),
+                timeout=max(remaining, 0),
+                return_when=asyncio.ALL_COMPLETED,
+            )
+    finally:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+        for task in (feed, *copying):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(feed, *copying, return_exceptions=True)
+    return proc.returncode or 0, b"".join(out_parts).decode(errors="replace"), b"".join(err_parts).decode(errors="replace")
 
 
 async def complete(request: GenerationRequest) -> ProviderResponse:
@@ -528,7 +616,7 @@ async def complete(request: GenerationRequest) -> ProviderResponse:
                 argv,
                 build_stdin(request),
                 generation_env(),
-                request.timeout_s,
+                hard_timeout(request.timeout_s),
                 directory,
             )
         except OSError as exc:

@@ -69,7 +69,7 @@ function ProjectCard({
   const body = (
     <>
       {media}
-      <div className="space-y-1 p-3 text-sm">
+      <div className="project-card-meta space-y-1 p-3 text-sm">
         <div className="truncate">{pending ? <Bone width="58%" /> : project.name}</div>
         <div className="mono text-xs text-[var(--muted)]">
           {pending || videosPending ? <Bone width="9ch" /> : `${listed.length} ${listed.length === 1 ? "video" : "videos"}`}
@@ -79,9 +79,9 @@ function ProjectCard({
       </div>
     </>
   );
-  if (pending || !onOpen) return <div className="panel overflow-hidden text-left" aria-hidden="true">{body}</div>;
+  if (pending || !onOpen) return <div className="project-card panel overflow-hidden text-left" aria-hidden="true">{body}</div>;
   return (
-    <button type="button" className="panel overflow-hidden text-left" onClick={onOpen}>
+    <button type="button" className="project-card panel overflow-hidden text-left" onClick={onOpen}>
       {body}
     </button>
   );
@@ -126,6 +126,35 @@ function slotIndexAtPoint(grid: HTMLElement, x: number, y: number): number | nul
 }
 
 const VIDEO_PLACEHOLDERS = 3;
+
+function ProjectDetailSkeleton({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="space-y-4" aria-busy="true">
+      <p className="sr-only">Loading project</p>
+      <section className="space-y-3">
+        <div>
+          <button className="text-sm text-[var(--muted)]" onClick={onBack}>← Back to projects</button>
+          <div className="mt-2 flex items-end justify-between gap-4">
+            <h2 className="min-w-0 text-lg"><Bone width="12rem" /></h2>
+            <Bone width="6rem" />
+          </div>
+          <p className="text-sm"><Bone width="80%" /></p>
+        </div>
+        <div className="drop-zone" aria-hidden="true">
+          <Bone width="16rem" />
+          <Bone width="10rem" />
+        </div>
+      </section>
+      <div className="video-grid">
+        {Array.from({ length: VIDEO_PLACEHOLDERS }, (_, index) => (
+          <div key={index} className="video-card panel overflow-hidden">
+            <VideoFace />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function VideoFace({ video, order }: { video?: VideoInfo; order?: number }) {
   if (!video || order == null) {
@@ -249,6 +278,7 @@ export function ProjectsPage() {
   const [error, setError] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [libraryPicks, setLibraryPicks] = useState<VideoInfo[]>([]);
+  const [pendingDetail, setPendingDetail] = useState<{ id: string; spansDays: boolean; updatedAt: number } | null>(null);
   const createdProjectId = useRef("");
   const studies = projects.data ?? [];
   const editing = studies.find((project) => project.id === editId);
@@ -351,6 +381,11 @@ export function ProjectsPage() {
   useEffect(() => () => stopGesture.current?.(), []);
 
   useEffect(() => {
+    if (!routeProjectId || view.mode === "library") return;
+    setView({ mode: "library", editId: "", name: "", spansDays: false });
+  }, [routeProjectId, view.mode, setView]);
+
+  useEffect(() => {
     if (routeProjectId || params.get("new") !== "1") return;
     clearDraft();
     setLibraryPicks([]);
@@ -363,6 +398,16 @@ export function ProjectsPage() {
   useEffect(() => {
     if (mode === "edit" && editId && projectVideos.data) adoptServer(editId, projectVideos.data);
   }, [mode, editId, projectVideos.data, adoptServer]);
+
+  useEffect(() => {
+    if (!pendingDetail || pendingDetail.id !== routeProjectId) return;
+    if (editing) {
+      setPendingDetail(null);
+      return;
+    }
+    const settledWithoutIt = projects.isSuccess && !projects.isFetching && projects.dataUpdatedAt !== pendingDetail.updatedAt;
+    if (settledWithoutIt || projects.isError) setPendingDetail(null);
+  }, [pendingDetail, routeProjectId, editing, projects.isSuccess, projects.isFetching, projects.dataUpdatedAt, projects.isError]);
 
   function commit(index: number, sourceId: string) {
     const current = orderRef.current.length
@@ -480,10 +525,10 @@ export function ProjectsPage() {
       if (libraryPicks.length) await api.attachVideos(projectId, libraryPicks.map((video) => video.id));
       createdProjectId.current = "";
       setLibraryPicks([]);
-      setView({ mode: "library", editId: "", name: "", spansDays: false });
-      await client.invalidateQueries({ queryKey: ["projects"] });
-      await client.invalidateQueries({ queryKey: ["videos"] });
+      setPendingDetail({ id: projectId, spansDays, updatedAt: projects.dataUpdatedAt });
       navigate(`/projects/${projectId}`);
+      void client.invalidateQueries({ queryKey: ["projects"] });
+      void client.invalidateQueries({ queryKey: ["videos"] });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the project");
     } finally {
@@ -507,13 +552,16 @@ export function ProjectsPage() {
     }
   }
 
-  if (routeProjectId && projects.data === undefined && !projects.isError) {
-    return <p className="text-sm text-[var(--muted)]">Loading project…</p>;
+  const pendingHere = pendingDetail?.id === routeProjectId ? pendingDetail : null;
+  const detailLoading = Boolean(routeProjectId) && !editing && !projects.isError && (Boolean(pendingHere) || projects.data === undefined || projects.isFetching);
+  if (routeProjectId && projects.isError && !editing) {
+    return <p className="text-sm text-[var(--rose)]">{(projects.error as Error).message}</p>;
   }
-  if (routeProjectId && projects.isSuccess && !editing) {
+  if (routeProjectId && !editing && !detailLoading) {
     return <p className="text-sm text-[var(--rose)]">Project not found.</p>;
   }
-  if (editing?.is_task) return <TaskDetailPage />;
+  if (pendingHere?.spansDays || editing?.is_task) return <TaskDetailPage />;
+  if (detailLoading) return <ProjectDetailSkeleton onBack={backToProjects} />;
   const editingVideos = (shown ?? []).filter(videoReady);
   const assetRows = items.filter((item) => (creating ? item.projectId === "" : item.projectId === editId));
   const reference = labSettings.data?.video_storage === "reference";

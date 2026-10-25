@@ -435,6 +435,17 @@ button.linkish {
   color: var(--muted);
   font-size: 0.75rem;
 }
+.project-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+.project-card > .thumb-grid,
+.project-card > .thumb-empty {
+  margin-top: auto;
+  margin-bottom: auto;
+}
 .project-grid,
 .video-grid {
   display: grid;

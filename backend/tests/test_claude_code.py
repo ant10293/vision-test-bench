@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,7 @@ def test_cli_result_is_unpriced_plan_usage(tmp_path: Path):
     assert argv[argv.index("--input-format") + 1] == "stream-json"
     assert argv[argv.index("--output-format") + 1] == "stream-json"
     assert "--verbose" in argv
+    assert "--include-partial-messages" in argv
     assert "--effort" not in argv
     assert argv[argv.index("--max-turns") + 1] == "1"
     assert argv[argv.index("--tools") + 1] == ""
@@ -147,6 +149,12 @@ def test_cli_result_is_unpriced_plan_usage(tmp_path: Path):
     streamed = "\n".join(
         [
             json.dumps({"type": "system", "subtype": "init"}),
+            json.dumps(
+                {
+                    "type": "stream_event",
+                    "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta"}},
+                }
+            ),
             json.dumps({"type": "assistant", "message": {"content": []}}),
             json.dumps({"type": "result", "subtype": "success", "structured_output": {"objects": []}}),
         ]
@@ -333,3 +341,74 @@ def test_new_run_records_the_claude_code_transport(client: TestClient, tmp_path:
             enqueue=False,
         )
     session.close()
+
+
+def test_claude_code_hard_ceiling_is_at_least_ten_minutes():
+    from app.providers.claude_code import HARD_TIMEOUT_S, hard_timeout
+
+    assert HARD_TIMEOUT_S == 600
+    assert hard_timeout(180) == 600
+    assert hard_timeout(900) == 900
+
+
+def _child(path: Path, body: str) -> list[str]:
+    path.write_text("import sys, time\n" + body)
+    return [sys.executable, str(path)]
+
+
+async def test_claude_code_stays_alive_while_output_continues(tmp_path: Path):
+    from app.providers.claude_code import run_process
+
+    argv = _child(
+        tmp_path / "stream.py",
+        """
+data = sys.stdin.read()
+sys.stdout.write("first %s\\n" % data.strip())
+sys.stdout.flush()
+time.sleep(0.5)
+sys.stderr.write("mid\\n")
+sys.stderr.flush()
+time.sleep(0.5)
+sys.stdout.write("last\\n")
+sys.stdout.flush()
+""",
+    )
+    code, out, err = await run_process(argv, b"ping\n", os.environ.copy(), 8, str(tmp_path), idle_timeout=0.8)
+    assert code == 0
+    assert "first ping" in out
+    assert "last" in out
+    assert "mid" in err
+
+
+async def test_claude_code_kills_a_quiet_process(tmp_path: Path):
+    from app.providers.claude_code import run_process
+    from app.providers.types import ProviderError
+
+    argv = _child(
+        tmp_path / "quiet.py",
+        """
+sys.stdout.write("started\\n")
+sys.stdout.flush()
+time.sleep(6)
+""",
+    )
+    with pytest.raises(ProviderError, match="no output for 1s"):
+        await run_process(argv, b"", os.environ.copy(), 8, str(tmp_path), idle_timeout=1)
+
+
+async def test_claude_code_kills_a_slow_trickle_at_the_hard_ceiling(tmp_path: Path):
+    from app.providers.claude_code import run_process
+    from app.providers.types import ProviderError
+
+    argv = _child(
+        tmp_path / "trickle.py",
+        """
+deadline = time.monotonic() + 8
+while time.monotonic() < deadline:
+    sys.stdout.write("x\\n")
+    sys.stdout.flush()
+    time.sleep(0.05)
+""",
+    )
+    with pytest.raises(ProviderError, match="timed out after 1s"):
+        await run_process(argv, b"", os.environ.copy(), 1, str(tmp_path), idle_timeout=5)

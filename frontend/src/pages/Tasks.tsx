@@ -4,12 +4,36 @@ import { Link, useParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
 import { LibraryPicker } from "../components/LibraryPicker";
 import { ProjectCosts } from "../components/ProjectCosts";
+import { Bone } from "../components/Skeleton";
 import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
 import { api, evidenceClass, formatTime, type TaskBundle, type TaskClip } from "../lib/api";
 import { humanize, labeledId } from "../lib/humanize";
 import { clipPosition } from "../lib/taskOrder";
 
 const MODES = ["", "fixed_camera", "constrained_head_mounted", "unconstrained_head_mounted"];
+
+function TaskDetailSkeleton() {
+  return (
+    <div className="space-y-5" aria-busy="true">
+      <p className="sr-only">Loading project</p>
+      <header>
+        <Link className="text-sm text-[var(--muted)]" to="/projects">← Back to projects</Link>
+        <h1 className="mt-2 text-2xl font-medium"><Bone width="14rem" /></h1>
+        <p className="mt-2"><Bone width="70%" /></p>
+      </header>
+      <div className="drop-zone" aria-hidden="true">
+        <Bone width="16rem" />
+        <Bone width="10rem" />
+      </div>
+      <section className="space-y-2">
+        <h2 className="text-lg"><Bone width="8rem" /></h2>
+        {Array.from({ length: 3 }, (_, index) => (
+          <div key={index} className="panel p-3"><Bone width="60%" /></div>
+        ))}
+      </section>
+    </div>
+  );
+}
 
 export function TaskDetailPage() {
   const { projectId = "" } = useParams();
@@ -44,7 +68,7 @@ export function TaskDetailPage() {
   const task = query.data;
   const clipById = useMemo(() => new Map((task?.clips ?? []).map((clip) => [clip.id, clip])), [task]);
   if (query.isError) return <p className="text-[var(--rose)]">{(query.error as Error).message}</p>;
-  if (!task) return <p className="text-[var(--muted)]">Loading task…</p>;
+  if (!task) return <TaskDetailSkeleton />;
   const displayIds = [
     ...task.order.ranked.flat(),
     ...task.clips.map((clip) => clip.id).filter((id) => !task.order.ranked.flat().includes(id)),
