@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { observationsAt, frameNear } from "../lib/analysis";
+import { observationsAt, frameNear, tracksAt } from "../lib/analysis";
 import type { Bundle } from "../lib/types";
 
 const bundle = {
@@ -28,5 +28,15 @@ describe("analysis helpers", () => {
 
   it("seeks the nearest extracted frame", () => {
     expect(frameNear(bundle, 3.5)?.id).toBe("f2");
+  });
+
+  it("keeps one track sample nearest the playhead", () => {
+    const hits = tracksAt([
+      { track_ref: "track_1", timestamp: 1, bbox: { x: 0, y: 0, w: 0.1, h: 0.1 }, status: "tracked", continuity: "continuous", association_score: 0.8, detector_id: "proposals", scene_chunk: 0, note: "" },
+      { track_ref: "track_1", timestamp: 1.1, bbox: { x: 0.1, y: 0, w: 0.1, h: 0.1 }, status: "tracked", continuity: "continuous", association_score: 0.8, detector_id: "proposals", scene_chunk: 0, note: "" },
+      { track_ref: "track_2", timestamp: 4, bbox: { x: 0.4, y: 0, w: 0.1, h: 0.1 }, status: "lost", continuity: "uncertain", association_score: null, detector_id: "proposals", scene_chunk: 0, note: "" },
+    ], 1.08);
+    expect(hits.map((item) => item.track_ref)).toEqual(["track_1"]);
+    expect(hits[0]?.timestamp).toBe(1.1);
   });
 });

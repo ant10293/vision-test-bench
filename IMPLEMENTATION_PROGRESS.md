@@ -1,6 +1,6 @@
 # Implementation progress
 
-Active phase: multi-session tasks on the same canonical model. Live provider calls remain unverified.
+Active phase: perception stays on the canonical analysis document. Live provider calls and a live DINOv2 forward pass remain unverified.
 
 ## Completed
 
@@ -16,6 +16,7 @@ Active phase: multi-session tasks on the same canonical model. Live provider cal
 - Task projects: multiple clips and sessions, capture timestamps kept apart from file modification and upload time, partial metadata order, context hypotheses, manual lock, cross-clip identity with confirm/merge/split/reject, inter-session observed change separate from hypothesis, versioned reconciliation that does not rerun clip analyses, hierarchical timeline, object history, project metrics, and a task export.
 - Backend tests (31) and frontend unit tests. Ruff is clean on `app` and `tests`.
 - Optional local transcription and audio-visual classification. Both switches default off. See `AUDIO.md`. The automated tests use a stand-in for Whisper. A live model download and a live paid comparison of transcript text were not run.
+- Perception on the existing document: track lifecycle, one-to-one association, separate tracking frames, presets A/B/C/D and VLM-only, optional DINOv2 with an explicit unavailable state, GrabCut during tracking, instance ids in the model prompt, identity metrics that require instance annotations, and inspector overlays. Embeddings stay out of the analysis JSON. Alembic revision `a1c9e4d27b10` adds track status, association score, and detector id.
 - Browser pass on the seeded lab: dashboard counts, inspector with attempted versus completed actions, frame step, object crops from the footage, a human label revision, and an 8-node workflow graph. All three fixture modes completed with `world_coordinates_supported` false. The unconstrained fixture keeps a second red block as an uncertain identity.
 
 ## Pending
@@ -23,6 +24,9 @@ Active phase: multi-session tasks on the same canonical model. Live provider cal
 - A live validation call and a live inference call for each paid provider. No key was used, so those paths are unverified.
 - SAM raster masks when `meta-sam-parser` is installed, against a real response. The grammar parser is unit-tested on a sample string.
 - Visual SLAM and calibrated world coordinates. The interfaces exist; the baseline does not pretend to have them.
+- SAM video tracking. The configured adapter reports `video_tracking: false`.
+- Reloading a human-confirmed appearance gallery into a later tracking pass. Confirm updates the revision. It does not copy cached vectors back into the tracker.
+- A live DINOv2 encode on this machine. The loader and the unavailable path are implemented. Weights were not downloaded for the tests.
 - A second annotator. The ground-truth table has an annotator field; agreement is not computed yet.
 - Playwright: the spec is in `frontend/e2e/lab.spec.ts`. It was not executed in this session because port 8000 was already serving the lab and Chromium was not installed.
 - Live faster-whisper transcription on a real recording, and a live provider call that compares transcript text with frames. The local classifier and the skip paths are tested.

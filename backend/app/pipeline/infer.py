@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.demo.scenarios import SCENARIOS, build_document
 from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRun, ModelRequestRow
+from app.perception.evidence import evidence_text
+from app.perception.ground import apply_perception
 from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
@@ -137,16 +139,23 @@ async def produce_document(
     )
     if user_extra:
         user += "\n\n" + user_extra
+    if spatial_document is not None:
+        tracked = evidence_text(spatial_document)
+        if tracked:
+            user += "\n\n" + tracked
     if run.modality == "native_video":
-        return await _call(
-            session,
-            run,
-            stage,
-            system,
-            user,
-            [],
-            video,
-            schema,
+        return _with_perception(
+            await _call(
+                session,
+                run,
+                stage,
+                system,
+                user,
+                [],
+                video,
+                schema,
+            ),
+            spatial_document,
         )
     selected = _budget_frames(frames, int(config.get("max_frames") or 48))
     coverage.frames_submitted = len(selected)
@@ -166,7 +175,7 @@ async def produce_document(
         )
         partials.append(text_doc)
     if len(partials) == 1:
-        return partials[0]
+        return _with_perception(partials[0], spatial_document)
     merged = await _call(
         session,
         run,
@@ -179,7 +188,13 @@ async def produce_document(
         video,
         schema,
     )
-    return restore_omitted_records(merged, partials)
+    return _with_perception(restore_omitted_records(merged, partials), spatial_document)
+
+
+def _with_perception(document: AnalysisDocument, spatial: AnalysisDocument | None) -> AnalysisDocument:
+    if spatial is None or spatial.perception is None:
+        return document
+    return apply_perception(document, spatial)
 
 
 async def _call(session, run, stage, system, user, frames, video, schema) -> AnalysisDocument:

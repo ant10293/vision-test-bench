@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import type { Bundle } from "../lib/types";
-import { observationsAt } from "../lib/analysis";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { api } from "../lib/api";
+import type { Bundle, TrackPointSample } from "../lib/types";
+import { observationsAt, tracksAt } from "../lib/analysis";
 import { labeledId } from "../lib/humanize";
 import { labelSpan, wrapLines } from "../lib/wrapText";
 import { useInspector } from "../stores/ui";
@@ -22,7 +24,9 @@ function labelWidth(text: string): number {
 export function VideoStage({ bundle }: { bundle: Bundle }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
-  const { time, setTime, playing, setPlaying, speed, overlay, loop } = useInspector();
+  const client = useQueryClient();
+  const { time, setTime, playing, setPlaying, speed, overlay, layers, seedMode, loop } = useInspector();
+  const [seedError, setSeedError] = useState("");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [content, setContent] = useState({ x: 0, y: 0, w: 1, h: 1, vw: 640, vh: 360 });
@@ -88,6 +92,8 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
   }, []);
 
   const visible = overlay ? observationsAt(bundle, time) : [];
+  const trackHits = tracksAt(bundle.tracks?.points ?? [], time);
+  const showTracks = layers.boxes || layers.ids || layers.status || layers.trajectory || layers.uncertain;
   const src = bundle.video ? bundle.video.playback_url : "";
 
   useEffect(() => {
@@ -139,6 +145,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
           }}
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
+          onClick={(event) => void seedAt(event)}
         />
         {overlay && (
           <svg
@@ -186,6 +193,17 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
             })}
           </svg>
         )}
+        {showTracks && (
+          <svg
+            className="pointer-events-none absolute"
+            style={{ left: content.x, top: content.y, width: content.w, height: content.h, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center" }}
+            viewBox={`0 0 ${content.vw} ${content.vh}`}
+          >
+            {trackHits.map((point) => (
+              <TrackMark key={`${point.track_ref}-${point.timestamp}`} point={point} points={bundle.tracks?.points ?? []} time={time} content={content} layers={layers} />
+            ))}
+          </svg>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <button className="btn" onClick={() => setPlaying(!playing)}>{playing ? "Pause" : "Play"}</button>
@@ -198,11 +216,100 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
           </select>
         </label>
         <button className="btn" onClick={() => useInspector.getState().setOverlay(!overlay)}>{overlay ? "Hide boxes" : "Show boxes"}</button>
+        {([
+          ["boxes", "track boxes"],
+          ["ids", "track ids"],
+          ["status", "track status"],
+          ["trajectory", "trajectory"],
+          ["uncertain", "uncertain tracks"],
+        ] as const).map(([key, label]) => (
+          <button key={key} className="btn" aria-pressed={layers[key]} onClick={() => useInspector.getState().setLayer(key, !layers[key])}>
+            {layers[key] ? `Hide ${label}` : `Show ${label}`}
+          </button>
+        ))}
+        <button
+          className="btn"
+          aria-pressed={seedMode}
+          disabled={zoom !== 1 || pan.x !== 0 || pan.y !== 0}
+          title="Reset zoom first. The click is mapped through the letterboxed frame."
+          onClick={() => useInspector.getState().setSeedMode(!seedMode)}
+        >
+          {seedMode ? "Click the object" : "Seed a track"}
+        </button>
         <button className="btn" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>Reset zoom</button>
         <button className="btn" onClick={() => { setPan((p) => ({ ...p, x: p.x + 20 })); }}>Pan</button>
         <span className="mono text-[var(--muted)]">{time.toFixed(2)}s</span>
         <span className="text-xs text-[var(--muted)]">Space play · arrows step · f fullscreen · scroll zoom</span>
       </div>
+      {seedError && <p className="text-xs text-[var(--rose)]">{seedError}</p>}
+      {bundle.tracks?.truncated && <p className="text-xs text-[var(--muted)]">Showing the first {bundle.tracks.points.length} of {bundle.tracks.total} track points.</p>}
     </div>
+  );
+
+  function seedAt(event: MouseEvent<HTMLVideoElement>) {
+    if (!seedMode || zoom !== 1 || pan.x !== 0 || pan.y !== 0) return;
+    const rect = boxRef.current?.getBoundingClientRect();
+    if (!rect || content.w <= 0 || content.h <= 0) return;
+    const x = event.clientX - rect.left - content.x;
+    const y = event.clientY - rect.top - content.y;
+    if (x < 0 || y < 0 || x > content.w || y > content.h) return;
+    const size = 0.12;
+    const nx = Math.min(Math.max(0, x / content.w - size / 2), 1 - size);
+    const ny = Math.min(Math.max(0, y / content.h - size / 2), 1 - size);
+    setSeedError("");
+    void api.seedTrack(bundle.run.id, { timestamp: time, x: nx, y: ny, w: size, h: size })
+      .then(() => client.invalidateQueries({ queryKey: ["run", bundle.run.id] }))
+      .then(() => useInspector.getState().setSeedMode(false))
+      .catch((err: unknown) => setSeedError(err instanceof Error ? err.message : "The seed was not saved."));
+  }
+}
+
+function TrackMark({
+  point,
+  points,
+  time,
+  content,
+  layers,
+}: {
+  point: TrackPointSample;
+  points: TrackPointSample[];
+  time: number;
+  content: { vw: number; vh: number };
+  layers: { boxes: boolean; ids: boolean; status: boolean; trajectory: boolean; uncertain: boolean };
+}) {
+  if (!point.bbox) return null;
+  const uncertain = layers.uncertain && (point.continuity === "uncertain" || point.status === "ambiguous" || point.continuity === "reassociated");
+  const color = uncertain ? "#d2a24c" : "#7dcea0";
+  const x = point.bbox.x * content.vw;
+  const y = point.bbox.y * content.vh;
+  const w = point.bbox.w * content.vw;
+  const h = point.bbox.h * content.vh;
+  const trail = layers.trajectory
+    ? points.filter((item) => item.track_ref === point.track_ref && item.bbox && item.timestamp <= time && time - item.timestamp < 1.5).slice(-12)
+    : [];
+  return (
+    <g>
+      {trail.length > 1 && (
+        <polyline
+          fill="none"
+          stroke={color}
+          strokeWidth={2}
+          points={trail.map((item) => {
+            const box = item.bbox;
+            if (!box) return "";
+            return `${(box.x + box.w / 2) * content.vw},${(box.y + box.h / 2) * content.vh}`;
+          }).join(" ")}
+        />
+      )}
+      {layers.boxes && (
+        <rect x={x} y={y} width={w} height={h} fill={color} fillOpacity={0.08} stroke={color} strokeWidth={2} strokeDasharray={uncertain ? "6 4" : undefined} />
+      )}
+      {layers.ids && (
+        <text x={x} y={Math.max(14, y - 4)} fill={color} fontSize={14} fontFamily="IBM Plex Sans, sans-serif">{point.track_ref}</text>
+      )}
+      {layers.status && (
+        <text x={x} y={y + h + 14} fill={color} fontSize={12} fontFamily="IBM Plex Sans, sans-serif">{point.status || point.continuity}</text>
+      )}
+    </g>
   );
 }

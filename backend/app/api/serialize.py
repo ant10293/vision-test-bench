@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -15,11 +17,13 @@ from app.models.domain import (
     ObjectRelationship,
     ObjectStateRow,
     ObjectStateTransition,
+    SpatialTrackPoint,
     WorkflowDependencyRow,
     WorkflowStepRow,
 )
 from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRevision, AnalysisRun, ModelResponseRow, PipelineStageRun
+from app.services.storage import data_path
 
 
 def video_dict(video: VideoAsset, frame_count: int | None = None) -> dict:
@@ -168,8 +172,48 @@ def bundle(session: Session, run: AnalysisRun) -> dict:
         "validation": (revision.document_json or {}).get("validation_issues", []) if revision else [],
         "summary": (revision.document_json or {}).get("summary", "") if revision else "",
         "camera": (revision.document_json or {}).get("camera") if revision else None,
+        "perception": _perception(run, revision),
+        "tracks": _track_points(session, run.id),
         "transcripts": _transcripts(session, run.id),
         "alignments": _alignments(session, run.id),
+    }
+
+
+def _perception(run: AnalysisRun, revision: AnalysisRevision | None) -> dict | None:
+    if revision and (revision.document_json or {}).get("perception"):
+        return revision.document_json["perception"]
+    path = data_path("runs", run.id, "spatial.json")
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+    return payload.get("perception")
+
+
+def _track_points(session: Session, run_id: str, limit: int = 4000) -> dict:
+    rows = session.scalars(
+        select(SpatialTrackPoint).where(SpatialTrackPoint.run_id == run_id).order_by(SpatialTrackPoint.timestamp)
+    ).all()
+    clipped = rows[:limit]
+    return {
+        "total": len(rows),
+        "truncated": len(rows) > limit,
+        "points": [
+            {
+                "track_ref": row.track_ref,
+                "timestamp": row.timestamp,
+                "bbox": row.bbox_json,
+                "status": row.track_status or "",
+                "continuity": row.continuity,
+                "association_score": row.association_score,
+                "detector_id": row.detector_id or "",
+                "scene_chunk": row.scene_chunk,
+                "note": row.identity_note,
+            }
+            for row in clipped
+        ],
     }
 
 

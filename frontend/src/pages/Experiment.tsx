@@ -37,6 +37,7 @@ export function ExperimentPage() {
   const [vad, setVad] = useState(true);
   const [words, setWords] = useState(false);
   const [windowSec, setWindowSec] = useState("4");
+  const [perceptionPreset, setPerceptionPreset] = useState("B_temporal");
   const [error, setError] = useState("");
   const whisper = useQuery({ queryKey: ["audio-models"], queryFn: api.audioModels });
   const models = useMemo(() => {
@@ -70,6 +71,7 @@ export function ExperimentPage() {
         whisper_vad: vad,
         word_timestamps: words,
         align_window_sec: Number(windowSec) || 4,
+        perception_preset: perceptionPreset,
       }),
     onSuccess: (run) => navigate(`/runs/${run.id}/pipeline`),
     onError: (err: Error) => setError(err.message),
@@ -119,6 +121,18 @@ export function ExperimentPage() {
           )}
         </div>
       )}
+      <Field label="Perception">
+        <select className="field" value={perceptionPreset} onChange={(event) => setPerceptionPreset(event.target.value)}>
+          <option value="A_legacy_motion">A · Motion baseline</option>
+          <option value="B_temporal">B · Temporal tracking</option>
+          <option value="C_appearance">C · Appearance-assisted</option>
+          <option value="D_appearance_segmented">D · Appearance and GrabCut</option>
+          <option value="vlm_only">VLM only</option>
+        </select>
+        <span className="text-xs text-[var(--muted)]">
+          The same footage can be repeated under each preset. Appearance tracking asks for DINOv2 only when that preset is selected, and it does not download weights until a run encodes a crop. No accuracy is assumed.
+        </span>
+      </Field>
       <Field label="Input modality">
         <select className="field" value={modality} onChange={(event) => setModality(event.target.value)}>
           <option value="sampled_frames">Sampled frames</option>

@@ -24,7 +24,13 @@ It shows the ceiling of "something moved" without a semantic claim. Use it to se
 
 ## Limits of the current geometry
 
-Camera compensation is a partial affine estimated between samples. It is not visual SLAM and it does not produce a stable world frame. Object permanence across a scene cut is withheld unless the appearance check passes, and even then the unobserved interval stays explicit.
+Camera compensation is a partial affine estimated between samples. It is not visual SLAM and it does not produce a stable world frame. A scene change keeps archived tracks and starts new ids. Appearance can propose that an archived id returned. That proposal is not a confirmation, and the unobserved interval stays explicit.
+
+## Identity experiments
+
+The same recording can be run under five stored presets: `A_legacy_motion`, `B_temporal`, `C_appearance`, `D_appearance_segmented`, and `vlm_only`. A is the motion baseline. B adds detection proposals and temporal association without an encoder. C adds DINOv2 ViT-S/14 and a multi-view gallery. D also runs GrabCut during tracking. `vlm_only` leaves identity to the model and does not inject tracked ids. Useful comparisons are rotation, scale, lighting, a hand in front of the object, two similar objects exchanging places, and an object that leaves and comes back. This document does not claim that one preset is more accurate. Measure that against instance-level ground truth. Label overlap is not that measurement.
+
+A language model that receives tracked ids is told to describe those ids, to leave a new physical id as a provisional proposal, and not to treat proximity as attachment or an attempt as completion. A validator warning is recorded when a high-certainty transition has unknown or inferred evidence, and when an attached, inside, or held relationship is marked directly observed from proximity. Warnings do not raise certainty and do not rewrite the original conclusion. Reinspection, when the experiment asked for it, appends a proposal with `applied: false`.
 
 ## Several recordings of one task
 

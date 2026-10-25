@@ -98,6 +98,68 @@ export interface LabObject {
   images: { id: string; kind: string; timestamp: number; url: string; score: number }[];
 }
 
+export interface TrackPointSample {
+  track_ref: string;
+  timestamp: number;
+  bbox: BBox | null;
+  status: string;
+  continuity: string;
+  association_score: number | null;
+  detector_id: string;
+  scene_chunk: number;
+  note: string;
+}
+
+export interface PerceptionInstance {
+  instance_id: string;
+  semantic_label?: string | null;
+  status: string;
+  first_seen: number;
+  last_seen: number;
+  observation_count: number;
+  trusted_references: number;
+  candidate_references: number;
+  uncertain: boolean;
+  human_initialized: boolean;
+  detector_id: string;
+}
+
+export interface PerceptionHypothesis {
+  hypothesis_id: string;
+  timestamp: number;
+  subject_instance_id: string;
+  candidate_instance_id: string;
+  runner_up_instance_id: string | null;
+  appearance_cosine: number | null;
+  motion_agreement: number | null;
+  association_score: number;
+  margin: number | null;
+  decision: string;
+  note: string;
+}
+
+export interface PerceptionSummary {
+  strategy: string;
+  detector_id: string;
+  encoder_id?: string | null;
+  encoder_version?: string | null;
+  encoder_status?: string;
+  encoder_detail?: string;
+  segmenter_id?: string | null;
+  tracking_fps?: number | null;
+  frames_tracked?: number;
+  world_coordinates_supported?: boolean;
+  coordinate_frame?: string;
+  used_for_identity?: boolean;
+  scores_are_probabilities?: boolean;
+  diagnostics?: Record<string, number | string>;
+  instances?: PerceptionInstance[];
+  hypotheses?: PerceptionHypothesis[];
+  appearance_references?: { instance_id: string; timestamp: number; state: string; quality: number; confirmed: boolean }[];
+  manual_corrections?: Record<string, unknown>[];
+  notes?: string;
+}
+
 export interface Observation {
   id: string;
   object_local_id: string;
@@ -243,6 +305,8 @@ export interface Bundle {
   ambiguities: Ambiguity[];
   validation: { severity: string; code: string; message: string; entity_id?: string }[];
   summary: string;
+  perception?: PerceptionSummary | null;
+  tracks?: { total: number; truncated: boolean; points: TrackPointSample[] };
   camera: {
     viewpoint?: string;
     task_constraint?: string;

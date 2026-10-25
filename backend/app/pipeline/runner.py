@@ -10,11 +10,12 @@ import cv2
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.domain import Artifact, SceneChunk, SegmentationMask, SpatialTrackPoint
+from app.models.domain import Artifact, SegmentationMask
 from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRevision, AnalysisRun, Job, PipelineStageRun
 from app.models.util import utcnow
-from app.pipeline.deterministic_doc import document_from_spatial
+from app.perception.ground import apply_perception
+from app.perception.types import TrackingCancelled
 from app.pipeline.infer import (
     BudgetExceeded,
     StageSkipped,
@@ -22,10 +23,11 @@ from app.pipeline.infer import (
     produce_document,
     save_working,
 )
+from app.pipeline.perception_stage import load_spatial_document, run_spatial_stage
 from app.pipeline.prompts import compose
 from app.pipeline.validate import validate_document
 from app.providers.types import UnsupportedMode
-from app.schemas.analysis import AnalysisDocument, Coverage
+from app.schemas.analysis import AnalysisDocument, Coverage, ReinspectionProposal
 from app.schemas.enums import PIPELINE_STAGES
 from app.services.ingest import playback_path, sample_run_frames
 from app.services.materialize import grabcut_cutout, materialize
@@ -39,7 +41,6 @@ from app.video.sampling import (
     plan_uniform,
     preset_fps,
 )
-from app.video.spatial import analyze_sequence
 
 
 async def execute_job(session: Session, job: Job) -> None:
@@ -84,6 +85,13 @@ async def execute_job(session: Session, job: Job) -> None:
             session.commit()
             try:
                 await _dispatch(session, run, video, stage)
+            except TrackingCancelled:
+                run.status = "canceled"
+                _cancel_remaining(session, run, name)
+                job.status = "canceled"
+                job.finished_at = utcnow()
+                session.commit()
+                return
             except StageSkipped as skipped:
                 stage.status = "skipped"
                 stage.checkpoint_json = {"reason": skipped.reason, **(stage.checkpoint_json or {})}
@@ -399,83 +407,7 @@ def _sample(session, run, video, stage) -> None:
 
 
 def _spatial(session, run, video, stage) -> None:
-    frames = list(
-        session.scalars(
-            select(FrameAsset)
-            .where(FrameAsset.run_id == run.id)
-            .order_by(FrameAsset.timestamp)
-        )
-    )
-    if len(frames) < 2:
-        frames = list(
-            session.scalars(
-                select(FrameAsset)
-                .where(FrameAsset.video_id == video.id, FrameAsset.run_id.is_(None))
-                .order_by(FrameAsset.timestamp)
-            )
-        )
-    paths = [data_path(*Path(frame.path).parts) for frame in frames]
-    timestamps = [frame.timestamp for frame in frames]
-    signals = measure_motion(paths, timestamps) if len(paths) >= 2 else []
-    report = analyze_sequence(paths, timestamps, signals, run.research_mode)
-    if run.research_mode == "auto":
-        run.viewpoint = report.viewpoint
-        run.task_constraint = report.task_constraint
-        run.research_mode = report.research_mode
-        config = dict(run.config_json or {})
-        config["auto_characterization"] = {
-            "mode": report.research_mode,
-            "global_motion": report.global_motion,
-            "scene_changes": report.scene_change_count,
-            "notes": report.notes,
-        }
-        run.config_json = config
-    session.query(SpatialTrackPoint).filter(SpatialTrackPoint.run_id == run.id).delete()
-    session.query(SceneChunk).filter(SceneChunk.run_id == run.id).delete()
-    for point in report.tracks:
-        session.add(
-            SpatialTrackPoint(
-                run_id=run.id,
-                video_id=video.id,
-                track_ref=point.track_ref,
-                timestamp=point.timestamp,
-                bbox_json={"x": point.x, "y": point.y, "w": point.w, "h": point.h},
-                motion_score=point.motion_score,
-                continuity=point.continuity,
-                coordinate_frame="image",
-                camera_compensated=point.camera_compensated,
-                scene_chunk=point.scene_chunk,
-                identity_note=point.note,
-            )
-        )
-    for chunk in report.chunks:
-        session.add(
-            SceneChunk(
-                run_id=run.id,
-                ordinal=chunk["ordinal"],
-                time_start=chunk["time_start"],
-                time_end=chunk["time_end"],
-                scene_change=bool(chunk.get("scene_change")),
-                global_motion=float(chunk.get("global_motion") or report.global_motion),
-                notes=report.notes,
-            )
-        )
-    coverage = Coverage.model_validate(run.coverage_json or {})
-    document = document_from_spatial(report, coverage)
-    spatial_path = data_path("runs", run.id, "spatial.json")
-    spatial_path.parent.mkdir(parents=True, exist_ok=True)
-    spatial_path.write_text(document.model_dump_json())
-    stage.checkpoint_json = {
-        "tracks": len({point.track_ref for point in report.tracks}),
-        "points": len(report.tracks),
-        "global_motion": report.global_motion,
-        "scene_changes": report.scene_change_count,
-        "world_coordinates_supported": False,
-        "compensation_model": report.compensation_model,
-        "notes": report.notes,
-    }
-    stage.progress_total = max(len(frames), 1)
-    stage.progress_current = len(frames)
+    run_spatial_stage(session, run, video, stage)
 
 
 async def _model_stage(session, run, video, stage) -> None:
@@ -498,10 +430,7 @@ async def _model_stage(session, run, video, stage) -> None:
         session.scalars(select(FrameAsset).where(FrameAsset.run_id == run.id).order_by(FrameAsset.timestamp))
     )
     coverage = Coverage.model_validate(run.coverage_json or {})
-    spatial = None
-    spatial_path = data_path("runs", run.id, "spatial.json")
-    if spatial_path.exists() and run.provider_id == "deterministic":
-        spatial = AnalysisDocument.model_validate(json.loads(spatial_path.read_text()))
+    spatial = load_spatial_document(run.id)
     caps_window = 16
     from app.providers.catalog import lookup
 
@@ -510,6 +439,8 @@ async def _model_stage(session, run, video, stage) -> None:
     config["max_images_per_call"] = caps_window
     run.config_json = config
     document = await produce_document(session, run, video, frames, stage.stage, coverage, spatial)
+    if document.perception is None and spatial is not None and spatial.perception is not None:
+        document = apply_perception(document, spatial)
     if run.provider_id == "fixture":
         run.fixture = True
         run.fixture_label = document.fixture_label
@@ -603,7 +534,7 @@ async def _run_sam(session, run, stage) -> None:
     """
     from app.models.domain import DetectedObject, ObjectImage, ObjectObservation
     from app.providers.catalog import lookup
-    from app.providers.sam import SamAdapter
+    from app.providers.sam import SamAdapter, sam_capabilities
     from app.providers.types import ProviderResponse, Usage, estimate_cost
     from app.schemas.analysis import BBox
     from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
@@ -730,6 +661,7 @@ async def _run_sam(session, run, stage) -> None:
         "source": "sam-3.1",
         "masks": stored,
         "note": "SAM tracks were linked only when box overlap supported the semantic id.",
+        "capabilities": sam_capabilities(),
     }
 
 
@@ -874,6 +806,21 @@ async def _reinspect(session, run, video, stage) -> None:
                 None,
                 user_extra=question,
             )
+            proposal_note = (
+                "Reinspection is a proposal. It was not written over the original conclusion "
+                "and its certainty was not increased."
+            )
+            document.reinspection_proposals.append(
+                ReinspectionProposal(
+                    ambiguity_local_id=ambiguity.local_id,
+                    summary=refined.summary,
+                    evidence_classification="UNKNOWN",
+                    changed=False,
+                    applied=False,
+                    notes=proposal_note,
+                    frame_timestamps=[row.timestamp for row in extra_rows],
+                )
+            )
             notes.append(
                 {
                     "ambiguity": ambiguity.local_id,
@@ -881,6 +828,7 @@ async def _reinspect(session, run, video, stage) -> None:
                     "original": ambiguity.description,
                     "refined_summary": refined.summary,
                     "frames": [row.timestamp for row in extra_rows],
+                    "applied": False,
                 }
             )
         except Exception as exc:

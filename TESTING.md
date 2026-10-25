@@ -18,6 +18,12 @@ Covered without network:
 - interval matching still pairs actions when the lists are in different orders
 - upload, probe, frame extraction, fixture provider, object crops, human revision, and zip export
 - a running job is requeued after a restart
+- temporal association on synthetic boxes: motion, scale, rotation, a short occlusion, a long gap that keeps a new id, two objects that pass, and a scene change that archives the earlier track
+- one-to-one assignment, embedding cache keys, L2 normalization, and a missing encoder that raises instead of substituting a histogram
+- trusted appearance references are not written from a tentative re-identification
+- window merge keeps two objects with the same label and different instance ids
+- identity metrics count a switch and a false merge, and they withhold a score when only labels exist
+- confirming a hypothesis promotes the matching candidate reference and leaves the others as candidates
 
 Paid provider tests are not in this suite. Do not describe a live integration as tested until a validation or generation call has succeeded with a real key.
 
@@ -27,7 +33,7 @@ Paid provider tests are not in this suite. Do not describe a live integration as
 cd frontend && npx tsc --noEmit && npx vitest run
 ```
 
-Unit tests cover observation selection at the playhead, refusal to hold a box across a long gap, and nearest-frame lookup.
+Unit tests cover observation selection at the playhead, refusal to hold a box across a long gap, nearest-frame lookup, and one track sample nearest the playhead.
 
 ## Browser
 

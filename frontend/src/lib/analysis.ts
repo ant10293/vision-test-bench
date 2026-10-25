@@ -1,4 +1,4 @@
-import type { Bundle, Observation } from "./types";
+import type { Bundle, Observation, TrackPointSample } from "./types";
 
 export function observationsAt(bundle: Bundle, time: number, window = 0.45): Observation[] {
   const chosen: Observation[] = [];
@@ -11,6 +11,18 @@ export function observationsAt(bundle: Bundle, time: number, window = 0.45): Obs
     if (Math.abs(nearest.timestamp - time) <= window) chosen.push(nearest);
   }
   return chosen;
+}
+
+export function tracksAt(points: TrackPointSample[], time: number, window = 0.2): TrackPointSample[] {
+  const nearest = new Map<string, TrackPointSample>();
+  for (const point of points) {
+    if (!point.bbox) continue;
+    const gap = Math.abs(point.timestamp - time);
+    if (gap > window) continue;
+    const current = nearest.get(point.track_ref);
+    if (!current || gap < Math.abs(current.timestamp - time)) nearest.set(point.track_ref, point);
+  }
+  return [...nearest.values()];
 }
 
 export function frameNear(bundle: Bundle, time: number) {

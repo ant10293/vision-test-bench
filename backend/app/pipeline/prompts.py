@@ -31,6 +31,18 @@ visual characteristics, initial state, whether it is manipulated, and whether id
 Avoid naming an object more precisely than the pictures support.
 Also list timestamped observations with normalized bounding boxes (x, y, w, h in 0..1, origin top-left)
 when you can see the object. Use visibility visible, partial, occluded, or absent.
+If the user message lists tracked instance ids, copy those ids into instance_id and describe those
+objects. Do not mint a replacement physical id when an object only changes appearance, scale, or
+orientation. A shared label is not a shared physical instance.
+""".strip()
+
+TRACKED_OBJECTS = """
+These identifiers represent tracked candidate physical instances. Describe the observable objects
+and interactions using these identifiers. Do not create new physical identities for existing objects
+merely because their appearance changes. Do not reassign these instance ids. Do not merge two
+instances without supporting evidence. Do not declare attachment from proximity alone. Do not treat
+an attempted action as a completed action. If you notice an object that was not tracked, propose it
+with identity_relation set to provisional instead of inserting it as a confirmed instance.
 """.strip()
 
 ACTIONS = """

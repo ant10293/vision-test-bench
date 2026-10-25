@@ -132,6 +132,17 @@ class Continuity(str, Enum):
     NEW = "new"
 
 
+class TrackStatus(str, Enum):
+    """Lifecycle of one physical-instance hypothesis. Archived tracks are retained."""
+
+    TENTATIVE = "tentative"
+    TRACKED = "tracked"
+    OCCLUDED = "occluded"
+    LOST = "lost"
+    ARCHIVED = "archived"
+    AMBIGUOUS = "ambiguous"
+
+
 class AmbiguityKind(str, Enum):
     OCCLUSION = "occlusion"
     MISSING_EVIDENCE = "missing_evidence"

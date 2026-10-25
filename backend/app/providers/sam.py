@@ -94,6 +94,29 @@ def _fields(body: str) -> dict[str, str]:
     return found
 
 
+def sam_capabilities() -> dict:
+    """What this adapter actually calls. Video tracking is not among them."""
+    parser = True
+    try:
+        import meta_sam_parser  # noqa: F401
+    except ImportError:
+        parser = False
+    return {
+        "model_id": "sam-3.1",
+        "image_concept_prompts": True,
+        "box_prompts": False,
+        "point_prompts": False,
+        "video_tracking": False,
+        "video_tracking_detail": (
+            "The adapter sends one image and a text concept. It does not submit a video or a "
+            "multi-frame tracking request. A frame index in the response grammar is parsed when "
+            "present, and that track id is kept. Mask rasters are decoded only when meta-sam-parser "
+            "is installed; otherwise the payload is stored and no mask is invented."
+        ),
+        "mask_raster": parser,
+    }
+
+
 def decode_mask_raster(record: SamRecord):
     """Return a row-major 0/1 raster when the official parser is installed."""
     try:

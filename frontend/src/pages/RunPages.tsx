@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { AssetPreview } from "../components/AssetPreview";
 import { BeforeAfter } from "../components/BeforeAfter";
 import { Bone } from "../components/Skeleton";
+import { PerceptionPanel } from "../components/PerceptionPanel";
 import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
 import { WorkflowGraph } from "../components/WorkflowGraph";
@@ -458,6 +459,7 @@ export function ObjectsPage() {
         <input className="field max-w-xs" placeholder="Add a missed object" value={label} onChange={(event) => setLabel(event.target.value)} />
         <button className="btn" disabled={!label} onClick={async () => { await api.addObject(bundle.run.id, label, "Added by the researcher."); setLabel(""); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Add</button>
       </div>
+      <PerceptionPanel bundle={bundle} />
       <div className={OBJECT_GRID}>
         {bundle.objects.map((object) => (
           <ObjectTile key={object.id} object={object} onOpen={() => { setOpen(object.local_id); setPreview(null); }} />
@@ -715,9 +717,52 @@ export function EvaluatePage() {
           </li>
         ))}
       </ul>
+      {result && <IdentityReport report={result} runId={bundle.run.id} />}
       {result && <pre className="panel mono overflow-auto p-3 text-xs">{JSON.stringify(result, null, 2)}</pre>}
     </div>
   );
+}
+
+function IdentityReport({ report, runId }: { report: Record<string, unknown>; runId: string }) {
+  const identity = report.identity as Record<string, unknown> | undefined;
+  const navigate = useNavigate();
+  const setTime = useInspector((state) => state.setTime);
+  if (!identity) return null;
+  const failures = Array.isArray(identity.failures) ? identity.failures as { kind?: string; timestamp?: number | null; detail?: string }[] : [];
+  return (
+    <section className="panel space-y-2 p-3 text-sm">
+      <h2 className="text-base">Identity</h2>
+      {identity.evaluated === false ? (
+        <p className="text-[var(--muted)]">{String(identity.reason ?? "Identity accuracy was withheld.")}</p>
+      ) : (
+        <p>
+          IDF1 {numberText(identity.idf1)} · switches {String(identity.identity_switches ?? 0)} · false merges {String(identity.false_merges ?? 0)} · coverage {numberText(identity.tracking_coverage)} · re-id {numberText(identity.reid_accuracy)} · abstention {numberText(identity.abstention_rate)}
+        </p>
+      )}
+      <ul className="space-y-1">
+        {failures.map((item, index) => (
+          <li key={`${item.kind}-${item.timestamp}-${index}`}>
+            <button
+              className="btn"
+              disabled={item.timestamp == null}
+              onClick={() => {
+                if (item.timestamp == null) return;
+                setTime(item.timestamp);
+                navigate(`/runs/${runId}`);
+              }}
+            >
+              {humanize(item.kind ?? "failure")}{item.timestamp == null ? "" : ` · ${item.timestamp.toFixed(2)}s`}
+            </button>
+            {item.detail ? <span className="ml-2 text-xs text-[var(--muted)]">{item.detail}</span> : null}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function numberText(value: unknown) {
+  return typeof value === "number" ? value.toFixed(2) : "—";
 }
 
 function requestCost(row: Record<string, unknown>): string {

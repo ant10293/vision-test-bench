@@ -36,7 +36,29 @@ Viewpoint and task constraint are separate fields. The three research modes are 
 | Unconstrained head-mounted | head-mounted | unconstrained |
 | Auto | chosen from motion and scene changes | matching the choice |
 
-The user can override auto. Image motion is not reported as object motion in the world. `world_coordinates_supported` stays false. The head-mounted baseline estimates a partial affine camera motion (Lucas–Kanade plus `estimateAffinePartial2D`) and tracks residual blobs in the image. Fixed-camera tracking uses a background subtractor. Unconstrained recordings are split into scene chunks. A track continues across a chunk only when appearance correlation is at least 0.92, and even then the gap is marked unobserved. Weaker matches stay `uncertain` and get a new id.
+The user can override auto. Image motion is not reported as object motion in the world. `world_coordinates_supported` stays false. The head-mounted baseline estimates a partial affine camera motion (Lucas–Kanade plus `estimateAffinePartial2D`) and tracks residual regions in the image. Fixed-camera tracking can use a background subtractor. Unconstrained recordings are split into scene chunks. A scene change archives the tracks it already has. It does not delete them, and it does not continue an id across the cut by itself.
+
+## Perception
+
+Computer vision assigns instance ids. A vision-language model may describe those ids. It does not replace them because a label matches. Tracking continuity is not an action verdict, and a box overlap is not attachment.
+
+A new run stores one perception preset on `config_json.perception`:
+
+| Preset | What it runs |
+| --- | --- |
+| `A_legacy_motion` | The repaired motion baseline. Greedy overlap inside a scene. Across a scene cut the new id is kept; a color correlation of at least 0.92 is annotated `reassociated`, and a weaker correlation is annotated `uncertain`. |
+| `B_temporal` | Motion and MSER region proposals, then one-to-one association from predicted position, overlap, size, motion, and time. No appearance encoder. |
+| `C_appearance` | The same tracker plus DINOv2 ViT-S/14 when that encoder can be loaded. |
+| `D_appearance_segmented` | Preset C with GrabCut masks on some tracking frames. |
+| `vlm_only` | Motion tracks are drawn and are not supplied as physical ids. |
+
+An older run with no perception block is read as `A_legacy_motion`, so a retry does not silently become an appearance experiment. The default for a newly created run is `B_temporal`.
+
+Tracking frames are a separate ffmpeg sample from the frames sent to a model. The VLM budget stays `max_frames`. Association scores and cosine values are stored as uncalibrated numbers. `scores_are_probabilities` is false. A short gap with a small margin keeps the id and marks it ambiguous. A re-identification that clears the cosine gate and the margin reuses an id as `proposed`, and the crop is stored as a candidate reference. A weak or close appearance score keeps a new id and does not enter the trusted gallery. A person can confirm, reject, merge, or split on a new human revision. Confirming marks the matching candidate reference trusted in that revision. It does not reload vectors into a later tracking pass.
+
+Detectors are `motion`, `proposals`, and `manual`. An unknown detector name fails. A click seed is an added manual region, not a substitute algorithm. Embeddings are cached as `.npy` files under the run data directory, keyed by encoder id, version, preprocessing version, crop, and mask. They are not written into the analysis JSON.
+
+Open-world discovery without a downloaded detector is region proposals. Those regions are not class names. Unknown objects are valid instances. DINOv2 weights download only when an appearance preset encodes a crop. If torch or the weights are missing, the encoder status is `unavailable`, appearance scores stay absent, and temporal association continues. Histogram features are a separate explicit descriptor used by the legacy color check and by tests. They are not substituted for DINOv2.
 
 ## Providers
 
@@ -54,4 +76,4 @@ Session-level actions remain on each clip's analysis. The project workflow adds 
 
 ## Where files live
 
-`data/originals` immutable uploads, `data/proxies`, `data/frames`, `data/runs/{id}` working JSON and crops, `data/transcripts/{checksum}` cached local transcripts, `data/learnloop.db`. API keys, if saved in the app, are Fernet-encrypted under `data/.credential_key` (mode 0600) or read from the environment. Exports omit them.
+`data/originals` immutable uploads, `data/proxies`, `data/frames`, `data/runs/{id}` working JSON and crops, `data/runs/{id}/embeddings` cached appearance vectors, `data/transcripts/{checksum}` cached local transcripts, `data/learnloop.db`. API keys, if saved in the app, are Fernet-encrypted under `data/.credential_key` (mode 0600) or read from the environment. Exports omit them.

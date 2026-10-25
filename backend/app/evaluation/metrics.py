@@ -137,6 +137,7 @@ def evaluate_documents(predicted: dict, truth: dict, tolerances: dict | None = N
             "predicted_ambiguities": len(predicted.get("ambiguities") or []),
         },
         "errors": action_errors,
+        "identity": _identity(predicted, truth, tolerances),
         "object_matches": [
             {
                 "predicted": pred_objects[i].get("local_id"),
@@ -147,6 +148,12 @@ def evaluate_documents(predicted: dict, truth: dict, tolerances: dict | None = N
             for i, j, score in object_matches
         ],
     }
+
+
+def _identity(predicted: dict, truth: dict, tolerances: dict | None) -> dict:
+    from app.perception.identity_eval import evaluate_identity
+
+    return evaluate_identity(predicted, truth, tolerances)
 
 
 def _label_score(left: str, right: str) -> float:

@@ -5,7 +5,7 @@ import { humanize } from "../lib/humanize";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
 
-const TRACKS = ["frames", "objects", "actions", "states", "ambiguities", "steps"] as const;
+const TRACKS = ["frames", "objects", "tracks", "actions", "states", "ambiguities", "steps"] as const;
 
 export function Timeline({ bundle = null }: { bundle?: Bundle | null }) {
   const duration = Math.max(bundle?.video?.duration_sec ?? 1, 0.1);
@@ -124,6 +124,7 @@ function segments(name: (typeof TRACKS)[number], bundle: Bundle): Segment[] {
       color: frame.scene_change ? "#e06c75" : "#465066",
     }));
   }
+  if (name === "tracks") return trackSegments(bundle);
   if (name === "actions") {
     return bundle.actions.map((action) => ({
       key: action.id,
@@ -175,4 +176,51 @@ function segments(name: (typeof TRACKS)[number], bundle: Bundle): Segment[] {
     color: "#2c4a3d",
     stepId: step.local_id,
   }));
+}
+
+const TRACK_COLOR: Record<string, string> = {
+  tracked: "#3d7a62",
+  tentative: "#465066",
+  occluded: "#8a6a22",
+  lost: "#6a3036",
+  archived: "#3a3f4b",
+  ambiguous: "#7a4e8a",
+  reassociated: "#2f6f8f",
+  corrected: "#2f6f8f",
+};
+
+function trackSegments(bundle: Bundle): Segment[] {
+  const points = [...(bundle.tracks?.points ?? [])].sort((a, b) => a.timestamp - b.timestamp);
+  const grouped = new Map<string, typeof points>();
+  for (const point of points) {
+    const rows = grouped.get(point.track_ref) ?? [];
+    rows.push(point);
+    grouped.set(point.track_ref, rows);
+  }
+  const out: Segment[] = [];
+  for (const [ref, rows] of grouped) {
+    if (!rows.length) continue;
+    let start = rows[0];
+    let previous = rows[0];
+    const flush = (end: typeof previous) => {
+      const status = end.continuity === "reassociated" ? "reassociated" : end.status || "tracked";
+      out.push({
+        key: `${ref}-${start.timestamp}-${status}`,
+        start: start.timestamp,
+        end: Math.max(end.timestamp, start.timestamp + 0.05),
+        label: `${ref} · ${status}`,
+        color: TRACK_COLOR[status] ?? "#465066",
+      });
+    };
+    for (const point of rows.slice(1)) {
+      const gap = point.timestamp - previous.timestamp;
+      if (gap > 0.45 || point.status !== start.status || point.continuity === "reassociated") {
+        flush(previous);
+        start = point;
+      }
+      previous = point;
+    }
+    flush(previous);
+  }
+  return out.slice(0, 400);
 }

@@ -39,6 +39,7 @@ from app.models.runs import (
     ManualModel,
     ModelRequestRow,
     ModelResponseRow,
+    PipelineStageRun,
     PromptVersion,
     ProviderStatus,
 )
@@ -52,8 +53,17 @@ from app.models.sessions import (
     RecordingSession,
 )
 from app.models.util import utcnow
+from app.perception.corrections import decide_hypothesis, merge_instances, split_instance
+from app.perception.types import TrackingCancelled
+from app.pipeline.perception_stage import run_spatial_stage
 from app.providers.catalog import lookup, models_for
-from app.providers.claude_code import begin_login, load_claude_code, probe, save_claude_code, submit_login_code
+from app.providers.claude_code import (
+    begin_login,
+    load_claude_code,
+    probe,
+    save_claude_code,
+    submit_login_code,
+)
 from app.providers.registry import get_provider, provider_ids
 from app.providers.types import ProviderError, UnsupportedMode
 from app.schemas.analysis import AnalysisDocument
@@ -871,6 +881,76 @@ def patch_object(run_id: str, local_id: str, payload: dict, session: Session = D
 @router.post("/runs/{run_id}/objects")
 def post_object(run_id: str, payload: dict, session: Session = Depends(db)) -> dict:
     return _edit(session, run_id, lambda db, run: add_object(db, run, payload.get("label") or "Untitled object", payload.get("description") or ""))
+
+
+@router.post("/runs/{run_id}/perception/seed")
+def seed_perception(run_id: str, payload: dict, session: Session = Depends(db)) -> dict:
+    run = _run(session, run_id)
+    video = session.get(VideoAsset, run.video_id)
+    if video is None:
+        raise HTTPException(404, "video not found")
+    try:
+        box = {
+            "timestamp": float(payload["timestamp"]),
+            "x": float(payload["x"]),
+            "y": float(payload["y"]),
+            "w": float(payload["w"]),
+            "h": float(payload["h"]),
+            "provenance": "manual",
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, "A seed needs timestamp, x, y, w, and h.") from exc
+    if min(box["x"], box["y"], box["w"], box["h"]) < 0 or box["x"] + box["w"] > 1.001 or box["y"] + box["h"] > 1.001:
+        raise HTTPException(400, "The seed box must lie inside the frame.")
+    config = dict(run.config_json or {})
+    perception = dict(config.get("perception") or {})
+    perception["manual_regions"] = list(perception.get("manual_regions") or []) + [box]
+    if perception.get("strategy") in {None, "", "legacy_motion", "vlm_only"}:
+        perception["strategy"] = "temporal"
+        perception["detector"] = "manual" if not perception.get("detector") or perception.get("detector") == "motion" else perception["detector"]
+    config["perception"] = perception
+    run.config_json = config
+    stage = session.scalar(
+        select(PipelineStageRun).where(
+            PipelineStageRun.run_id == run.id,
+            PipelineStageRun.stage == "spatial_tracking",
+        )
+    )
+    if stage is None:
+        raise HTTPException(400, "This run has no tracking stage.")
+    try:
+        run_spatial_stage(session, run, video, stage)
+    except (TrackingCancelled, ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    session.commit()
+    return bundle(session, run)
+
+
+@router.post("/runs/{run_id}/perception/hypotheses/{hypothesis_id}")
+def post_hypothesis(run_id: str, hypothesis_id: str, payload: dict, session: Session = Depends(db)) -> dict:
+    return _edit(
+        session,
+        run_id,
+        lambda db, run: decide_hypothesis(db, run, hypothesis_id, payload.get("decision") or ""),
+    )
+
+
+@router.post("/runs/{run_id}/perception/merge")
+def post_instance_merge(run_id: str, payload: dict, session: Session = Depends(db)) -> dict:
+    return _edit(
+        session,
+        run_id,
+        lambda db, run: merge_instances(db, run, payload["keep_id"], payload["drop_id"]),
+    )
+
+
+@router.post("/runs/{run_id}/perception/split")
+def post_instance_split(run_id: str, payload: dict, session: Session = Depends(db)) -> dict:
+    return _edit(
+        session,
+        run_id,
+        lambda db, run: split_instance(db, run, payload["instance_id"], payload.get("timestamps") or []),
+    )
 
 
 @router.post("/runs/{run_id}/objects/merge")

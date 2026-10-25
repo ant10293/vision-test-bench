@@ -150,6 +150,23 @@ export const api = {
     request<Bundle>(`/api/runs/${id}/objects/${localId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   addObject: (id: string, label: string, description: string) =>
     request<Bundle>(`/api/runs/${id}/objects`, { method: "POST", body: JSON.stringify({ label, description }) }),
+  seedTrack: (id: string, box: { timestamp: number; x: number; y: number; w: number; h: number }) =>
+    request<Bundle>(`/api/runs/${id}/perception/seed`, { method: "POST", body: JSON.stringify(box) }),
+  decideHypothesis: (id: string, hypothesisId: string, decision: "confirmed" | "rejected") =>
+    request<Bundle>(`/api/runs/${id}/perception/hypotheses/${hypothesisId}`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    }),
+  mergeInstances: (id: string, keepId: string, dropId: string) =>
+    request<Bundle>(`/api/runs/${id}/perception/merge`, {
+      method: "POST",
+      body: JSON.stringify({ keep_id: keepId, drop_id: dropId }),
+    }),
+  splitInstance: (id: string, instanceId: string, timestamps: number[]) =>
+    request<Bundle>(`/api/runs/${id}/perception/split`, {
+      method: "POST",
+      body: JSON.stringify({ instance_id: instanceId, timestamps }),
+    }),
   mergeObjects: (id: string, keepId: string, dropId: string) =>
     request<Bundle>(`/api/runs/${id}/objects/merge`, {
       method: "POST",

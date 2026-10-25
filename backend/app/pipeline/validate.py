@@ -8,6 +8,9 @@ from app.schemas.enums import RECOGNIZED_ACTIONS
 
 def validate_document(document: AnalysisDocument, duration: float) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
+    from app.perception.verify import audit_claims
+
+    issues.extend(audit_claims(document))
     objects = {item.local_id for item in document.objects}
     actions = {item.local_id for item in document.actions}
     steps = {item.local_id for item in document.workflow_steps}

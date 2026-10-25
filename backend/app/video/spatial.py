@@ -1,50 +1,21 @@
-"""Pluggable spatial strategies.
+"""Spatial tracking entry point.
 
-These baselines estimate camera motion and track residual blobs. They never
-emit world coordinates. Identity is not forced across weak appearance matches.
+The motion baseline remains available. It is no longer the only identity path.
+Neither path emits world coordinates.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 
-import cv2
 import numpy as np
 
+from app.perception.legacy import run_legacy
+from app.perception.presets import PerceptionConfig, config_from_mapping
+from app.perception.tracker import track_frames
+from app.perception.types import FrameView, SpatialReport, TrackPoint
 from app.video.frames import read_bgr
 from app.video.sampling import MotionSignal
-
-
-@dataclass
-class TrackPoint:
-    track_ref: str
-    timestamp: float
-    x: float
-    y: float
-    w: float
-    h: float
-    motion_score: float
-    continuity: str
-    camera_compensated: bool
-    scene_chunk: int
-    note: str = ""
-
-
-@dataclass
-class SpatialReport:
-    viewpoint: str
-    task_constraint: str
-    research_mode: str
-    global_motion: float
-    scene_change_count: int
-    camera_motion_compensated: bool
-    compensation_model: str
-    coordinate_frame: str
-    world_coordinates_supported: bool
-    notes: str
-    tracks: list[TrackPoint] = field(default_factory=list)
-    chunks: list[dict] = field(default_factory=list)
 
 
 def characterize(signals: list[MotionSignal], declared_mode: str) -> dict:
@@ -78,238 +49,186 @@ def characterize(signals: list[MotionSignal], declared_mode: str) -> dict:
     }
 
 
-def _blobs(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    boxes = []
-    for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        if w * h < 80:
-            continue
-        boxes.append((x, y, w, h))
-    boxes.sort(key=lambda item: item[2] * item[3], reverse=True)
-    return boxes[:8]
-
-
-def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
-    ax, ay, aw, ah = a
-    bx, by, bw, bh = b
-    x1, y1 = max(ax, bx), max(ay, by)
-    x2, y2 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
-    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-    union = aw * ah + bw * bh - inter
-    return inter / union if union else 0.0
-
-
-def _color_sig(image: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray:
-    x, y, w, h = box
-    crop = image[y : y + h, x : x + w]
-    if crop.size == 0:
-        return np.zeros(24, dtype=np.float32)
-    hist = cv2.calcHist([crop], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
-    cv2.normalize(hist, hist)
-    return hist.flatten()
-
-
-def _compensate(prev: np.ndarray, curr: np.ndarray) -> tuple[np.ndarray, bool]:
-    prev_g = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)
-    curr_g = cv2.cvtColor(curr, cv2.COLOR_BGR2GRAY)
-    features = cv2.goodFeaturesToTrack(prev_g, maxCorners=80, qualityLevel=0.01, minDistance=7)
-    if features is None or len(features) < 6:
-        return curr, False
-    nxt, status, _ = cv2.calcOpticalFlowPyrLK(prev_g, curr_g, features, None)
-    if nxt is None or status is None:
-        return curr, False
-    good_prev = features[status.flatten() == 1]
-    good_next = nxt[status.flatten() == 1]
-    if len(good_prev) < 6:
-        return curr, False
-    matrix, inliers = cv2.estimateAffinePartial2D(good_prev, good_next, method=cv2.RANSAC)
-    if matrix is None:
-        return curr, False
-    if inliers is not None and int(inliers.sum()) < 6:
-        return curr, False
-    height, width = curr.shape[:2]
-    warped = cv2.warpAffine(prev, matrix, (width, height))
-    return warped, True
-
-
 def analyze_sequence(
     paths: list[Path],
     timestamps: list[float],
     signals: list[MotionSignal],
     declared_mode: str,
+    config: PerceptionConfig | dict | None = None,
+    detector=None,
+    encoder=None,
+    cache_dir: Path | None = None,
+    should_stop=None,
 ) -> SpatialReport:
+    """Track one frame at a time. Images are not retained after each step."""
+    resolved = config if isinstance(config, PerceptionConfig) else config_from_mapping(config if isinstance(config, dict) else None)
     profile = characterize(signals, declared_mode)
-    compensate = profile["viewpoint"] == "head_mounted"
-    images = [read_bgr(path) for path in paths]
-    if not images:
-        return SpatialReport(
-            viewpoint=profile["viewpoint"],
-            task_constraint=profile["task_constraint"],
-            research_mode=profile["research_mode"],
-            global_motion=profile["global_motion"],
-            scene_change_count=profile["scene_change_count"],
-            camera_motion_compensated=False,
-            compensation_model="none",
-            coordinate_frame="image",
-            world_coordinates_supported=False,
-            notes="No frames were available for spatial tracking.",
+    if resolved.strategy in {"legacy_motion", "vlm_only"} and detector is None:
+        frames = list(_views(paths, timestamps, signals))
+        points, compensated, chunks = run_legacy(frames, profile["research_mode"])
+        notes = _legacy_notes(profile, compensated, resolved.strategy)
+        perception = _legacy_perception(points, resolved, len(frames), notes)
+        return _report(profile, compensated, "affine_partial" if compensated else "none", notes, points, chunks, perception)
+    from app.perception.detect import build_detector
+
+    if detector is None:
+        detector = build_detector(
+            resolved.detector,
+            compensate_camera=profile["viewpoint"] == "head_mounted",
+            seeds=resolved.manual_regions,
         )
-    height, width = images[0].shape[:2]
-    chunk = 0
-    active: list[dict] = []
-    points: list[TrackPoint] = []
-    chunks = [{"ordinal": 0, "time_start": timestamps[0], "time_end": timestamps[0], "scene_change": False}]
-    next_id = 1
-    compensated_any = False
-    subtractor = None if compensate else cv2.createBackgroundSubtractorMOG2(history=20, varThreshold=16, detectShadows=False)
+    if encoder is None and resolved.encoder and resolved.strategy not in {"legacy_motion", "vlm_only"}:
+        from app.perception.encoder import EncoderUnavailable, load_encoder
 
-    for index, image in enumerate(images):
-        timestamp = timestamps[index]
+        try:
+            encoder = load_encoder(resolved.encoder)
+        except EncoderUnavailable as exc:
+            encoder = _UnavailableEncoder(resolved.encoder, str(exc))
+    views, chunks = _streaming_views(paths, timestamps, signals)
+    result = track_frames(
+        views,
+        config=resolved,
+        detector=detector,
+        encoder=encoder,
+        research_mode=profile["research_mode"],
+        cache_dir=cache_dir,
+        should_stop=should_stop,
+    )
+    if resolved.strategy == "vlm_only":
+        result.perception.used_for_identity = False
+    notes = result.perception.notes
+    if profile["source"] == "auto":
+        notes += " Research mode was characterized automatically and can be overridden."
+    model = "affine_partial" if result.compensated else "none"
+    return _report(profile, result.compensated, model, notes.strip(), result.points, chunks, result.perception)
+
+
+class _UnavailableEncoder:
+    """Fails on encode so the tracker records the miss instead of swapping models."""
+
+    def __init__(self, encoder_id: str, detail: str):
+        self.encoder_id = encoder_id
+        self.encoder_version = "unavailable"
+        self.preprocess_version = "unavailable"
+        self.dimension = 1
+        self.detail = detail
+
+    def encode(self, crops):
+        from app.perception.types import EncoderUnavailable
+
+        raise EncoderUnavailable(self.detail)
+
+
+def _views(paths: list[Path], timestamps: list[float], signals: list[MotionSignal]):
+    for index, path in enumerate(paths):
         signal = signals[index] if index < len(signals) else None
-        if signal and signal.scene_change and index > 0:
-            chunk += 1
-            active = []
-            chunks.append(
-                {
-                    "ordinal": chunk,
-                    "time_start": timestamp,
-                    "time_end": timestamp,
-                    "scene_change": True,
-                    "global_motion": signal.global_motion,
-                }
-            )
-        chunks[-1]["time_end"] = timestamp
-        if index == 0:
-            mask = np.zeros(image.shape[:2], dtype=np.uint8)
-        elif compensate:
-            reference, ok = _compensate(images[index - 1], image)
-            compensated_any = compensated_any or ok
-            diff = cv2.absdiff(image, reference if ok else images[index - 1])
-            gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-            _, mask = cv2.threshold(gray, 28, 255, cv2.THRESH_BINARY)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        else:
-            assert subtractor is not None
-            fg = subtractor.apply(image)
-            _, mask = cv2.threshold(fg, 200, 255, cv2.THRESH_BINARY)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        image = read_bgr(path)
+        yield FrameView(
+            timestamp=timestamps[index],
+            image=image,
+            scene_change=bool(signal and signal.scene_change),
+            global_motion=float(signal.global_motion) if signal else 0.0,
+            motion_score=float(signal.motion) if signal else 0.0,
+            index=index,
+        )
+        del image
 
-        detections = _blobs(mask)
-        used = set()
-        for box in detections:
-            signature = _color_sig(image, box)
-            best_i = -1
-            best_score = 0.15
-            for candidate, track in enumerate(active):
-                if candidate in used or track["chunk"] != chunk:
-                    continue
-                score = _iou(track["box"], box)
-                if score > best_score:
-                    best_score = score
-                    best_i = candidate
-            nx, ny, nw, nh = box
-            norm = (nx / width, ny / height, nw / width, nh / height)
-            if best_i >= 0:
-                used.add(best_i)
-                track = active[best_i]
-                track["box"] = box
-                track["sig"] = signature
-                continuity = "continuous"
-                ref = track["ref"]
-                note = ""
-            else:
-                ref = f"track_{next_id}"
-                next_id += 1
-                continuity = "new"
-                note = "New image-space track. Semantic identity is not established."
-                active.append({"ref": ref, "box": box, "sig": signature, "chunk": chunk})
-            motion = signal.motion if signal else 0
-            points.append(
-                TrackPoint(
-                    track_ref=ref,
-                    timestamp=timestamp,
-                    x=norm[0],
-                    y=norm[1],
-                    w=norm[2],
-                    h=norm[3],
-                    motion_score=motion,
-                    continuity=continuity,
-                    camera_compensated=compensate and compensated_any,
-                    scene_chunk=chunk,
-                    note=note,
+
+def _streaming_views(paths: list[Path], timestamps: list[float], signals: list[MotionSignal]):
+    chunks: list[dict] = []
+
+    def generate():
+        for frame in _views(paths, timestamps, signals):
+            if not chunks:
+                chunks.append(
+                    {
+                        "ordinal": 0,
+                        "time_start": frame.timestamp,
+                        "time_end": frame.timestamp,
+                        "scene_change": False,
+                    }
                 )
-            )
-        _reassociate_across_chunks(points, active, chunk, profile["task_constraint"])
+            elif frame.scene_change:
+                chunks.append(
+                    {
+                        "ordinal": chunks[-1]["ordinal"] + 1,
+                        "time_start": frame.timestamp,
+                        "time_end": frame.timestamp,
+                        "scene_change": True,
+                        "global_motion": frame.global_motion,
+                    }
+                )
+            chunks[-1]["time_end"] = frame.timestamp
+            yield frame
 
+    return generate(), chunks
+
+
+def _legacy_notes(profile: dict, compensated: bool, strategy: str) -> str:
     notes = (
         "Tracks are image-plane motion regions. "
         "World coordinates are not estimated because no calibration or visual-geometry solution ran. "
     )
-    if compensate:
+    if profile["viewpoint"] == "head_mounted":
         notes += "Head-mounted baseline subtracts a partial affine camera motion before blob detection. "
     else:
         notes += "Fixed-camera baseline uses a background subtractor against a stable image frame. "
+    if strategy == "vlm_only":
+        notes += "These tracks are a visual baseline and were not sent to the model as identity constraints. "
     if profile["source"] == "auto":
         notes += "Research mode was characterized automatically and can be overridden."
+    return notes.strip()
+
+
+def _legacy_perception(points: list[TrackPoint], config: PerceptionConfig, frames: int, notes: str):
+    from app.schemas.analysis import InstanceRecord, PerceptionRecord
+
+    grouped: dict[str, list[TrackPoint]] = {}
+    for point in points:
+        grouped.setdefault(point.track_ref, []).append(point)
+    instances = []
+    for ref, rows in grouped.items():
+        rows = sorted(rows, key=lambda item: item.timestamp)
+        uncertain = any(item.continuity in {"uncertain", "reassociated"} for item in rows)
+        instances.append(
+            InstanceRecord(
+                instance_id=ref,
+                status=rows[-1].status,
+                first_seen=rows[0].timestamp,
+                last_seen=rows[-1].timestamp,
+                observation_count=len(rows),
+                uncertain=uncertain or any(item.continuity == "new" for item in rows),
+                detector_id="motion",
+            )
+        )
+    return PerceptionRecord(
+        strategy=config.strategy,
+        detector_id="motion",
+        encoder_status="not_requested",
+        frames_tracked=frames,
+        tracking_fps=config.target_fps,
+        world_coordinates_supported=False,
+        used_for_identity=config.strategy != "vlm_only",
+        scores_are_probabilities=False,
+        diagnostics={"frames": frames, "tracks_created": len(instances), "detections": len(points)},
+        instances=instances,
+        notes=notes,
+    )
+
+
+def _report(profile, compensated, model, notes, points, chunks, perception) -> SpatialReport:
     return SpatialReport(
         viewpoint=profile["viewpoint"],
         task_constraint=profile["task_constraint"],
         research_mode=profile["research_mode"],
         global_motion=profile["global_motion"],
         scene_change_count=profile["scene_change_count"],
-        camera_motion_compensated=bool(compensate and compensated_any),
-        compensation_model="affine_partial" if compensate else "none",
+        camera_motion_compensated=bool(compensated),
+        compensation_model=model,
         coordinate_frame="image",
         world_coordinates_supported=False,
-        notes=notes.strip(),
+        notes=notes,
         tracks=points,
         chunks=chunks,
+        perception=perception,
     )
-
-
-def _reassociate_across_chunks(
-    points: list[TrackPoint],
-    active: list[dict],
-    chunk: int,
-    constraint: str,
-) -> None:
-    if constraint != "unconstrained" or chunk == 0:
-        return
-    fresh = [track for track in active if track["chunk"] == chunk]
-    prior = [track for track in active if track["chunk"] < chunk]
-    for track in fresh:
-        if any(point.track_ref == track["ref"] and point.continuity == "reassociated" for point in points):
-            continue
-        best = None
-        best_corr = 0.0
-        for candidate in prior:
-            corr = float(
-                cv2.compareHist(
-                    track["sig"].astype(np.float32),
-                    candidate["sig"].astype(np.float32),
-                    cv2.HISTCMP_CORREL,
-                )
-            )
-            if corr > best_corr:
-                best_corr = corr
-                best = candidate
-        if best is None:
-            continue
-        for point in points:
-            if point.track_ref != track["ref"] or point.scene_chunk != chunk or point.continuity != "new":
-                continue
-            if best_corr >= 0.92:
-                point.continuity = "reassociated"
-                point.note = (
-                    f"Appearance similarity {best_corr:.2f} with earlier track {best['ref']}. "
-                    "The intervening interval was not observed, so this is a cautious reassociation, "
-                    "not proof of continuous identity."
-                )
-            else:
-                point.continuity = "uncertain"
-                point.note = (
-                    "A visually similar region existed in an earlier scene, but the evidence is too "
-                    "weak to treat it as the same object. Identity was not carried across the gap."
-                )
-            break

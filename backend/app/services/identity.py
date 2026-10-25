@@ -25,7 +25,7 @@ PROCESS_WORDS = (
 )
 
 
-def propose_links(clips: list[dict]) -> list[dict]:
+def propose_links(clips: list[dict], appearance: dict | None = None) -> list[dict]:
     """Each clip is {video_id, run_id, objects:[{local_id, label, characteristics, initial_state, final_state, image_url}]}."""
     proposals: list[dict] = []
     groups: list[list[dict]] = []
@@ -58,11 +58,14 @@ def propose_links(clips: list[dict]) -> list[dict]:
         if len(videos) < 2:
             continue
         appearance_shift = len({(item.get("initial_state"), item.get("final_state")) for item in group}) > 1
+        relation = _relation(group, appearance)
         proposals.append(
             {
                 "local_id": f"Object_{index + 1}",
                 "label": group[0].get("label") or group[0]["local_id"],
                 "uncertain": True,
+                "relation": relation,
+                "confirmed": False,
                 "note": (
                     "Proposed from shared description across clips. Appearance differs between recordings, so this is not a confirmed instance."
                     if appearance_shift
@@ -112,6 +115,26 @@ def _overlap(left: dict, right: dict) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
+
+
+def _relation(group: list[dict], appearance: dict | None) -> str:
+    """Text overlap proposes a type. A cosine does not confirm the instance."""
+    cosines = [item.get("appearance_cosine") for item in group if item.get("appearance_cosine") is not None]
+    if appearance:
+        for left in group:
+            for right in group:
+                if left["video_id"] == right["video_id"]:
+                    continue
+                key = (left["video_id"], left["local_id"], right["video_id"], right["local_id"])
+                other = (right["video_id"], right["local_id"], left["video_id"], left["local_id"])
+                value = appearance.get(key, appearance.get(other))
+                if value is not None:
+                    cosines.append(value)
+    if cosines and max(cosines) >= 0.8:
+        return "possibly_same_instance"
+    if cosines and max(cosines) >= 0.6:
+        return "visually_similar"
+    return "same_semantic_type"
 
 
 def _feature_overlap(left: dict, right: dict) -> float:

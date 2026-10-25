@@ -13,6 +13,7 @@ from app.config import REPO_ROOT
 from app.models.media import VideoAsset
 from app.models.runs import AnalysisRun, Job, PipelineStageRun, PromptVersion
 from app.models.util import new_id
+from app.perception.presets import preset
 from app.pipeline.prompts import TEMPLATES, compose
 from app.providers.catalog import lookup
 from app.providers.claude_code import load_claude_code
@@ -70,6 +71,9 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
     if whisper_model not in WHISPER_MODELS:
         raise ValueError(f"Unknown Whisper model {whisper_model}.")
     prompt = _latest_prompt(session, payload.get("prompt_key") or "scene")
+    perception_name = payload.get("perception_preset") or "B_temporal"
+    perception = preset(perception_name).to_dict()
+    perception["preset"] = perception_name
     viewpoint, constraint = MODE_AXES[mode]
     config = {
         "research_mode": mode,
@@ -105,6 +109,7 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "capabilities": caps.as_dict(),
         "app_version": __version__,
         "git_revision": _git(),
+        "perception": perception,
     }
     if provider_id == "anthropic":
         config["anthropic_transport"] = anthropic_transport

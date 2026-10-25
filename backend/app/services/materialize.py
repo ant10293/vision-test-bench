@@ -366,23 +366,6 @@ def _hex_bgr(color: str) -> tuple[int, int, int]:
 
 
 def grabcut_cutout(image: np.ndarray, bbox: BBox) -> np.ndarray | None:
-    height, width = image.shape[:2]
-    x = max(0, int(bbox.x * width))
-    y = max(0, int(bbox.y * height))
-    w = max(2, min(width - x, int(bbox.w * width)))
-    h = max(2, min(height - y, int(bbox.h * height)))
-    if w < 4 or h < 4:
-        return None
-    mask = np.zeros((height, width), np.uint8)
-    bgd = np.zeros((1, 65), np.float64)
-    fgd = np.zeros((1, 65), np.float64)
-    try:
-        cv2.grabCut(image, mask, (x, y, w, h), bgd, fgd, 3, cv2.GC_INIT_WITH_RECT)
-    except cv2.error:
-        return None
-    keep = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
-    if int(keep.sum()) < 10:
-        return None
-    bgra = cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
-    bgra[:, :, 3] = keep
-    return bgra[y : y + h, x : x + w]
+    from app.perception.segment import grabcut_cutout as cutout
+
+    return cutout(image, bbox)

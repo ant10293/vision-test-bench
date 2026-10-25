@@ -117,7 +117,12 @@ def test_claude_code_uses_the_model_output_maximum(monkeypatch):
 
 
 def test_cli_result_is_unpriced_plan_usage(tmp_path: Path):
-    from app.providers.claude_code import build_argv, build_stdin, parse_cli_payload, response_from_payload
+    from app.providers.claude_code import (
+        build_argv,
+        build_stdin,
+        parse_cli_payload,
+        response_from_payload,
+    )
     from app.providers.types import FrameInput, GenerationRequest
 
     frame = tmp_path / "frame.png"

@@ -327,6 +327,9 @@ class SpatialTrackPoint(Base):
     camera_compensated: Mapped[bool] = mapped_column(Boolean, default=False)
     scene_chunk: Mapped[int] = mapped_column(Integer, default=0)
     identity_note: Mapped[str] = mapped_column(Text, default="")
+    track_status: Mapped[str] = mapped_column(String(32), default="")
+    association_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    detector_id: Mapped[str] = mapped_column(String(80), default="")
 
 
 class SceneChunk(Base):

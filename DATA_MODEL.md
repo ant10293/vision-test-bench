@@ -30,11 +30,17 @@ Boxes are normalized to the display frame after ffmpeg autorotation. `coordinate
 
 ## Export
 
+Perception is an optional object on the same analysis document: instances, hypotheses, appearance-reference metadata, diagnostics, and manual identity corrections. It does not contain embedding vectors. Schema version stays `1.0.0` because the fields are optional and older documents still load. Historical track rows keep an empty `track_status` rather than being relabeled `tracked`.
+
+`SpatialTrackPoint` gained `track_status`, `association_score`, and `detector_id` in Alembic revision `a1c9e4d27b10`. SQLite databases created by `create_all` also receive those columns from `schema_upgrade`. Embedding files live beside the run, not in the document or the inspector payload. The bundle sends at most 4000 compact track points and says when the list was truncated.
+
 `GET /api/runs/{id}/export` writes a zip: manifest (checksum, model, prompt snapshot, coverage, app version), analysis JSON, transcripts JSON, alignments JSON, requests, raw responses, object images, and the original video when it is under 80 MB. Secrets are not included. Transcript rows are not part of the analysis document, so the document schema stays `1.0.0`. Import accepts schema `1.0.0` and reuses a video with the same checksum. Other schema versions are rejected until a migration exists.
 
 ## Ground truth
 
 Promoting a revision copies that document into `GroundTruthDataset`. Evaluation stores true positives, false positives, and false negatives for actions matched one-to-one by interval overlap, plus object matches labeled `assisted_label` unless the researcher set them. Errors point at timestamps.
+
+Identity metrics are a separate block. They are computed only when both documents have instance ids or track refs on observations. Semantic labels alone leave `evaluated: false`. Observation pairs match by time and box. Predicted ids are mapped one-to-one onto ground-truth ids by overlap. IDF1 counts a true positive only after that mapping. The block also counts identity switches, false merges, coverage, re-identification after a gap, abstention, and how unresolved hypotheses were later marked. Hypothesis resolution is not accuracy. A false merge's timestamp is the first matched observation of that predicted id, so the inspector can seek it.
 
 ## Task projects
 

@@ -5,6 +5,8 @@ interface InspectorState {
   playing: boolean;
   speed: number;
   overlay: boolean;
+  layers: { boxes: boolean; ids: boolean; status: boolean; trajectory: boolean; uncertain: boolean };
+  seedMode: boolean;
   selectedObject: string | null;
   selectedAction: string | null;
   selectedStep: string | null;
@@ -13,6 +15,8 @@ interface InspectorState {
   setPlaying: (playing: boolean) => void;
   setSpeed: (speed: number) => void;
   setOverlay: (overlay: boolean) => void;
+  setLayer: (key: keyof InspectorState["layers"], value: boolean) => void;
+  setSeedMode: (seedMode: boolean) => void;
   selectObject: (id: string | null) => void;
   selectAction: (id: string | null) => void;
   selectStep: (id: string | null) => void;
@@ -24,6 +28,8 @@ export const useInspector = create<InspectorState>((set) => ({
   playing: false,
   speed: 1,
   overlay: true,
+  layers: { boxes: true, ids: true, status: false, trajectory: false, uncertain: true },
+  seedMode: false,
   selectedObject: null,
   selectedAction: null,
   selectedStep: null,
@@ -32,6 +38,8 @@ export const useInspector = create<InspectorState>((set) => ({
   setPlaying: (playing) => set({ playing }),
   setSpeed: (speed) => set({ speed }),
   setOverlay: (overlay) => set({ overlay }),
+  setLayer: (key, value) => set((state) => ({ layers: { ...state.layers, [key]: value } })),
+  setSeedMode: (seedMode) => set({ seedMode }),
   selectObject: (selectedObject) => set({ selectedObject }),
   selectAction: (selectedAction) => set({ selectedAction }),
   selectStep: (selectedStep) => set({ selectedStep }),

@@ -84,6 +84,8 @@ class ObjectPrediction(BaseModel):
     manipulated: bool = False
     confidence: float | None = None
     accepted: bool = True
+    instance_id: str | None = None
+    identity_relation: str | None = None
 
 
 class ObservationPrediction(BaseModel):
@@ -197,6 +199,86 @@ class ValidationIssue(BaseModel):
     entity_id: str = ""
 
 
+class InstanceRecord(BaseModel):
+    """One physical instance. A semantic label is optional and is not the identity."""
+
+    instance_id: str
+    semantic_label: str | None = None
+    status: str
+    first_seen: float
+    last_seen: float
+    observation_count: int = 0
+    trusted_references: int = 0
+    candidate_references: int = 0
+    uncertain: bool = True
+    human_initialized: bool = False
+    detector_id: str = ""
+
+
+class HypothesisRecord(BaseModel):
+    """An identity proposal. Scores are uncalibrated and are not probabilities."""
+
+    hypothesis_id: str
+    timestamp: float
+    subject_instance_id: str
+    candidate_instance_id: str
+    runner_up_instance_id: str | None = None
+    appearance_cosine: float | None = None
+    motion_agreement: float | None = None
+    association_score: float
+    margin: float | None = None
+    decision: Literal["proposed", "rejected", "ambiguous", "confirmed"]
+    note: str = ""
+
+
+class AppearanceRefRecord(BaseModel):
+    instance_id: str
+    timestamp: float
+    state: Literal["trusted", "candidate"]
+    quality: float = 0
+    encoder_id: str = ""
+    encoder_version: str = ""
+    preprocess_version: str = ""
+    bbox: BBox | None = None
+    confirmed: bool = False
+
+
+class PerceptionRecord(BaseModel):
+    """Computer-vision identity for one analysis. Vectors are not stored here."""
+
+    strategy: str
+    detector_id: str
+    encoder_id: str | None = None
+    encoder_version: str | None = None
+    encoder_status: str = "not_requested"
+    encoder_detail: str = ""
+    segmenter_id: str | None = None
+    tracking_fps: float | None = None
+    frames_tracked: int = 0
+    world_coordinates_supported: bool = False
+    coordinate_frame: Literal["image"] = "image"
+    used_for_identity: bool = True
+    scores_are_probabilities: bool = False
+    diagnostics: dict = Field(default_factory=dict)
+    instances: list[InstanceRecord] = Field(default_factory=list)
+    hypotheses: list[HypothesisRecord] = Field(default_factory=list)
+    appearance_references: list[AppearanceRefRecord] = Field(default_factory=list)
+    manual_corrections: list[dict] = Field(default_factory=list)
+    notes: str = ""
+
+
+class ReinspectionProposal(BaseModel):
+    """A later look at an interval. applied stays false until a person accepts it."""
+
+    ambiguity_local_id: str
+    summary: str = ""
+    evidence_classification: str = "UNKNOWN"
+    changed: bool = False
+    applied: bool = False
+    notes: str = ""
+    frame_timestamps: list[float] = Field(default_factory=list)
+
+
 class AnalysisDocument(BaseModel):
     schema_version: str = SCHEMA_VERSION
     summary: str = ""
@@ -215,3 +297,5 @@ class AnalysisDocument(BaseModel):
     ambiguities: list[AmbiguityPrediction] = Field(default_factory=list)
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
     reinspection_notes: list[str] = Field(default_factory=list)
+    reinspection_proposals: list[ReinspectionProposal] = Field(default_factory=list)
+    perception: PerceptionRecord | None = None

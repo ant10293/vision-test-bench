@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from app.perception.relations import geometric_relationships
 from app.schemas.analysis import (
     ActionPrediction,
     AmbiguityPrediction,
@@ -55,32 +56,38 @@ def document_from_spatial(report: SpatialReport, coverage: Coverage) -> Analysis
     for index, (ref, points) in enumerate(sorted(grouped.items()), start=1):
         points = sorted(points, key=lambda item: item.timestamp)
         local_id = f"Object_{index}"
-        uncertain = any(item.continuity in {"uncertain", "new", "reassociated"} for item in points)
+        uncertain = any(item.continuity in {"uncertain", "reassociated"} for item in points)
+        legacy = report.perception is None or report.perception.strategy in {"legacy_motion", "vlm_only"}
         objects.append(
             ObjectPrediction(
                 local_id=local_id,
-                label=f"Motion region {index}",
+                instance_id=ref,
+                identity_relation="physical_instance",
+                label=f"Motion region {index}" if legacy else f"Unidentified instance {index}",
                 description=(
                     "Image-space region that moved relative to the chosen camera model. "
                     "No semantic class was assigned."
+                    if legacy
+                    else "A tracked physical instance without a semantic class. The id is not a recognition label."
                 ),
-                visual_characteristics="motion blob",
-                initial_state="visible motion region",
-                final_state="visible motion region" if points else "unknown",
-                uncertain_identity=True,
+                visual_characteristics="motion blob" if legacy else "tracked region",
+                initial_state="visible motion region" if legacy else "visible",
+                final_state="visible motion region" if points and legacy else ("visible" if points else "unknown"),
+                uncertain_identity=uncertain or legacy,
                 manipulated=False,
                 confidence=None,
             )
         )
         for point in points:
+            visibility = getattr(point, "visibility", "visible") or "visible"
             observations.append(
                 ObservationPrediction(
                     object_local_id=local_id,
                     timestamp=point.timestamp,
                     bbox=_box(point.x, point.y, point.w, point.h),
-                    visibility=Visibility.VISIBLE,
-                    description=point.note or "Motion region detected in the image.",
-                    evidence=_ev(point.note or "Background-subtracted or residual-motion blob.", point.timestamp),
+                    visibility=visibility if visibility in {item.value for item in Visibility} else Visibility.VISIBLE,
+                    description=point.note or "Region detected in the image.",
+                    evidence=_ev(point.note or "Computer-vision track observation.", point.timestamp),
                     continuity=point.continuity,
                     coordinate_frame="image",
                     camera_compensated=point.camera_compensated,
@@ -236,11 +243,22 @@ def document_from_spatial(report: SpatialReport, coverage: Coverage) -> Analysis
         characterization_source="auto" if report.notes.endswith("overridden.") or "automatically" in report.notes else "user",
         notes=report.notes,
     )
+    track_to_object = {obj.instance_id: obj.local_id for obj in objects if obj.instance_id}
+    relationships = []
+    for relation in geometric_relationships(report.tracks):
+        subject = track_to_object.get(relation.subject_local_id)
+        other = track_to_object.get(relation.other_local_id or "")
+        if not subject or not other:
+            continue
+        relationships.append(relation.model_copy(update={"subject_local_id": subject, "other_local_id": other}))
+    summary = (
+        "Deterministic motion baseline. Regions are not named objects, and motion intervals "
+        "are not verified physical actions."
+        if report.perception is None or report.perception.strategy in {"legacy_motion", "vlm_only"}
+        else "Tracked physical instances. Labels are not recognition classes, and motion is not a completed action."
+    )
     return AnalysisDocument(
-        summary=(
-            "Deterministic motion baseline. Regions are not named objects, and motion intervals "
-            "are not verified physical actions."
-        ),
+        summary=summary,
         fixture=False,
         camera=camera,
         coverage=coverage,
@@ -252,6 +270,8 @@ def document_from_spatial(report: SpatialReport, coverage: Coverage) -> Analysis
         workflow_steps=steps,
         dependencies=dependencies,
         ambiguities=ambiguities,
+        relationships=relationships,
+        perception=report.perception,
     )
 
 

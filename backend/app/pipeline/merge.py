@@ -53,21 +53,10 @@ def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDoc
     )
 
 
-def _label(value: str) -> str:
-    return " ".join(value.casefold().split())
-
-
 def _object_id_map(partial: AnalysisDocument, merged: AnalysisDocument) -> dict[str, str]:
-    labels = {_label(obj.label): obj.local_id for obj in reversed(merged.objects)}
-    merged_labels = {obj.local_id: _label(obj.label) for obj in merged.objects}
-    mapping: dict[str, str] = {}
-    for obj in partial.objects:
-        key = _label(obj.label)
-        if merged_labels.get(obj.local_id) == key:
-            mapping[obj.local_id] = obj.local_id
-        else:
-            mapping[obj.local_id] = labels.get(key, obj.local_id)
-    return mapping
+    from app.perception.ground import object_id_map
+
+    return object_id_map(partial, merged)
 
 
 def _obj(mapping: dict[str, str], local_id: str) -> str:
