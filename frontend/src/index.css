@@ -523,6 +523,12 @@ body.is-sorting * { cursor: grabbing; }
   align-items: flex-end;
   text-align: right;
 }
+.cost-total.is-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+}
 .cost-total-label {
   font-size: 0.75rem;
   font-weight: 500;

@@ -63,7 +63,7 @@ export function TaskDetailPage() {
   });
   const reference = labSettings.data?.video_storage === "reference";
   const [error, setError] = useState("");
-  const [sessionName, setSessionName] = useState("Later session");
+  const [sessionName, setSessionName] = useState("");
   const [openSessions, setOpenSessions] = useState<Record<string, boolean>>({});
   const [compare, setCompare] = useState<string[]>([]);
   const [dragId, setDragId] = useState("");
@@ -121,24 +121,17 @@ export function TaskDetailPage() {
 
   return (
     <div className="space-y-5">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <Link className="text-sm text-[var(--muted)]" to="/projects">← Back to projects</Link>
-          <h1 className="mt-2 text-2xl font-medium">{task.project.name}</h1>
-          <p className="text-sm text-[var(--muted)]">{task.project.description}</p>
-          <p className="mt-1 text-xs text-[var(--amber)]">
-            Project time is the capture clock. Clip time is seconds from the start of that recording. File modification time and upload time are stored separately.
-          </p>
+      <header>
+        <Link className="text-sm text-[var(--muted)]" to="/projects">← Back to projects</Link>
+        <div className="relative mt-2">
+          <h1 className="min-w-0 pr-36 text-lg">{task.project.name}</h1>
+          <ProjectCosts projectId={projectId} className="is-end is-overlay" />
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button className="btn" onClick={async () => { await api.reconcileTask(projectId); await refresh(); }}>Reconcile</button>
-          <input className="field w-40" value={sessionName} onChange={(event) => setSessionName(event.target.value)} aria-label="New session name" />
-          <button className="btn" onClick={async () => { if (sessionName) { await api.createSession(projectId, sessionName); await refresh(); } }}>New session</button>
-          <a className="btn" href={`/api/tasks/${projectId}/export`}>Export task</a>
-        </div>
+        {task.project.description ? <p className="pr-36 text-sm text-[var(--muted)]">{task.project.description}</p> : null}
+        <p className="pr-36 text-xs text-[var(--amber)]">
+          Project time is the capture clock. Clip time is seconds from the start of that recording. File modification time and upload time are stored separately.
+        </p>
       </header>
-
-      <ProjectCosts projectId={projectId} />
 
       <StorageSettings />
       {reference ? (
@@ -232,6 +225,34 @@ export function TaskDetailPage() {
 
       <section className="space-y-2">
         <h2 className="text-lg">Chronology</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <input
+              className="field w-40"
+              value={sessionName}
+              onChange={(event) => setSessionName(event.target.value)}
+              placeholder="Session name"
+              aria-label="New session name"
+            />
+            <button
+              className="btn whitespace-nowrap"
+              disabled={!sessionName.trim()}
+              onClick={async () => {
+                const name = sessionName.trim();
+                if (!name) return;
+                await api.createSession(projectId, name);
+                setSessionName("");
+                await refresh();
+              }}
+            >
+              New session
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="btn whitespace-nowrap" onClick={async () => { await api.reconcileTask(projectId); await refresh(); }}>Reconcile</button>
+            <a className="btn whitespace-nowrap" href={`/api/tasks/${projectId}/export`}>Export task</a>
+          </div>
+        </div>
         <p className="text-xs text-[var(--muted)]">
           Method {task.order.method ? humanize(task.order.method) : "none"}. This order is {task.order.fact ? "marked as fact" : "not treated as fact"}.
           Drag a clip onto another to lock a manual order. Ambiguous positions stay highlighted.

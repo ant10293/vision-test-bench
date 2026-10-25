@@ -555,11 +555,11 @@ export function ProjectsPage() {
               </div>
             ) : (
               <>
-                <div className="mt-2 flex items-end justify-between gap-4">
-                  <h2 className="min-w-0 text-lg">{editing ? editing.name : <Bone width="12rem" />}</h2>
-                  {mode === "edit" && editId && <ProjectCosts projectId={editId} className="is-end" />}
+                <div className="relative mt-2">
+                  <h2 className="min-w-0 pr-36 text-lg">{editing ? editing.name : <Bone width="12rem" />}</h2>
+                  {mode === "edit" && editId && <ProjectCosts projectId={editId} className="is-end is-overlay" />}
                 </div>
-                <p className="text-sm text-[var(--muted)]">
+                <p className="pr-36 text-sm text-[var(--muted)]">
                   {storagePending ? <Bone width="80%" /> : reference
                     ? "Add a path or drop a file, depending on the storage setting. Analysis keeps running if you switch pages. Drag a card to reorder it."
                     : "Drop videos to add them. Upload and analysis keep running if you switch pages. Drag a card to reorder it."}
