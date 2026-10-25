@@ -384,57 +384,66 @@ function ClipRow({
         onDrop();
       }}
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <strong>{clip.filename}</strong>
-        {highlight && <span className="tag inferred">{position.tied ? "tied timestamp" : "ambiguous position"}</span>}
-        {clip.order_locked && <span className="tag">locked</span>}
-        <span className="text-xs text-[var(--muted)]">{humanize(clip.research_mode) || "camera unset"}</span>
-      </div>
-      <p className="mt-1 text-xs text-[var(--muted)]">
-        Capture {clip.capture_time_utc || clip.capture_time_raw || "not in the file"} · source {humanize(clip.timestamp_source)} · reliability {humanize(clip.timestamp_reliability)}
-        <br />
-        File modified {clip.file_mtime || "unknown"} · uploaded {clip.uploaded_at} · clip duration {formatTime(clip.duration_sec)}
-      </p>
-      <p className="text-xs text-[var(--muted)]">{clip.timestamp_note}</p>
-      <div className="mt-2 flex flex-wrap gap-2">
-        <select
-          className="field w-auto"
-          value={clip.session_id ?? ""}
-          aria-label={`Session for ${clip.filename}`}
-          onChange={async (event) => { await api.patchClip(task.project.id, clip.id, { session_id: event.target.value }); await onChange(); }}
-        >
-          {task.sessions.map((recording) => <option key={recording.id} value={recording.id}>{recording.name}</option>)}
-        </select>
-        <select
-          className="field w-auto"
-          value={clip.research_mode}
-          aria-label={`Camera mode for ${clip.filename}`}
-          onChange={async (event) => { await api.patchClip(task.project.id, clip.id, { research_mode: event.target.value }); await onChange(); }}
-        >
-          {MODES.map((item) => <option key={item || "unset"} value={item}>{humanize(item) || "Unset"}</option>)}
-        </select>
-        <input
-          className="field w-64"
-          defaultValue={clip.capture_time_raw}
-          aria-label={`Capture time for ${clip.filename}`}
-          onBlur={async (event) => {
-            if (event.target.value && event.target.value !== clip.capture_time_raw) {
-              await api.patchClip(task.project.id, clip.id, { capture_time_raw: event.target.value });
-              await onChange();
-            }
-          }}
-        />
-        <Link className="btn" to={clip.run_id ? `/runs/${clip.run_id}?t=0` : `/videos/${clip.id}?t=0`}>Open clip</Link>
-        <button
-          className="btn"
-          onClick={async () => {
-            if (!window.confirm(`Remove “${clip.filename}” from this project? It stays in the video library.`)) return;
-            await api.detachVideo(clip.id);
-            await onChange();
-          }}
-        >
-          Remove from project
-        </button>
+      <div className="flex items-center gap-3">
+        {clip.thumbnail_url ? (
+          <img src={clip.thumbnail_url} alt="" draggable={false} className="aspect-video w-40 shrink-0 rounded bg-black object-contain" />
+        ) : (
+          <div className="aspect-video w-40 shrink-0 rounded bg-black" aria-hidden="true" />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <strong>{clip.filename}</strong>
+            {highlight && <span className="tag inferred">{position.tied ? "tied timestamp" : "ambiguous position"}</span>}
+            {clip.order_locked && <span className="tag">locked</span>}
+            <span className="text-xs text-[var(--muted)]">{humanize(clip.research_mode) || "camera unset"}</span>
+          </div>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            Capture {clip.capture_time_utc || clip.capture_time_raw || "not in the file"} · source {humanize(clip.timestamp_source)} · reliability {humanize(clip.timestamp_reliability)}
+            <br />
+            File modified {clip.file_mtime || "unknown"} · uploaded {clip.uploaded_at} · clip duration {formatTime(clip.duration_sec)}
+          </p>
+          <p className="text-xs text-[var(--muted)]">{clip.timestamp_note}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <select
+              className="field w-auto"
+              value={clip.session_id ?? ""}
+              aria-label={`Session for ${clip.filename}`}
+              onChange={async (event) => { await api.patchClip(task.project.id, clip.id, { session_id: event.target.value }); await onChange(); }}
+            >
+              {task.sessions.map((recording) => <option key={recording.id} value={recording.id}>{recording.name}</option>)}
+            </select>
+            <select
+              className="field w-auto"
+              value={clip.research_mode}
+              aria-label={`Camera mode for ${clip.filename}`}
+              onChange={async (event) => { await api.patchClip(task.project.id, clip.id, { research_mode: event.target.value }); await onChange(); }}
+            >
+              {MODES.map((item) => <option key={item || "unset"} value={item}>{humanize(item) || "Unset"}</option>)}
+            </select>
+            <input
+              className="field w-64"
+              defaultValue={clip.capture_time_raw}
+              aria-label={`Capture time for ${clip.filename}`}
+              onBlur={async (event) => {
+                if (event.target.value && event.target.value !== clip.capture_time_raw) {
+                  await api.patchClip(task.project.id, clip.id, { capture_time_raw: event.target.value });
+                  await onChange();
+                }
+              }}
+            />
+            <Link className="btn" to={clip.run_id ? `/runs/${clip.run_id}?t=0` : `/videos/${clip.id}?t=0`}>Open clip</Link>
+            <button
+              className="btn"
+              onClick={async () => {
+                if (!window.confirm(`Remove “${clip.filename}” from this project? It stays in the video library.`)) return;
+                await api.detachVideo(clip.id);
+                await onChange();
+              }}
+            >
+              Remove from project
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

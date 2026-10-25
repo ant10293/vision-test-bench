@@ -616,7 +616,7 @@ export function ProjectsPage() {
           <div>
             <button className="text-sm text-[var(--muted)] disabled:opacity-45" onClick={requestBackToProjects} disabled={saving}>← Back to projects</button>
             {creating ? (
-              <div className="mt-3.5 mb-2 grid w-fit max-w-full gap-2">
+              <div className="mt-3.5 mb-2 w-fit max-w-full">
                 <input
                   className="field stretch block min-w-0"
                   value={name}
@@ -625,7 +625,7 @@ export function ProjectsPage() {
                   aria-label="Project name"
                   autoFocus
                 />
-                <label className="flex items-center gap-2 text-sm">
+                <label className="mt-4 flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
                     checked={spansDays}
@@ -633,7 +633,7 @@ export function ProjectsPage() {
                   />
                   Across several days
                 </label>
-                <p className="text-sm text-[var(--muted)]">Add a name and at least one video. You can drop files or choose videos from the library. Upload and analysis keep going after you save.</p>
+                <p className="mt-0.5 text-sm text-[var(--muted)]">Add a name and at least one video. You can drop files or choose videos from the library. Upload and analysis keep going after you save.</p>
               </div>
             ) : (
               <>
