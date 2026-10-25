@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
 import { LibraryPicker } from "../components/LibraryPicker";
 import { ProjectCosts } from "../components/ProjectCosts";
 import { Bone, MediaPlaceholder } from "../components/Skeleton";
 import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
-import { api, formatTime, formatWhen, type ProjectSummary } from "../lib/api";
+import { VideoCard, VideoFace } from "../components/VideoCard";
+import { api, formatWhen, type ProjectSummary } from "../lib/api";
 import type { VideoInfo } from "../lib/types";
 import { videoReady } from "../lib/uploadProgress";
 import { useUploads } from "../stores/uploads";
@@ -152,88 +152,6 @@ function ProjectDetailSkeleton({ onBack }: { onBack: () => void }) {
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function VideoFace({ video, order }: { video?: VideoInfo; order?: number }) {
-  if (!video || order == null) {
-    return (
-      <>
-        <div className="aspect-video w-full bg-black">
-          <Bone className="bone-fill" />
-        </div>
-        <div className="flex items-end gap-3 p-3 text-sm" aria-hidden="true">
-          <div className="min-w-0 flex-1 space-y-1">
-            <div className="truncate"><Bone width="72%" /></div>
-            <div className="mono truncate text-xs text-[var(--muted)]"><Bone width="92%" /></div>
-          </div>
-          <div className="mono shrink-0 text-xs text-[var(--muted)]"><Bone width="1.5ch" /></div>
-        </div>
-      </>
-    );
-  }
-  const waiting = !video.thumbnail_url && video.ingest_status !== "failed";
-  return (
-    <>
-      {waiting ? <MediaPlaceholder /> : video.thumbnail_url && <img src={video.thumbnail_url} alt="" className="aspect-video w-full bg-black object-contain" />}
-      <div className="flex items-end gap-3 p-3 text-sm">
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="truncate">{video.filename}</div>
-          <div className="mono truncate text-xs text-[var(--muted)]">
-            {waiting ? <Bone width="92%" /> : (
-              <>
-                {formatTime(video.duration_sec)} · {video.width}×{video.height} · {video.fps.toFixed(2)} fps
-                {video.variable_frame_rate ? " · VFR" : " · CFR"} · {video.codec}
-              </>
-            )}
-          </div>
-        </div>
-        <div className="mono shrink-0 text-xs text-[var(--muted)]" aria-label={`Order ${order}`}>{order}</div>
-      </div>
-    </>
-  );
-}
-
-function VideoCard({
-  video,
-  order,
-  sortIndex,
-  deleting,
-  actionLabel,
-  actionTitle = "Delete video",
-  onDelete,
-  onGrab,
-}: {
-  video: VideoInfo;
-  order: number;
-  sortIndex: number;
-  deleting: boolean;
-  actionLabel?: string;
-  actionTitle?: string;
-  onDelete: () => void;
-  onGrab: (event: ReactPointerEvent<HTMLDivElement>) => void;
-}) {
-  return (
-    <div className="video-card panel overflow-hidden" data-sort-index={sortIndex} onPointerDown={onGrab}>
-      <button
-        type="button"
-        className="video-card-delete"
-        aria-label={actionLabel ?? `Delete ${video.filename}`}
-        title={actionTitle}
-        disabled={deleting}
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          onDelete();
-        }}
-      >
-        <Trash2 size={15} aria-hidden="true" />
-      </button>
-      <Link to={`/videos/${video.id}`} className="block" draggable={false}>
-        <VideoFace video={video} order={order} />
-      </Link>
     </div>
   );
 }

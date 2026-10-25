@@ -1,16 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
 import { LibraryPicker } from "../components/LibraryPicker";
 import { ProjectCosts } from "../components/ProjectCosts";
 import { Bone } from "../components/Skeleton";
 import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
+import { VideoCard, VideoFace } from "../components/VideoCard";
 import { api, evidenceClass, formatTime, type TaskBundle, type TaskClip } from "../lib/api";
 import { humanize, labeledId } from "../lib/humanize";
 import { clipPosition } from "../lib/taskOrder";
+import type { VideoInfo } from "../lib/types";
+import { videoReady } from "../lib/uploadProgress";
+import { useUploads } from "../stores/uploads";
 
 const MODES = ["", "fixed_camera", "constrained_head_mounted", "unconstrained_head_mounted"];
+
+function inDisplayOrder(videos: VideoInfo[]): VideoInfo[] {
+  if (!videos.some((video) => video.order_index != null)) return videos;
+  return [...videos].sort((left, right) => {
+    const leftRank = left.order_index;
+    const rightRank = right.order_index;
+    if (leftRank == null && rightRank == null) return 0;
+    if (leftRank == null) return 1;
+    if (rightRank == null) return -1;
+    return leftRank - rightRank;
+  });
+}
 
 function TaskDetailSkeleton() {
   return (
@@ -40,8 +56,12 @@ export function TaskDetailPage() {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["task", projectId], queryFn: () => api.task(projectId), enabled: Boolean(projectId) });
   const labSettings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  const projectVideos = useQuery({
+    queryKey: ["videos", projectId],
+    queryFn: () => api.videos(projectId),
+    enabled: Boolean(projectId),
+  });
   const reference = labSettings.data?.video_storage === "reference";
-  const [mode, setMode] = useState("fixed_camera");
   const [error, setError] = useState("");
   const [sessionName, setSessionName] = useState("Later session");
   const [openSessions, setOpenSessions] = useState<Record<string, boolean>>({});
@@ -57,14 +77,30 @@ export function TaskDetailPage() {
     await client.invalidateQueries({ queryKey: ["task", projectId] });
     await client.invalidateQueries({ queryKey: ["videos"] });
   };
-  const upload = useMutation({
-    mutationFn: (files: File[]) => api.uploadClips(projectId, files, mode),
+  const noteTask = useUploads((state) => state.noteTask);
+  const enqueue = useUploads((state) => state.enqueue);
+  const enqueuePaths = useUploads((state) => state.enqueuePaths);
+  const removeItem = useUploads((state) => state.removeItem);
+  const adoptServer = useUploads((state) => state.adoptServer);
+  const uploadItems = useUploads((state) => state.items);
+  const assetRows = useMemo(
+    () => uploadItems.filter((item) => item.projectId === projectId),
+    [uploadItems, projectId],
+  );
+  const detachVideo = useMutation({
+    mutationFn: (id: string) => api.detachVideo(id),
     onSuccess: async () => {
       setError("");
       await refresh();
     },
     onError: (err: Error) => setError(err.message),
   });
+  useEffect(() => {
+    noteTask(projectId);
+  }, [noteTask, projectId]);
+  useEffect(() => {
+    if (projectVideos.data) adoptServer(projectId, projectVideos.data);
+  }, [adoptServer, projectId, projectVideos.data]);
   const task = query.data;
   const clipById = useMemo(() => new Map((task?.clips ?? []).map((clip) => [clip.id, clip])), [task]);
   if (query.isError) return <p className="text-[var(--rose)]">{(query.error as Error).message}</p>;
@@ -107,56 +143,91 @@ export function TaskDetailPage() {
       <StorageSettings />
       {reference ? (
         <>
-          <label className="field-label">
-            <span>Camera mode for this batch</span>
-            <select className="field w-auto" value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Camera mode">
-              {MODES.map((item) => <option key={item || "unset"} value={item}>{humanize(item) || "Unset"}</option>)}
-            </select>
-          </label>
           <VideoPathForm
             hint="One full path per line. Each recording stays where it is, and this task reads it from that path."
-            onAdd={async (paths) => {
-              await api.referenceClips(projectId, paths, mode);
+            onAdd={(paths) => {
               setError("");
-              await refresh();
+              enqueuePaths(projectId, paths);
             }}
           />
           <AssetDropZone
             chooser={false}
-            accept="video/mp4,video/quicktime,video/webm"
+            accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
             prompt=""
             chooseLabel="Choose files"
             libraryLabel="Choose from library"
             onChooseLibrary={() => setPickerOpen(true)}
             supported=""
+            rows={assetRows.map((item) => ({
+              id: item.key,
+              name: item.name,
+              url: item.previewUrl,
+              subtitle: item.subtitle,
+              progress: item.progress,
+              failed: item.phase === "error",
+            }))}
+            onRemove={removeItem}
             onFiles={() => undefined}
           />
         </>
       ) : (
       <AssetDropZone
         multiple
-        accept="video/mp4,video/quicktime,video/webm"
+        accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
         prompt="Drag and drop recordings here,"
         chooseLabel="Choose files"
         libraryLabel="Choose from library"
         onChooseLibrary={() => setPickerOpen(true)}
         supported="Supported: MP4, MOV, WebM"
-        hint="Each clip can use a different camera configuration after upload."
-        pending={upload.isPending}
-        pendingLabel="Uploading and reconciling the project reading…"
-        error={error}
+        rows={assetRows.map((item) => ({
+          id: item.key,
+          name: item.name,
+          url: item.previewUrl,
+          subtitle: item.subtitle,
+          progress: item.progress,
+          failed: item.phase === "error",
+        }))}
+        onRemove={removeItem}
         onFiles={(files) => {
-          if (files.length) upload.mutate(files);
+          if (files.length) enqueue(projectId, files);
         }}
-        settings={
-          <label className="field-label">
-            <span>Camera mode for this batch</span>
-            <select className="field w-auto" value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Camera mode">
-              {MODES.map((item) => <option key={item || "unset"} value={item}>{humanize(item) || "Unset"}</option>)}
-            </select>
-          </label>
-        }
       />
+      )}
+      {error && <p className="text-sm text-[var(--rose)]">{error}</p>}
+
+      {projectVideos.isPending ? (
+        <div className="video-grid" aria-busy="true">
+          <p className="sr-only">Loading videos</p>
+          {Array.from({ length: 3 }, (_, index) => (
+            <div key={index} className="video-card is-static panel overflow-hidden">
+              <VideoFace />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="video-grid">
+          {inDisplayOrder(projectVideos.data ?? []).filter((video) => videoReady(video) && !assetRows.some((item) => item.videoId === video.id)).map((video, index) => (
+            <VideoCard
+              key={video.id}
+              video={video}
+              order={index + 1}
+              deleting={detachVideo.isPending && detachVideo.variables === video.id}
+              actionLabel={`Remove ${video.filename} from this project`}
+              actionTitle="Remove from project"
+              onDelete={() => {
+                if (window.confirm(`Remove “${video.filename}” from this project? It stays in the video library.`)) detachVideo.mutate(video.id);
+              }}
+            />
+          ))}
+        </div>
+      )}
+      {projectVideos.isError && <p className="text-sm text-[var(--rose)]">{(projectVideos.error as Error).message}</p>}
+      {projectVideos.isSuccess && !assetRows.length && !inDisplayOrder(projectVideos.data).filter(videoReady).length && (
+        <p className="text-sm text-[var(--muted)]">
+          {reference
+            ? "This project has no videos yet. Add a path above, or choose from the library."
+            : "This project has no videos yet. Drop one above, or choose from the library."}
+        </p>
       )}
 
       <section className="space-y-2">
@@ -346,6 +417,7 @@ export function TaskDetailPage() {
             if (!chosen.length) return;
             try {
               await api.attachVideos(projectId, chosen.map((video) => video.id));
+              await api.reconcileTask(projectId);
               setError("");
               await refresh();
             } catch (err) {
@@ -431,17 +503,6 @@ function ClipRow({
                 }
               }}
             />
-            <Link className="btn" to={clip.run_id ? `/runs/${clip.run_id}?t=0` : `/videos/${clip.id}?t=0`}>Open clip</Link>
-            <button
-              className="btn"
-              onClick={async () => {
-                if (!window.confirm(`Remove “${clip.filename}” from this project? It stays in the video library.`)) return;
-                await api.detachVideo(clip.id);
-                await onChange();
-              }}
-            >
-              Remove from project
-            </button>
           </div>
         </div>
       </div>

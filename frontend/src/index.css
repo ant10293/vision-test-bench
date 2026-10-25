@@ -464,6 +464,10 @@ button.linkish {
   user-select: none;
   touch-action: none;
 }
+.video-card.is-static {
+  cursor: default;
+  touch-action: auto;
+}
 .video-card img,
 .video-card-ghost img {
   -webkit-user-drag: none;

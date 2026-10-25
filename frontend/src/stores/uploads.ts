@@ -2,9 +2,9 @@ import { create } from "zustand";
 import { api } from "../lib/api";
 import { queryClient } from "../lib/queryClient";
 import type { VideoInfo } from "../lib/types";
-import { analysisPercent, uploadPercent, videoReady } from "../lib/uploadProgress";
+import { analysisPercent, progressLabel, progressStepCount, RECONCILE_DETAIL, uploadPercent, videoReady } from "../lib/uploadProgress";
 
-export type UploadPhase = "staged" | "uploading" | "analyzing" | "error";
+export type UploadPhase = "staged" | "uploading" | "analyzing" | "reconciling" | "error";
 
 export type UploadItem = {
   key: string;
@@ -39,6 +39,7 @@ type UploadStore = {
   forgetProject: (projectId: string) => void;
   beginCreate: (name: string, options?: { spansDays?: boolean; allowEmpty?: boolean }) => Promise<string>;
   adoptServer: (projectId: string, videos: VideoInfo[]) => void;
+  noteTask: (projectId: string) => void;
 };
 
 export const LIBRARY_QUEUE = "library";
@@ -54,6 +55,11 @@ const aborters = new Map<string, () => void>();
 const cancelled = new Set<string>();
 const draining = new Set<string>();
 const polling = new Set<string>();
+const taskProjects = new Set<string>();
+
+function stepCount(projectId: string): number {
+  return progressStepCount(taskProjects.has(projectId));
+}
 
 function revoke(item: UploadItem | undefined) {
   if (item?.previewUrl.startsWith("blob:")) URL.revokeObjectURL(item.previewUrl);
@@ -131,10 +137,6 @@ function analysisSubtitle(video: VideoInfo): string {
   return "Analyzing";
 }
 
-function progressText(step: number, total: number, detail: string): string {
-  return `Step ${step}/${total} · ${detail}`;
-}
-
 function previewPatch(item: UploadItem, video: VideoInfo): Partial<UploadItem> {
   if (video.thumbnail_url && !item.previewUrl.startsWith("blob:")) return { previewUrl: video.thumbnail_url };
   return {};
@@ -147,9 +149,42 @@ function analysisPatch(item: UploadItem, video: VideoInfo): Partial<UploadItem> 
   return {
     phase: "analyzing",
     progress: incoming,
-    subtitle: progressText(2, 2, analysisSubtitle(video)),
+    subtitle: progressLabel(2, stepCount(item.projectId), analysisSubtitle(video)),
     ...previewPatch(item, video),
   };
+}
+
+async function publishReady(key: string, video: VideoInfo) {
+  const item = useUploads.getState().items.find((entry) => entry.key === key);
+  if (cancelled.has(key) || !item) {
+    await api.deleteVideo(video.id).catch(() => undefined);
+    void queryClient.invalidateQueries({ queryKey: ["videos"] });
+    return;
+  }
+  if (taskProjects.has(item.projectId)) {
+    if (item.phase === "reconciling") return;
+    patchItem(key, {
+      phase: "reconciling",
+      progress: 0,
+      subtitle: progressLabel(3, 3, RECONCILE_DETAIL),
+      videoId: video.id,
+      ...previewPatch(item, video),
+    });
+    try {
+      const bundle = await api.reconcileTask(item.projectId);
+      if (cancelled.has(key) || !useUploads.getState().items.some((entry) => entry.key === key)) return;
+      queryClient.setQueryData(["task", item.projectId], bundle);
+    } catch (error) {
+      if (!useUploads.getState().items.some((entry) => entry.key === key)) return;
+      const message = error instanceof Error ? error.message : "Could not reconcile the project reading";
+      patchItem(key, { phase: "error", progress: null, subtitle: message, videoId: video.id });
+      remember(video);
+      return;
+    }
+  }
+  remember(video);
+  dropItem(key);
+  void queryClient.invalidateQueries({ queryKey: ["task", item.projectId] });
 }
 
 async function settle(key: string, video: VideoInfo) {
@@ -160,8 +195,7 @@ async function settle(key: string, video: VideoInfo) {
     return;
   }
   if (videoReady(video)) {
-    remember(video);
-    dropItem(key);
+    await publishReady(key, video);
     return;
   }
   if (video.ingest_status === "failed") {
@@ -177,7 +211,9 @@ async function settle(key: string, video: VideoInfo) {
   const current = useUploads.getState().items.find((entry) => entry.key === key);
   patchItem(key, {
     videoId: video.id,
-    ...(current ? analysisPatch(current, video) : { phase: "analyzing", progress: analysisPercent(video.ingest_progress ?? 0), subtitle: progressText(2, 2, analysisSubtitle(video)) }),
+    ...(current
+      ? analysisPatch(current, video)
+      : { phase: "analyzing", progress: analysisPercent(video.ingest_progress ?? 0), subtitle: progressLabel(2, stepCount(""), analysisSubtitle(video)) }),
   });
   remember(video);
 }
@@ -187,7 +223,7 @@ async function runReference(key: string) {
   const path = paths.get(key);
   const projectId = item ? destination(item.projectId) : undefined;
   if (!item || !path || projectId === undefined) return;
-  patchItem(key, { phase: "analyzing", progress: 0, subtitle: progressText(2, 2, "Reading the file") });
+  patchItem(key, { phase: "analyzing", progress: 0, subtitle: progressLabel(2, stepCount(item.projectId), "Reading the file") });
   try {
     const video = await api.referenceVideo(projectId, path);
     paths.delete(key);
@@ -206,14 +242,15 @@ async function runUpload(key: string) {
   const file = files.get(key);
   const projectId = item ? destination(item.projectId) : undefined;
   if (!item || !file || projectId === undefined) return;
-  patchItem(key, { phase: "uploading", progress: 0, subtitle: progressText(1, 2, "Uploading") });
+  const total = stepCount(item.projectId);
+  patchItem(key, { phase: "uploading", progress: 0, subtitle: progressLabel(1, total, "Uploading") });
   try {
     const video = await api.upload(
       projectId,
       file,
       (ratio) => {
         if (cancelled.has(key)) return;
-        patchItem(key, { progress: uploadPercent(ratio), subtitle: progressText(1, 2, "Uploading") });
+        patchItem(key, { progress: uploadPercent(ratio), subtitle: progressLabel(1, total, "Uploading") });
       },
       { onAbort: (abort) => aborters.set(key, abort) },
     );
@@ -282,8 +319,7 @@ async function pollOnce() {
         const current = useUploads.getState().items.find((entry) => entry.key === item.key);
         if (!current) return;
         if (videoReady(video)) {
-          remember(video);
-          dropItem(item.key);
+          await publishReady(item.key, video);
           return;
         }
         if (video.ingest_status === "failed") {
@@ -341,6 +377,7 @@ export const useUploads = create<UploadStore>((set, get) => ({
     const pending = get().items.some((item) => item.projectId === "" && item.phase === "staged");
     if (!trimmed || (!pending && !options?.allowEmpty)) throw new Error("Name the project and add at least one video.");
     const project = await api.createProject(trimmed, "", Boolean(options?.spansDays));
+    if (options?.spansDays) taskProjects.add(project.id);
     if (pending) {
       set((state) => ({
         items: state.items.map((item) =>
@@ -369,7 +406,7 @@ export const useUploads = create<UploadStore>((set, get) => ({
           revoke(item);
           continue;
         }
-        if (item.phase === "uploading") {
+        if (item.phase === "uploading" || item.phase === "reconciling") {
           next.push(item);
           continue;
         }
@@ -393,12 +430,15 @@ export const useUploads = create<UploadStore>((set, get) => ({
             : {
                 phase: "analyzing" as const,
                 progress: analysisPercent(video.ingest_progress ?? 0),
-                subtitle: progressText(2, 2, analysisSubtitle(video)),
+                subtitle: progressLabel(2, stepCount(projectId), analysisSubtitle(video)),
               }),
           videoId: video.id,
         });
       }
       return { items: next };
     });
+  },
+  noteTask: (projectId) => {
+    if (projectId) taskProjects.add(projectId);
   },
 }));
