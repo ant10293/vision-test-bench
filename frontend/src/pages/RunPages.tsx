@@ -30,6 +30,13 @@ const INSPECT_STAGE = "panel min-w-0 p-3";
 const INSPECT_DETAIL = "panel max-h-[78vh] space-y-3 overflow-auto p-3 text-sm";
 const ACTION_PLACEHOLDERS = 5;
 
+/** The still that stands in for an object. Prefer its first appearance over the leading gallery asset. */
+function objectThumbnail(object: Bundle["objects"][number] | null | undefined): string {
+  if (!object) return "";
+  const initial = object.images.find((image) => image.kind === "initial" && image.url);
+  return initial?.url || object.primary_image_url;
+}
+
 function analysisTab(pathname: string, runId: string): string {
   const base = `/runs/${runId}`;
   if (!pathname.startsWith(base)) return "";
@@ -392,7 +399,8 @@ function ActionDetail({ bundle, actionId }: { bundle: Bundle; actionId: string }
       <div className="flex flex-wrap gap-2">
         {action.object_local_ids.map((id) => {
           const object = bundle.objects.find((item) => item.local_id === id);
-          return object?.primary_image_url ? <img key={id} src={object.primary_image_url} alt={humanize(object.label)} title={humanize(object.label)} className="h-16 w-16 rounded bg-black object-contain" /> : <span key={id} className="tag">{humanize(id)}</span>;
+          const thumb = objectThumbnail(object);
+          return thumb ? <img key={id} src={thumb} alt={humanize(object?.label ?? id)} title={humanize(object?.label ?? id)} className="h-16 w-16 rounded bg-black object-contain" /> : <span key={id} className="tag">{humanize(id)}</span>;
         })}
       </div>
       <BeforeAfter bundle={bundle} action={action} />
@@ -415,8 +423,9 @@ function ActionDetail({ bundle, actionId }: { bundle: Bundle; actionId: string }
 }
 
 function ObjectTile({ object, onOpen }: { object: Bundle["objects"][number] | null; onOpen?: () => void }) {
-  const media = object?.primary_image_url ? (
-    <img src={object.primary_image_url} alt="" className="h-36 w-full bg-black object-contain" />
+  const thumb = objectThumbnail(object);
+  const media = thumb ? (
+    <img src={thumb} alt="" className="h-36 w-full bg-black object-contain" />
   ) : object ? (
     <div className="grid h-36 place-items-center text-xs text-[var(--muted)]">No crop yet</div>
   ) : (
@@ -458,6 +467,7 @@ export function ObjectsPage() {
   const [preview, setPreview] = useState<number | null>(null);
   const client = useQueryClient();
   const selected = bundle.objects.find((item) => item.local_id === open);
+  const selectedThumb = objectThumbnail(selected);
   const shots = selected?.images.filter((image) => image.url) ?? [];
   return (
     <div className="space-y-3">
@@ -472,7 +482,7 @@ export function ObjectsPage() {
       </div>
       {selected && (
         <div className="panel grid gap-4 p-4 lg:grid-cols-[280px_1fr]">
-          {selected.primary_image_url && <img src={selected.primary_image_url} alt="" className="w-full rounded" />}
+          {selectedThumb && <img src={selectedThumb} alt="" className="w-full rounded" />}
           <div className="space-y-2 text-sm">
             <h2>{labeledId(selected.local_id, selected.label)}</h2>
             <p>{selected.description}</p>
@@ -650,9 +660,10 @@ export function StepsPage() {
       <div className="flex flex-wrap items-start gap-4">
         {step.required_objects.map((id) => {
           const object = bundle.objects.find((item) => item.local_id === id);
+          const thumb = objectThumbnail(object);
           return (
             <div key={id} className="w-28 shrink-0 text-xs">
-              {object?.primary_image_url && <img src={object.primary_image_url} alt="" className="mb-2 h-16 w-16 rounded bg-black object-contain" />}
+              {thumb && <img src={thumb} alt="" className="mb-2 h-16 w-16 rounded bg-black object-contain" />}
               <div className="leading-snug">{humanize(object?.label ?? id)}</div>
             </div>
           );
