@@ -26,6 +26,7 @@ Rules:
 
 SCENE = """
 Identify the physical objects that are actually visible. Do not assume a task.
+Leave the person's hands, fingers, and arms, and the stationary background the parts rest on, out of the object list; name a hand as the actor when it holds or covers a part, and keep a board, tray, base, or anything that is picked up or built on.
 For each object provide a stable local_id (Object_1, Object_2, ...), a cautious descriptive label,
 visual characteristics, initial state, whether it is manipulated, and whether identity is uncertain.
 Avoid naming an object more precisely than the pictures support.
