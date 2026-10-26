@@ -44,6 +44,15 @@ from app.models.sessions import (
     ProjectRevision,
     RecordingSession,
 )
+from app.models.verification import (
+    LearnedWorkflowTemplate,
+    StepVerification,
+    VerificationEvidence,
+    VerificationGroundTruth,
+    VerificationReinspection,
+    VerificationRoleMapping,
+    VerificationRunRow,
+)
 
 __all__ = [
     "ActionRow",
@@ -62,6 +71,7 @@ __all__ = [
     "IdentityLink",
     "InterSessionTransition",
     "Job",
+    "LearnedWorkflowTemplate",
     "ManualModel",
     "ModelRequestRow",
     "ModelResponseRow",
@@ -83,6 +93,12 @@ __all__ = [
     "SegmentationMask",
     "SpatialTrackPoint",
     "TranscriptSegment",
+    "StepVerification",
+    "VerificationEvidence",
+    "VerificationGroundTruth",
+    "VerificationReinspection",
+    "VerificationRoleMapping",
+    "VerificationRunRow",
     "VideoAsset",
     "WorkflowDependencyRow",
     "WorkflowRow",

@@ -41,3 +41,15 @@ Project scores against a human ground truth cover pairwise clip order, session o
 ## Speech beside the visual record
 
 A transcript is optional and is not a visual observation. A spoken claim does not complete a step. Comparison of a visual-only run with a transcript-assisted run lists differences in the analysis document, latency, and cost. It reports ground-truth metrics only when a human dataset exists for the visual run. Otherwise it does not report an accuracy score.
+
+## Learned procedure versus a new execution
+
+The demonstration analysis is turned into completion conditions that can be checked on a different recording. Instance ids are not required to match. A role is a functional slot. Two objects with the same label and similar appearance stay as competing hypotheses when their relations do not separate them.
+
+Verdicts are PASS, FAIL, CANNOT_VERIFY, and NOT_APPLICABLE. Execution state is separate: not attempted, attempted, completed, corrected, or unknown. An attempted action does not pass a step. A required predicate fails only when a visible state contradicts it. Absence of a detection is not absence of a part. A missing-component failure needs the expected relation to be absent, the subject unresolved or absent in the final window, the anchor visible and directly observed, and a learned co-occurring relation directly observed in that window. An occluded or inferred view stays CANNOT_VERIFY.
+
+Order is an error only when a `necessary_physical` dependency is violated and not later recovered. A different pace, a pause, or a reorder of independent steps is not an error. An action outside the procedure is recorded as unexpected and is not a failure by itself. A contradiction that is later replaced by the expected relation remains in the history as a temporary error, and the final verdict can be PASS.
+
+Overall PASS requires every applicable required step to pass. One uncorrected required failure is FAIL. A required step that cannot be verified, with no failure, is INCONCLUSIVE. A run that never finished is INCOMPLETE. A verification that has not been judged is NOT_EVALUATED. The displayed score is verified required steps divided by verified, failed, and unresolved required steps. Unresolved steps are not successes.
+
+Strategies that can be compared against the same human labels are model proposal only, model proposal plus alignment, tracked evidence, and the hybrid reading with optional reinspection. Reinspection plans a bounded question and frame list. It does not call a provider. A later finding changes the verdict only when its evidence class is `DIRECTLY_OBSERVED` and the view is visible. Accuracy is computed only against human ground truth.

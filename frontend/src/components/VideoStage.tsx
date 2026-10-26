@@ -1,9 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { api } from "../lib/api";
 import type { Bundle, TrackPointSample } from "../lib/types";
 import { observationsAt, tracksAt } from "../lib/analysis";
 import { humanize, labeledId } from "../lib/humanize";
+import { panStage, stageZoomByWheel, clampStageView, type StageView } from "../lib/stageZoom";
 import { labelSpan, wrapLines } from "../lib/wrapText";
 import { useInspector } from "../stores/ui";
 
@@ -29,8 +30,26 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
   const [seedError, setSeedError] = useState("");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [panning, setPanning] = useState(false);
+  const viewRef = useRef<StageView>({ zoom: 1, panX: 0, panY: 0 });
+  const contentRef = useRef({ x: 0, y: 0, w: 1, h: 1, vw: 640, vh: 360 });
+  const dragRef = useRef<{ pointerId: number; x: number; y: number; panX: number; panY: number } | null>(null);
   const [content, setContent] = useState({ x: 0, y: 0, w: 1, h: 1, vw: 640, vh: 360 });
+  contentRef.current = content;
   const [fontReady, setFontReady] = useState(false);
+  const commitView = useCallback((next: StageView) => {
+    viewRef.current = next;
+    setZoom(next.zoom);
+    setPan({ x: next.panX, y: next.panY });
+  }, []);
+
+  function pictureSize(frameWidth: number, frameHeight: number) {
+    const picture = contentRef.current;
+    return {
+      width: picture.w > 1 ? picture.w : frameWidth,
+      height: picture.h > 1 ? picture.h : frameHeight,
+    };
+  }
 
   useEffect(() => {
     const video = videoRef.current;
@@ -120,20 +139,106 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
     };
   }, [src]);
 
+  useEffect(() => {
+    const frame = boxRef.current;
+    if (!frame) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = frame.getBoundingClientRect();
+      const picture = pictureSize(rect.width, rect.height);
+      commitView(stageZoomByWheel(
+        viewRef.current,
+        event.clientX - rect.left,
+        event.clientY - rect.top,
+        rect.width,
+        rect.height,
+        event.deltaY,
+        event.deltaMode,
+        picture.width,
+        picture.height,
+      ));
+    };
+    const observer = new ResizeObserver(() => {
+      const rect = frame.getBoundingClientRect();
+      const picture = pictureSize(rect.width, rect.height);
+      const next = clampStageView(
+        viewRef.current,
+        rect.width,
+        rect.height,
+        picture.width,
+        picture.height,
+      );
+      const current = viewRef.current;
+      if (next.zoom !== current.zoom || next.panX !== current.panX || next.panY !== current.panY) commitView(next);
+    });
+    frame.addEventListener("wheel", onWheel, { passive: false });
+    observer.observe(frame);
+    return () => {
+      frame.removeEventListener("wheel", onWheel);
+      observer.disconnect();
+    };
+  }, [commitView]);
+
+  useEffect(() => {
+    const frame = boxRef.current;
+    if (!frame || content.w <= 1 || content.h <= 1) return;
+    const rect = frame.getBoundingClientRect();
+    const next = clampStageView(viewRef.current, rect.width, rect.height, content.w, content.h);
+    const current = viewRef.current;
+    if (next.zoom !== current.zoom || next.panX !== current.panX || next.panY !== current.panY) commitView(next);
+  }, [content.w, content.h, commitView]);
+
+  function onPointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || viewRef.current.zoom <= 1) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      panX: viewRef.current.panX,
+      panY: viewRef.current.panY,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setPanning(true);
+  }
+
+  function onPointerMove(event: PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const picture = pictureSize(rect.width, rect.height);
+    commitView(panStage(
+      viewRef.current,
+      drag.panX + event.clientX - drag.x,
+      drag.panY + event.clientY - drag.y,
+      rect.width,
+      rect.height,
+      picture.width,
+      picture.height,
+    ));
+  }
+
+  function endPan(event: PointerEvent<HTMLDivElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setPanning(false);
+  }
+
+  const frameTransform = { transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center" };
+
   return (
     <div className="stage-slot flex min-h-0 w-full flex-col gap-2">
       <div
         ref={boxRef}
-        className="stage-frame rounded-lg bg-black"
-        onWheel={(event) => {
-          event.preventDefault();
-          setZoom((value) => Math.min(4, Math.max(1, value + (event.deltaY < 0 ? 0.15 : -0.15))));
-        }}
+        className={`stage-frame rounded-lg bg-black${zoom > 1 ? " is-zoomed" : ""}${panning ? " is-panning" : ""}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endPan}
+        onPointerCancel={endPan}
       >
         <video
           ref={videoRef}
           src={src}
-          style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+          style={frameTransform}
           onTimeUpdate={(event) => {
             const current = event.currentTarget.currentTime;
             if (loop && current > loop.end) {
@@ -150,7 +255,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
         {overlay && (
           <svg
             className="pointer-events-none absolute"
-            style={{ left: content.x, top: content.y, width: content.w, height: content.h, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center" }}
+            style={{ left: content.x, top: content.y, width: content.w, height: content.h, ...frameTransform }}
             viewBox={`0 0 ${content.vw} ${content.vh}`}
           >
             {visible.map((obs) => {
@@ -196,7 +301,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
         {showTracks && (
           <svg
             className="pointer-events-none absolute"
-            style={{ left: content.x, top: content.y, width: content.w, height: content.h, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center" }}
+            style={{ left: content.x, top: content.y, width: content.w, height: content.h, ...frameTransform }}
             viewBox={`0 0 ${content.vw} ${content.vh}`}
           >
             {trackHits.map((point) => (
@@ -236,10 +341,9 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
         >
           {seedMode ? "Click the object" : "Seed a track"}
         </button>
-        <button className="btn" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>Reset zoom</button>
-        <button className="btn" onClick={() => { setPan((p) => ({ ...p, x: p.x + 20 })); }}>Pan</button>
+        <button className="btn" onClick={() => commitView({ zoom: 1, panX: 0, panY: 0 })}>Reset zoom</button>
         <span className="mono text-[var(--muted)]">{time.toFixed(2)}s</span>
-        <span className="text-xs text-[var(--muted)]">Space play · arrows step · f fullscreen · scroll zoom</span>
+        <span className="text-xs text-[var(--muted)]">Space play · arrows step · f fullscreen · scroll over a point to zoom · drag to pan</span>
       </div>
       {seedError && <p className="text-xs text-[var(--rose)]">{seedError}</p>}
       {bundle.tracks?.truncated && <p className="text-xs text-[var(--muted)]">Showing the first {bundle.tracks.points.length} of {bundle.tracks.total} track points.</p>}

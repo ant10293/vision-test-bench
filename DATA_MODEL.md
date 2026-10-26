@@ -49,3 +49,17 @@ A task is a project that holds many clips. Each clip keeps its own file, capture
 `CanonicalObject` and `IdentityLink` propose cross-clip identity. A proposal stays uncertain until a person confirms, merges, splits, or rejects it. Two similar objects in one clip are not given one identity. `InterSessionTransition` stores the observed before/after text apart from any hypothesis about the unfilmed interval. An unfilmed interval is `INFERRED` or `UNKNOWN`, not `DIRECTLY_OBSERVED`.
 
 `ProjectRevision` versions the project reading. Adding a clip writes a new revision and leaves earlier clip runs in place. `GET /api/tasks/{id}/export` writes `manifest.json` (`schema_version` 1.0.0, `task_extension` 1.1.0) and `task.json`. Secrets are not included. Project metrics compare that reading with human ground truth and report matcher confidence in a separate block that is not accuracy.
+
+## Workflow verification
+
+Alembic revision `b8d4e2a61c30` merges `a1c9e4d27b10` and `f7a2c6e91b04` and adds:
+
+- `learned_workflow_templates` — immutable template versions (`family_id`, `version`, `parent_id`, `document_json`, `acceptance_status`, source run, revision, and video).
+- `verification_runs` — template id and version, execution run, revision, and video, status, overall result, config, the current report, and `machine_report_json`. The machine report is written once and is not replaced by a human edit.
+- `step_verifications` — verdict, execution state, error category, matched action and object ids, explanation, uncertainty, evidence, and history.
+- `verification_evidence` — video id, timestamp, evidence class, provenance, side, related object ids, and observation text. Paths are not stored.
+- `verification_role_mappings` — assigned ids, score, competing hypotheses, and note. A human assignment does not rewrite tracks.
+- `verification_reinspections` — question, frame timestamps, status, previous verdict, and output.
+- `verification_ground_truth` — human labels for a verification. Evaluation compares the report with those labels. Model agreement is not stored as accuracy.
+
+The original analysis documents stay unchanged. Export schema `verification_report_1` cites template and revision ids and omits filesystem paths.

@@ -24,6 +24,9 @@ Covered without network:
 - window merge keeps two objects with the same label and different instance ids
 - identity metrics count a switch and a false merge, and they withhold a score when only labels exist
 - confirming a hypothesis promotes the matching candidate reference and leaves the others as candidates
+- learned-workflow fixtures: a correct slower execution, a visible missing component, an occluded component that stays unverified, harmless reorder, a required order violation, an incorrect component, a corrected mistake, similar objects that stay ambiguous, an unsupported model PASS that is rejected, and a template edit that leaves the earlier verification on the original version
+
+`tests/verification_fixtures.py` is the only place those assembly names appear. `app/verification` is scanned so the engine does not name a specific part. No paid provider is called. Reinspection status in these tests is `not_sent`.
 
 Paid provider tests are not in this suite. Do not describe a live integration as tested until a validation or generation call has succeeded with a real key.
 
@@ -33,7 +36,7 @@ Paid provider tests are not in this suite. Do not describe a live integration as
 cd frontend && npx tsc --noEmit && npx vitest run
 ```
 
-Unit tests cover observation selection at the playhead, refusal to hold a box across a long gap, nearest-frame lookup, and one track sample nearest the playhead.
+Unit tests cover observation selection at the playhead, refusal to hold a box across a long gap, nearest-frame lookup, one track sample nearest the playhead, and verification verdict colors that keep pass, fail, uncertain, and corrected distinct.
 
 ## Browser
 

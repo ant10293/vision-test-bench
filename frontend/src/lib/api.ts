@@ -1,4 +1,5 @@
 import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
+import type { VerificationView, WorkflowTemplate } from "./verification";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -298,6 +299,39 @@ export const api = {
     request<Record<string, unknown>>(`/api/runs/${runId}/audio-comparison`, {
       method: "POST",
       body: JSON.stringify({ visual_run_id: visualRunId, assisted_run_id: assistedRunId }),
+    }),
+  workflowTemplates: (projectId: string) => request<WorkflowTemplate[]>(`/api/tasks/${projectId}/workflow-templates`),
+  learnWorkflow: (projectId: string, runId: string, promoteSupported: boolean, accept: boolean) =>
+    request<WorkflowTemplate>(`/api/tasks/${projectId}/workflow-templates`, {
+      method: "POST",
+      body: JSON.stringify({ run_id: runId, promote_supported: promoteSupported, accept }),
+    }),
+  reviseWorkflow: (templateId: string, payload: Record<string, unknown>) =>
+    request<WorkflowTemplate>(`/api/workflow-templates/${templateId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  verifications: (projectId: string) => request<VerificationView[]>(`/api/tasks/${projectId}/verifications`),
+  startVerification: (templateId: string, executionRunId: string, strategy: string, reinspect: boolean) =>
+    request<VerificationView>(`/api/workflow-templates/${templateId}/verifications`, {
+      method: "POST",
+      body: JSON.stringify({ execution_run_id: executionRunId, strategy, reinspect }),
+    }),
+  verification: (id: string) => request<VerificationView>(`/api/verifications/${id}`),
+  correctVerificationStep: (id: string, stepId: string, verdict: string, note: string) =>
+    request<VerificationView>(`/api/verifications/${id}/steps/${stepId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ verdict, note }),
+    }),
+  correctVerificationRole: (id: string, roleId: string, objectLocalId: string) =>
+    request<VerificationView>(`/api/verifications/${id}/roles/${encodeURIComponent(roleId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ object_local_id: objectLocalId }),
+    }),
+  requestReinspection: (id: string, stepId: string) =>
+    request<{ provider_invoked: boolean }>(`/api/verifications/${id}/reinspect`, {
+      method: "POST",
+      body: JSON.stringify({ step_id: stepId }),
     }),
 };
 

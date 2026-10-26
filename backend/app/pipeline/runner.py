@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter
 from pathlib import Path
 
@@ -41,6 +42,8 @@ from app.video.sampling import (
     plan_uniform,
     preset_fps,
 )
+
+log = logging.getLogger("learnloop.runner")
 
 
 async def execute_job(session: Session, job: Job) -> None:
@@ -115,6 +118,13 @@ async def execute_job(session: Session, job: Job) -> None:
         job.status = "completed"
         job.finished_at = utcnow()
         session.commit()
+        try:
+            from app.services.verification_store import settle_waiting
+
+            settle_waiting(session, run.id)
+        except Exception:
+            session.rollback()
+            log.exception("verification waiting on run %s was not settled", run.id)
     except Exception as exc:
         run.status = "failed"
         run.error = str(exc)[:2000]

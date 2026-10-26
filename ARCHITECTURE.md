@@ -74,6 +74,16 @@ A task is a project with several videos. Reconciliation reads the latest complet
 
 Session-level actions remain on each clip's analysis. The project workflow adds session markers, unobserved intervals, parallel ties, and inferred procedural edges that stay unaccepted.
 
+## Execution verification
+
+A learned workflow is a verification specification, not a second analysis document. Learning reads one completed analysis revision and writes a versioned template: object roles, completion predicates, and dependencies. Observed steps stay distinct from required steps. A single demonstration does not mark every action or every observed order as mandatory. Only a `necessary_physical` dependency constrains order. Editing a template inserts a new version. A verification stores the template id and version it used.
+
+An execution is the existing analysis of another clip. Verification does not resample frames, detect objects, or call a provider. If that run is still in progress, the verification stays `waiting` until the analysis job finishes. Role mapping uses labels, descriptions, relation signatures, states, and box area from the document. Embeddings are not in the analysis JSON, so they are not invented for the match. Competing hypotheses stay unresolved instead of being merged by name.
+
+Alignment maps execution actions onto template steps by action type, roles, and state change. Absolute time is not a score. Predicate checks then read tracked relations and states in the final window. A step passes on an observable completion condition. An action label alone cannot pass. A model proposal is recorded and is not accepted as PASS or FAIL unless the chosen strategy allows it and the proposal's evidence class is `DIRECTLY_OBSERVED`. The hybrid strategy still keeps a deterministic `CANNOT_VERIFY` when the tracked evidence is insufficient.
+
+`perception/verify.py` still audits unsupported claims inside one analysis. It is not the cross-recording verdict.
+
 ## Where files live
 
 `data/originals` immutable uploads, `data/proxies`, `data/frames`, `data/runs/{id}` working JSON and crops, `data/runs/{id}/embeddings` cached appearance vectors, `data/transcripts/{checksum}` cached local transcripts, `data/learnloop.db`. API keys, if saved in the app, are Fernet-encrypted under `data/.credential_key` (mode 0600) or read from the environment. Exports omit them.

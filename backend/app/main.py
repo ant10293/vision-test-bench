@@ -13,6 +13,7 @@ from app import __version__
 from app.api.audio import router as audio_router
 from app.api.routes import router
 from app.api.tasks import router as task_router
+from app.api.verification import router as verification_router
 from app.config import settings
 from app.demo.seed import seed_if_empty
 from app.jobs.worker import worker_loop
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(router)
     app.include_router(task_router)
+    app.include_router(verification_router)
     app.include_router(audio_router)
     return app
 

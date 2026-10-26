@@ -18,6 +18,8 @@ Active phase: perception stays on the canonical analysis document. Live provider
 - Optional local transcription and audio-visual classification. Both switches default off. See `AUDIO.md`. The automated tests use a stand-in for Whisper. A live model download and a live paid comparison of transcript text were not run.
 - Perception on the existing document: track lifecycle, one-to-one association, separate tracking frames, presets A/B/C/D and VLM-only, optional DINOv2 with an explicit unavailable state, GrabCut during tracking, instance ids in the model prompt, identity metrics that require instance annotations, and inspector overlays. Embeddings stay out of the analysis JSON. Alembic revision `a1c9e4d27b10` adds track status, association score, and detector id.
 - Browser pass on the seeded lab: dashboard counts, inspector with attempted versus completed actions, frame step, object crops from the footage, a human label revision, and an 8-node workflow graph. All three fixture modes completed with `world_coordinates_supported` false. The unconstrained fixture keeps a second red block as an uncertain identity.
+- Learned workflow verification on cached analyses. A demonstration revision becomes a versioned template with completion predicates. A later execution is role-mapped, aligned, and judged from tracked relations and states. Verdicts are PASS, FAIL, CANNOT_VERIFY, and NOT_APPLICABLE. Overall results are PASS, FAIL, INCONCLUSIVE, INCOMPLETE, and NOT_EVALUATED. Human step and role corrections keep the first machine report. Alembic revision `b8d4e2a61c30`. The task page has a Verification section with the template, a side-by-side step seek, and timeline markers. No provider was called. Embeddings are not in the analysis document, so role matching does not use them. Reinspection records a plan and does not send it.
+- Browser pass on project "Verification fixture": learn from the demonstration, accept version 2, verify the execution, overall Fail, the ring step Fail with missing component, the other required steps Pass. The failure marker showed demonstration 0:10 and execution 0:45. Confirming the verdict kept Fail and showed the earlier machine verdict. The attached playback file is 8 seconds, so the player clamped those later timestamps.
 
 ## Pending
 
@@ -30,6 +32,8 @@ Active phase: perception stays on the canonical analysis document. Live provider
 - A second annotator. The ground-truth table has an annotator field; agreement is not computed yet.
 - Playwright: the spec is in `frontend/e2e/lab.spec.ts`. It was not executed in this session because port 8000 was already serving the lab and Chromium was not installed.
 - Live faster-whisper transcription on a real recording, and a live provider call that compares transcript text with frames. The local classifier and the skip paths are tested.
+- Sending a reinspection plan to a vision provider. The plan, frame list, and finding gate exist. `provider_invoked` stays false.
+- Appearance embeddings in role matching. The analysis document does not carry them, and the matcher does not invent a cosine score.
 
 ## Known bugs
 
