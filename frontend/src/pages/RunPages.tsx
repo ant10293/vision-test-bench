@@ -170,7 +170,7 @@ function AnalysisHeader({ bundle, embedded }: { bundle: Bundle | null; embedded:
           <p className="mt-1 max-w-3xl text-xs text-[var(--amber)]">{bundle.coverage.temporal_coverage_note}</p>
         )}
       </div>
-      <RunActions bundle={bundle} />
+      <RunActions bundle={bundle} embedded={embedded} />
     </header>
   );
 }
@@ -306,7 +306,7 @@ function AnalysisTab({ tab }: { tab: string }) {
   }
 }
 
-function RunActions({ bundle }: { bundle: Bundle | null }) {
+function RunActions({ bundle, embedded }: { bundle: Bundle | null; embedded: boolean }) {
   const client = useQueryClient();
   const navigate = useNavigate();
   if (!bundle) {
@@ -321,11 +321,17 @@ function RunActions({ bundle }: { bundle: Bundle | null }) {
     );
   }
   const refresh = () => client.invalidateQueries({ queryKey: ["run", bundle.run.id] });
+  const remove = async () => {
+    await api.deleteRun(bundle.run.id);
+    await client.invalidateQueries({ queryKey: ["runs"] });
+    await client.invalidateQueries({ queryKey: ["dashboard"] });
+    navigate(embedded ? "/" : "/runs");
+  };
   return (
     <div className="flex flex-wrap gap-2">
       <button className="btn" onClick={async () => { const copy = await api.duplicateRun(bundle.run.id); navigate(`/runs/${copy.id}/pipeline`); }}>Duplicate</button>
       <button className="btn" onClick={async () => { await api.cancelRun(bundle.run.id); await refresh(); }}>Cancel</button>
-      <button className="btn" onClick={async () => { await api.deleteRun(bundle.run.id); navigate("/"); }}>Delete</button>
+      <button className="btn" onClick={remove}>Delete</button>
       <a className="btn" href={`/api/runs/${bundle.run.id}/export`}>Export archive</a>
       <a className="btn" href={`/api/runs/${bundle.run.id}/analysis.json`}>Analysis JSON</a>
     </div>

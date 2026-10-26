@@ -341,7 +341,21 @@ def _window_note(index: int, windows: list[list[FrameAsset]]) -> str:
             "because of occlusion, stacking, or an end-on angle keeps those ids and records an ambiguity. "
             "Create a new object id only when appearance contradicts every existing object."
         )
+    sentences.append(_boxing_rule(windows[index]))
     return "\n\n" + " ".join(sentences)
+
+
+def _boxing_rule(frames: list[FrameAsset]) -> str:
+    times = _fmt_times([_frame_time(frame) for frame in frames])
+    where = f"The supplied frames are at {times}. " if times else ""
+    return (
+        where
+        + "On each of those frames, every object that is even partly visible gets its own observation "
+        "and a tight box around that object alone. A box around a larger object does not count for a "
+        "smaller part that can still be distinguished, including a part resting on it, around it, or "
+        "partly covered by a hand. Do not skip a frame because the object looks unchanged. Leave an "
+        "object out of a frame only when it is fully out of view or fully hidden, and do not invent a box then."
+    )
 
 
 def _merge_instruction(windows: list[list[FrameAsset]]) -> str:
@@ -359,6 +373,8 @@ def _merge_instruction(windows: list[list[FrameAsset]]) -> str:
         "already described, because the parts are occluded, stacked, or seen end-on, keep the earlier ids "
         "and record which of them remain possible as an ambiguity. Create a new object id only when appearance "
         "contradicts every earlier object. Do not duplicate actions that fall on the shared frames. "
+        "Keep every observation. If a window boxed an object at a timestamp, that box stays; do not drop "
+        "it because the object did not move or because a larger object already has a box. "
         "Do not invent events from gaps between windows. Keep every state, transition, relationship, "
         "workflow step, dependency, and ambiguity from the windows."
     )

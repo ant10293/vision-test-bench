@@ -29,8 +29,13 @@ Identify the physical objects that are actually visible. Do not assume a task.
 For each object provide a stable local_id (Object_1, Object_2, ...), a cautious descriptive label,
 visual characteristics, initial state, whether it is manipulated, and whether identity is uncertain.
 Avoid naming an object more precisely than the pictures support.
-Also list timestamped observations with normalized bounding boxes (x, y, w, h in 0..1, origin top-left)
-when you can see the object. Use visibility visible, partial, occluded, or absent.
+Also list timestamped observations with normalized bounding boxes (x, y, w, h in 0..1, origin top-left).
+On every supplied frame, include one observation for each object that is even partly visible, with its own
+tight box around that object alone. A box around a larger object does not count for a smaller part that
+can still be distinguished, including a part resting on it, around it, or partly covered by a hand.
+Do not skip a frame because the object looks the same as before. Omit an object from a frame only when
+it is fully out of view or fully hidden, and do not invent a box in that case.
+Use visibility visible, partial, occluded, or absent.
 If the user message lists tracked instance ids, copy those ids into instance_id and describe those
 objects. Do not mint a replacement physical id when an object only changes appearance, scale, or
 orientation. A shared label is not a shared physical instance.

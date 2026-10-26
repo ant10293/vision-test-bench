@@ -12,6 +12,7 @@ from app.schemas.analysis import (
     AmbiguityPrediction,
     AnalysisDocument,
     DependencyPrediction,
+    ObservationPrediction,
     RelationshipPrediction,
     StatePrediction,
     TransitionPrediction,
@@ -23,6 +24,7 @@ def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDoc
     if len(partials) < 2:
         return merged
     maps = [_object_id_map(partial, merged) for partial in partials]
+    observations = _union_observations(partials, maps, merged)
     states = list(merged.states) or _states(partials, maps)
     transitions = list(merged.transitions) or _transitions(partials, maps)
     relationships = list(merged.relationships) or _relationships(partials, maps)
@@ -32,7 +34,8 @@ def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDoc
         steps, dependencies = _workflow(partials, maps)
     ambiguities = list(merged.ambiguities) or _ambiguities(partials, maps)
     unchanged = (
-        states == list(merged.states)
+        observations == list(merged.observations)
+        and states == list(merged.states)
         and transitions == list(merged.transitions)
         and relationships == list(merged.relationships)
         and steps == list(merged.workflow_steps)
@@ -43,6 +46,7 @@ def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDoc
         return merged
     return merged.model_copy(
         update={
+            "observations": observations,
             "states": states,
             "transitions": transitions,
             "relationships": relationships,
@@ -51,6 +55,33 @@ def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDoc
             "ambiguities": ambiguities,
         }
     )
+
+
+def _union_observations(
+    partials: list[AnalysisDocument],
+    maps: list[dict[str, str]],
+    merged: AnalysisDocument,
+) -> list[ObservationPrediction]:
+    """Keep a box a window actually saw when the text-only merge leaves that frame out."""
+    chosen: dict[tuple, ObservationPrediction] = {}
+    order: list[tuple] = []
+
+    def consider(item: ObservationPrediction) -> None:
+        key = (item.object_local_id, round(float(item.timestamp), 3))
+        current = chosen.get(key)
+        if current is None:
+            chosen[key] = item
+            order.append(key)
+            return
+        if current.bbox is None and item.bbox is not None:
+            chosen[key] = item
+
+    for partial, mapping in zip(partials, maps, strict=True):
+        for item in partial.observations:
+            consider(item.model_copy(update={"object_local_id": _obj(mapping, item.object_local_id)}))
+    for item in merged.observations:
+        consider(item)
+    return [chosen[key] for key in order]
 
 
 def _object_id_map(partial: AnalysisDocument, merged: AnalysisDocument) -> dict[str, str]:

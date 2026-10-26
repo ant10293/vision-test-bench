@@ -150,3 +150,54 @@ def test_merge_that_already_has_records_is_left_in_place():
     )
     restored = restore_omitted_records(merged, [partial, partial])
     assert [item.timestamp for item in restored.transitions] == [3]
+
+
+def test_merge_keeps_a_box_the_window_saw_when_the_merge_omits_that_frame():
+    boxed = {
+        "object_local_id": "Object_2",
+        "timestamp": 12,
+        "bbox": {"x": 0.5, "y": 0.4, "w": 0.04, "h": 0.04},
+        "visibility": "partial",
+        "evidence": _evidence(),
+    }
+    first = _doc(
+        objects=[{"local_id": "Object_1", "label": "threaded fastener"}, {"local_id": "Object_2", "label": "dark ring"}],
+        observations=[
+            boxed,
+            {
+                "object_local_id": "Object_1",
+                "timestamp": 12,
+                "visibility": "visible",
+                "evidence": _evidence(),
+            },
+        ],
+    )
+    second = _doc(
+        objects=[{"local_id": "Object_1", "label": "threaded fastener"}, {"local_id": "Object_2", "label": "dark ring"}],
+        observations=[
+            {
+                "object_local_id": "Object_1",
+                "timestamp": 18,
+                "bbox": {"x": 0.4, "y": 0.4, "w": 0.2, "h": 0.1},
+                "visibility": "visible",
+                "evidence": _evidence(),
+            }
+        ],
+    )
+    merged = _doc(
+        objects=[{"local_id": "Object_1", "label": "threaded fastener"}, {"local_id": "Object_2", "label": "dark ring"}],
+        observations=[
+            {
+                "object_local_id": "Object_1",
+                "timestamp": 12,
+                "bbox": {"x": 0.42, "y": 0.4, "w": 0.2, "h": 0.12},
+                "visibility": "visible",
+                "evidence": _evidence(),
+            }
+        ],
+    )
+    restored = restore_omitted_records(merged, [first, second])
+    by_object = {(item.object_local_id, item.timestamp): item for item in restored.observations}
+    assert by_object[("Object_2", 12)].bbox is not None
+    assert by_object[("Object_1", 12)].bbox is not None
+    assert by_object[("Object_1", 18)].bbox is not None

@@ -406,18 +406,13 @@ button.linkish {
   background: #10141b;
 }
 
-/* Each preview row is 10rem. Column count is set from the thumbnail count, and the mosaic stops at two rows. */
+/* Every mosaic is the same 20rem box. One row (1–3 thumbnails) fills it; two rows split it. */
 .thumb-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: 10rem;
-  max-height: 20rem;
-  overflow: hidden;
-}
-/* One thumbnail fills the same box as a two-row mosaic. */
-.thumb-grid.is-single {
   height: 20rem;
-  grid-auto-rows: 20rem;
+  grid-auto-rows: minmax(0, 1fr);
+  overflow: hidden;
 }
 .thumb-grid > img {
   width: 100%;

@@ -102,13 +102,15 @@ def test_window_note_names_the_shared_timestamps():
     frames = [_Frame(float(index)) for index in range(23)]
     windows = _windows(frames, 20)
     opening = _window_note(1, windows)
-    assert "20 s and 21 s" not in opening
-    assert "18 s and 19 s" in opening
+    assert "The opening frames at 18 s and 19 s repeat" in opening
     assert "fewer pieces" in opening
+    assert "The supplied frames are at 18 s, 19 s, 20 s, 21 s, and 22 s." in opening
+    assert "tight box around that object alone" in opening
     merge = _merge_instruction(windows)
     assert "18 s and 19 s" in merge
     assert "keep the earlier ids" in merge
     assert "Do not duplicate actions" in merge
+    assert "Keep every observation" in merge
 
 
 def test_unknown_action_is_in_the_vocabulary_and_approach_is_offered():
