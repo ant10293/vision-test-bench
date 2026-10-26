@@ -351,7 +351,8 @@ def _boxing_rule(frames: list[FrameAsset]) -> str:
     return (
         where
         + "On each of those frames, every object that is even partly visible gets its own observation "
-        "and a tight box around that object alone. A box around a larger object does not count for a "
+        "and a tight box around that object alone. Hands, fingers, arms, and the stationary background "
+        "the parts rest on are not objects in that list. A box around a larger object does not count for a "
         "smaller part that can still be distinguished, including a part resting on it, around it, or "
         "partly covered by a hand. Do not skip a frame because the object looks unchanged. A change in "
         "brightness, color cast, or shadow is not disappearance: if the shape and the color relative to "

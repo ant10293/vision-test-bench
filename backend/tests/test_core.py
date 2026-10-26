@@ -113,6 +113,10 @@ def test_window_note_names_the_shared_timestamps():
     assert "includes the head or top" in opening
     assert "own box on the flats" in opening
     assert "color cast" in SCENE
+    assert "hands, fingers, and arms" in SCENE
+    assert "stationary background the parts rest on" in SCENE
+    assert "picked up or built on" in SCENE
+    assert "stationary background" in opening
     assert "end, face, or head" in SCENE
     assert "includes the head or top" in SCENE
     assert "own box on the flats" in SCENE
