@@ -88,8 +88,8 @@ export function TaskDetailPage() {
     () => uploadItems.filter((item) => item.projectId === projectId),
     [uploadItems, projectId],
   );
-  const detachVideo = useMutation({
-    mutationFn: (id: string) => api.detachVideo(id),
+  const deleteVideo = useMutation({
+    mutationFn: (id: string) => api.deleteVideo(id),
     onSuccess: async () => {
       setError("");
       await refresh();
@@ -205,11 +205,11 @@ export function TaskDetailPage() {
               key={video.id}
               video={video}
               order={index + 1}
-              deleting={detachVideo.isPending && detachVideo.variables === video.id}
-              actionLabel={`Remove ${video.filename} from this project`}
-              actionTitle="Remove from project"
+              deleting={deleteVideo.isPending && deleteVideo.variables === video.id}
+              actionLabel={`Delete ${video.filename}`}
+              actionTitle="Delete video"
               onDelete={() => {
-                if (window.confirm(`Remove “${video.filename}” from this project? It stays in the video library.`)) detachVideo.mutate(video.id);
+                if (window.confirm(`Delete “${video.filename}”? This removes it from the project and the video library. A referenced original stays on disk.`)) deleteVideo.mutate(video.id);
               }}
             />
           ))}

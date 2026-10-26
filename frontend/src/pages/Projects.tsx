@@ -234,8 +234,8 @@ export function ProjectsPage() {
     },
     onError: (err: Error) => setError(err.message),
   });
-  const detachVideo = useMutation({
-    mutationFn: (id: string) => api.detachVideo(id),
+  const deleteVideo = useMutation({
+    mutationFn: (id: string) => api.deleteVideo(id),
     onSuccess: async () => {
       setError("");
       await client.invalidateQueries({ queryKey: ["videos"] });
@@ -653,14 +653,14 @@ export function ProjectsPage() {
                 video={cell.video}
                 order={cell.order}
                 sortIndex={cell.sortIndex}
-                deleting={detachVideo.isPending && detachVideo.variables === cell.video.id}
-                actionLabel={`Remove ${cell.video.filename} from this project`}
-                actionTitle="Remove from project"
+                deleting={deleteVideo.isPending && deleteVideo.variables === cell.video.id}
+                actionLabel={`Delete ${cell.video.filename}`}
+                actionTitle="Delete video"
                 onGrab={(event) => grabCard(cell.video as VideoInfo, cell.sortIndex, event)}
                 onDelete={() => {
                   const filename = cell.video?.filename ?? "this video";
                   const id = cell.video?.id ?? "";
-                  if (window.confirm(`Remove “${filename}” from this project? It stays in the video library.`)) detachVideo.mutate(id);
+                  if (window.confirm(`Delete “${filename}”? This removes it from the project and the video library. A referenced original stays on disk.`)) deleteVideo.mutate(id);
                 }}
               />
             ) : (

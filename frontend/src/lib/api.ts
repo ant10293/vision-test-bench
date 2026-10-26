@@ -84,7 +84,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ video_ids: videoIds }),
     }),
-  detachVideo: (id: string) => request<VideoInfo>(`/api/videos/${id}/detach`, { method: "POST" }),
   video: (id: string) => request<VideoInfo>(`/api/videos/${id}`),
   upload: (
     projectId: string | null,
