@@ -125,6 +125,32 @@ export function markerKind(step: { verdict: string; execution_state?: string; er
   return "step";
 }
 
+export interface VerificationRecording {
+  id: string;
+  filename: string;
+  run_id: string;
+  duration_sec: number;
+  playback_url: string;
+}
+
+/** Pair each video with its newest completed run. Pass runs newest first; the first match wins. */
+export function recordingsForVerification(
+  videos: { id: string; filename: string; duration_sec: number; playback_url: string }[],
+  runs: { id: string; video_id: string }[],
+): VerificationRecording[] {
+  const latest = new Map<string, string>();
+  for (const run of runs) {
+    if (!latest.has(run.video_id)) latest.set(run.video_id, run.id);
+  }
+  return videos.map((video) => ({
+    id: video.id,
+    filename: video.filename,
+    run_id: latest.get(video.id) ?? "",
+    duration_sec: video.duration_sec,
+    playback_url: video.playback_url,
+  }));
+}
+
 export function markerColor(kind: string): string {
   if (kind === "verified") return "#3DDC97";
   if (kind === "failure") return "#F07178";

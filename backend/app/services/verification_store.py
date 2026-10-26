@@ -37,7 +37,7 @@ def create_template(
     promote_supported: bool = False,
     accept: bool = False,
 ) -> dict:
-    project = _task(session, project_id)
+    project = _project(session, project_id)
     run, revision = _completed_run(session, run_id, project.id)
     video = session.get(VideoAsset, run.video_id)
     template = learn_template(
@@ -68,7 +68,7 @@ def create_template(
 
 
 def list_templates(session: Session, project_id: str) -> list[dict]:
-    _task(session, project_id)
+    _project(session, project_id)
     rows = session.scalars(
         select(LearnedWorkflowTemplate)
         .where(LearnedWorkflowTemplate.project_id == project_id)
@@ -200,7 +200,7 @@ def settle_waiting(session: Session, run_id: str) -> int:
 
 
 def list_verifications(session: Session, project_id: str) -> list[dict]:
-    _task(session, project_id)
+    _project(session, project_id)
     rows = session.scalars(
         select(VerificationRunRow)
         .where(VerificationRunRow.project_id == project_id)
@@ -601,10 +601,10 @@ def _public_config(config: dict) -> dict:
     }
 
 
-def _task(session: Session, project_id: str) -> Project:
+def _project(session: Session, project_id: str) -> Project:
     project = session.get(Project, project_id)
-    if project is None or not project.is_task:
-        raise LookupError("task not found")
+    if project is None:
+        raise LookupError("project not found")
     return project
 
 

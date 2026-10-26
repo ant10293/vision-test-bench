@@ -387,6 +387,27 @@ def _install(project_id: str, filename: str, document: AnalysisDocument) -> str:
         session.close()
 
 
+def test_same_day_project_can_learn_a_workflow(client):
+    created = client.post("/api/projects", json={"name": "Same day"})
+    assert created.status_code == 200, created.text
+    assert created.json()["is_task"] is False
+    project_id = created.json()["id"]
+    demo_run = _install(project_id, "same-day-demo.mp4", assembly_demo())
+    learned = client.post(
+        f"/api/tasks/{project_id}/workflow-templates",
+        json={"run_id": demo_run, "name": "Same day procedure"},
+    )
+    assert learned.status_code == 200, learned.text
+    listed = client.get(f"/api/tasks/{project_id}/workflow-templates")
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()] == [learned.json()["id"]]
+    verifications = client.get(f"/api/tasks/{project_id}/verifications")
+    assert verifications.status_code == 200
+    assert verifications.json() == []
+    missing = client.get("/api/tasks/missing-project/workflow-templates")
+    assert missing.status_code == 404
+
+
 def test_l_past_verification_keeps_the_template_revision_it_used(client):
     project_id = client.post("/api/tasks", json={"name": "Verify", "description": ""}).json()["project"]["id"]
     demo_run = _install(project_id, "demo.mp4", assembly_demo())

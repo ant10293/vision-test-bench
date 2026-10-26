@@ -135,10 +135,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ video_ids: videoIds }),
     }),
-  runs: (params: { status?: string; provider_id?: string } = {}) => {
+  runs: (params: { status?: string; provider_id?: string; project_id?: string } = {}) => {
     const query = new URLSearchParams();
     if (params.status) query.set("status", params.status);
     if (params.provider_id) query.set("provider_id", params.provider_id);
+    if (params.project_id) query.set("project_id", params.project_id);
     const suffix = query.toString() ? `?${query}` : "";
     return request<RunSummary[]>(`/api/runs${suffix}`);
   },

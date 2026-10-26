@@ -1,18 +1,34 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, formatTime, type TaskClip } from "../lib/api";
+import { api, formatTime } from "../lib/api";
 import { humanize } from "../lib/humanize";
 import {
   markerColor,
   markerKind,
+  recordingsForVerification,
   verdictClass,
+  type VerificationRecording,
   type VerificationStep,
   type WorkflowTemplate,
 } from "../lib/verification";
 
-/** Learned procedures and evidence-backed execution checks inside a task project. */
-export function VerificationPanel({ projectId, clips }: { projectId: string; clips: TaskClip[] }) {
+/** Learned procedures and evidence-backed execution checks for any project. */
+export function VerificationPanel({ projectId }: { projectId: string }) {
   const client = useQueryClient();
+  const videos = useQuery({
+    queryKey: ["videos", projectId],
+    queryFn: () => api.videos(projectId),
+    enabled: Boolean(projectId),
+  });
+  const runs = useQuery({
+    queryKey: ["runs", projectId, "completed"],
+    queryFn: () => api.runs({ project_id: projectId, status: "completed" }),
+    enabled: Boolean(projectId),
+  });
+  const clips = useMemo(
+    () => recordingsForVerification(videos.data ?? [], runs.data ?? []),
+    [videos.data, runs.data],
+  );
   const templates = useQuery({
     queryKey: ["workflow-templates", projectId],
     queryFn: () => api.workflowTemplates(projectId),
@@ -214,7 +230,7 @@ function Report({
   verification,
   onChange,
 }: {
-  clips: TaskClip[];
+  clips: VerificationRecording[];
   template?: WorkflowTemplate;
   verification: NonNullable<Awaited<ReturnType<typeof api.verification>>>;
   onChange: () => Promise<void>;

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { createPortal } from "react-dom";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
+import { VerificationPanel } from "../components/VerificationPanel";
 import { LibraryPicker } from "../components/LibraryPicker";
 import { ProjectCosts } from "../components/ProjectCosts";
 import { Bone, MediaPlaceholder } from "../components/Skeleton";
@@ -726,6 +727,7 @@ export function ProjectsPage() {
         </div>
       )}
       {spansDaysView && editId && <TaskProjectSections projectId={editId} />}
+      {mode === "edit" && editId && <VerificationPanel projectId={editId} />}
       {pickerOpen && (
         <LibraryPicker
           videos={libraryCatalog.data ?? []}

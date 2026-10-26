@@ -2,7 +2,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Bone } from "../components/Skeleton";
-import { VerificationPanel } from "../components/VerificationPanel";
 import { api, evidenceClass, formatTime, type TaskBundle, type TaskClip } from "../lib/api";
 import { captureToLocalInput, localInputToCapture } from "../lib/captureTime";
 import { humanize, labeledId } from "../lib/humanize";
@@ -258,7 +257,6 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
           </div>
         ))}
       </section>
-      <VerificationPanel projectId={projectId} clips={task.clips} />
     </div>
   );
 }
