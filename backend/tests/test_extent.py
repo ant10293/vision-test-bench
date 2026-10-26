@@ -1,6 +1,6 @@
 """Extent keeps an id on one part, and insertion is read from that part's track."""
 
-from app.perception.assembly import apply_assembly, find_insertions
+from app.perception.assembly import apply_assembly, find_joins
 from app.perception.continuity import reconcile_identity
 from app.perception.locate import apply_located, box_fits, choose_locate_times
 from app.schemas.analysis import (
@@ -10,9 +10,10 @@ from app.schemas.analysis import (
     Evidence,
     ObjectPrediction,
     ObservationPrediction,
+    RelationshipPrediction,
     WorkflowStepPrediction,
 )
-from app.schemas.enums import ActionOutcome, EvidenceClass, Provenance
+from app.schemas.enums import ActionOutcome, EvidenceClass, Provenance, RelationKind
 
 
 def _evidence(timestamp: float = 0) -> Evidence:
@@ -123,8 +124,9 @@ def test_insertion_is_the_free_part_ending_at_the_host():
     assert document.workflow_steps[0].name.startswith("Insert the short rod")
     assert "bring" not in document.workflow_steps[0].expected_action.lower()
     assert "separate visible extent" in document.workflow_steps[0].observed_result
-    assert find_insertions(document)[0].host_ids == ("Object_5",)
-    assert find_insertions(document)[0].contact_time == 3.0
+    assert find_joins(document)[0].host_ids == ("Object_5",)
+    assert find_joins(document)[0].contact_time == 3.0
+    assert find_joins(document)[0].kind == "inside"
 
 
 def test_sitting_beside_a_part_at_the_start_is_not_the_moment_of_insertion():
@@ -140,7 +142,7 @@ def test_sitting_beside_a_part_at_the_start_is_not_the_moment_of_insertion():
             _obs("Object_1", 3, 0.52, 0.46, 0.08, 0.02),
         ]
     )
-    event = find_insertions(_doc(observations))[0]
+    event = find_joins(_doc(observations))[0]
     assert event.contact_time == 3.0
     assert "Object_4" not in event.host_ids
     assert event.host_ids[0] == "Object_5"
@@ -156,7 +158,216 @@ def test_a_part_that_comes_back_is_not_an_insertion():
             _obs("Object_1", 5, 0.10, 0.20, 0.08, 0.02),
         ]
     )
-    assert find_insertions(_doc(observations)) == []
+    assert find_joins(_doc(observations)) == []
+
+
+def _host(object_id: str = "Object_5", frames: int = 10):
+    return [_obs(object_id, float(t), 0.45, 0.40, 0.18, 0.16) for t in range(frames)]
+
+
+def test_an_inserted_part_that_is_pulled_out_is_removed():
+    observations = _host()
+    observations.extend(
+        [
+            _obs("Object_1", 0, 0.10, 0.20, 0.08, 0.02),
+            _obs("Object_1", 1, 0.15, 0.22, 0.08, 0.02),
+            _obs("Object_1", 2, 0.42, 0.42, 0.06, 0.02),
+            _obs("Object_1", 3, 0.44, 0.43, 0.05, 0.02),
+            _obs("Object_1", 4, 0.44, 0.43, 0.05, 0.02),
+            _obs("Object_1", 5, 0.44, 0.43, 0.05, 0.02),
+            _obs("Object_1", 6, 0.20, 0.25, 0.08, 0.02),
+            _obs("Object_1", 7, 0.12, 0.22, 0.08, 0.02),
+            _obs("Object_1", 8, 0.12, 0.22, 0.08, 0.02),
+            _obs("Object_1", 9, 0.12, 0.22, 0.08, 0.02),
+        ]
+    )
+    claimed = RelationshipPrediction(
+        subject_local_id="Object_1",
+        other_local_id="Object_5",
+        kind=RelationKind.INSIDE,
+        time_start=2,
+        time_end=9,
+        evidence=_evidence(2),
+    )
+    source = _doc(observations).model_copy(update={"relationships": [claimed]})
+    joins = find_joins(source)
+    assert len(joins) == 1
+    assert joins[0].kind == "inside"
+    assert joins[0].until == 5.0
+    assert joins[0].released == 6.0
+    assert joins[0].free_until == 9.0
+
+    document = apply_assembly(source)
+    assert [action.action_type for action in document.actions] == ["insert", "remove"]
+    assert len(document.relationships) == 1
+    assert document.relationships[0].time_end == 5.0
+    assert document.objects[0].final_state.startswith("Removed from the gray body at 6s")
+    labels = [(state.state_label, state.time_start, state.time_end) for state in document.states]
+    assert ("removed", 6.0, 9.0) in labels
+    assert all(end <= 5.0 for label, _start, end in labels if label == "inserted")
+    assert any(item.from_state == "inserted" and item.to_state == "removed" for item in document.transitions)
+
+    again = apply_assembly(document)
+    assert len(again.actions) == 2
+    assert len(again.relationships) == 1
+    assert len(again.transitions) == len(document.transitions)
+
+
+def test_a_part_that_keeps_its_size_against_the_host_is_attached():
+    observations = _host(frames=8)
+    observations.extend(
+        [
+            _obs("Object_1", 0, 0.10, 0.20, 0.06, 0.04),
+            _obs("Object_1", 1, 0.14, 0.22, 0.06, 0.04),
+            _obs("Object_1", 2, 0.40, 0.42, 0.06, 0.04),
+            *[_obs("Object_1", float(t), 0.40, 0.42, 0.06, 0.04) for t in range(3, 8)],
+        ]
+    )
+    step = WorkflowStepPrediction(
+        local_id="Step_1",
+        name="Bring the handle to the body",
+        action_local_ids=["Action_1"],
+        evidence=_evidence(2),
+    )
+    action = ActionPrediction(
+        local_id="Action_1",
+        action_type="move",
+        start=1,
+        end=3,
+        object_local_ids=["Object_1"],
+        evidence=_evidence(2),
+    )
+    document = apply_assembly(_doc(observations, [action], [step]))
+    assert document.actions[0].action_type == "attach"
+    assert document.relationships[0].kind == RelationKind.ATTACHED
+    assert document.workflow_steps[0].name == "Attach the short rod to the gray body"
+    assert document.objects[0].final_state.startswith("Attached to the gray body")
+    assert any(state.state_label == "attached" for state in document.states)
+
+
+def test_a_part_can_be_attached_detached_and_attached_again():
+    observations = _host(frames=14)
+    seated = (0.40, 0.42, 0.06, 0.04)
+    free = (0.10, 0.20, 0.06, 0.04)
+    track = [free, (0.14, 0.22, 0.06, 0.04), seated, seated, seated, seated, free, free, free, seated, seated, seated, seated, seated]
+    observations.extend(_obs("Object_1", float(t), *box) for t, box in enumerate(track))
+    joins = find_joins(_doc(observations))
+    assert [(join.kind, join.contact_time, join.released) for join in joins] == [
+        ("attached", 2.0, 6.0),
+        ("attached", 9.0, None),
+    ]
+    assert joins[0].free_until == 9.0
+    document = apply_assembly(_doc(observations))
+    assert [action.action_type for action in document.actions] == ["attach", "detach", "attach"]
+    windows = sorted((item.time_start, item.time_end) for item in document.relationships)
+    assert windows == [(2.0, 5.0), (9.0, 13.0)]
+    assert document.objects[0].final_state.startswith("Attached to the gray body")
+
+
+def test_a_tool_pressed_on_and_lifted_away_is_not_joined():
+    observations = _host(frames=7)
+    observations.extend(
+        [
+            _obs("Object_1", 0, 0.10, 0.20, 0.06, 0.04),
+            _obs("Object_1", 1, 0.20, 0.25, 0.06, 0.04),
+            _obs("Object_1", 2, 0.48, 0.38, 0.06, 0.04),
+            _obs("Object_1", 3, 0.48, 0.38, 0.06, 0.04),
+            _obs("Object_1", 4, 0.25, 0.25, 0.06, 0.04),
+            _obs("Object_1", 5, 0.10, 0.20, 0.06, 0.04),
+            _obs("Object_1", 6, 0.10, 0.20, 0.06, 0.04),
+        ]
+    )
+    assert find_joins(_doc(observations)) == []
+    assert apply_assembly(_doc(observations)).actions == []
+
+
+def test_a_removed_part_set_down_beside_the_host_is_not_joined_again():
+    observations = _host(frames=12)
+    seated = (0.44, 0.43, 0.05, 0.02)
+    free = (0.10, 0.20, 0.08, 0.02)
+    beside = (0.40, 0.58, 0.08, 0.02)
+    track = [free, (0.15, 0.22, 0.08, 0.02), seated, seated, seated, seated, free, free, beside, beside, beside, beside]
+    observations.extend(_obs("Object_1", float(t), *box) for t, box in enumerate(track))
+    joins = find_joins(_doc(observations))
+    assert [(join.contact_time, join.released) for join in joins] == [(2.0, 6.0)]
+    assert apply_assembly(_doc(observations)).objects[0].final_state.startswith("Removed from")
+
+
+def test_a_placement_the_model_already_described_stands():
+    observations = _host(frames=8)
+    observations.extend(
+        [
+            _obs("Object_1", 0, 0.10, 0.20, 0.06, 0.04),
+            _obs("Object_1", 1, 0.14, 0.22, 0.06, 0.04),
+            *[_obs("Object_1", float(t), 0.40, 0.42, 0.06, 0.04) for t in range(2, 8)],
+        ]
+    )
+    placed = ActionPrediction(
+        local_id="Action_1",
+        action_type="place",
+        start=1.5,
+        end=2.5,
+        object_local_ids=["Object_1", "Object_5"],
+        outcome=ActionOutcome.COMPLETED,
+        evidence=_evidence(2),
+    )
+    source = _doc(observations, [placed])
+    assert find_joins(source) == []
+    assert apply_assembly(source) == source
+
+
+def test_a_removal_the_model_described_keeps_its_wording_and_ends_the_relation():
+    observations = _host()
+    seated = (0.40, 0.42, 0.06, 0.04)
+    free = (0.10, 0.20, 0.06, 0.04)
+    track = [free, (0.14, 0.22, 0.06, 0.04), seated, seated, seated, seated, free, free, free, free]
+    observations.extend(_obs("Object_1", float(t), *box) for t, box in enumerate(track))
+    actions = [
+        ActionPrediction(
+            local_id="Action_1",
+            action_type="place",
+            start=1.5,
+            end=2.5,
+            object_local_ids=["Object_1", "Object_5"],
+            evidence=_evidence(2),
+        ),
+        ActionPrediction(
+            local_id="Action_2",
+            action_type="pick_up",
+            start=5.5,
+            end=6.5,
+            object_local_ids=["Object_1"],
+            evidence=_evidence(6),
+        ),
+    ]
+    around = RelationshipPrediction(
+        subject_local_id="Object_1",
+        other_local_id="Object_5",
+        kind=RelationKind.AROUND,
+        time_start=2,
+        time_end=9,
+        evidence=_evidence(2),
+    )
+    source = _doc(observations, actions).model_copy(update={"relationships": [around]})
+    document = apply_assembly(source)
+    assert [(action.local_id, action.action_type) for action in document.actions] == [
+        ("Action_1", "place"),
+        ("Action_2", "pick_up"),
+    ]
+    assert [(item.kind, item.time_start, item.time_end) for item in document.relationships] == [
+        (RelationKind.AROUND, 2, 5.0)
+    ]
+    assert document.objects[0].final_state.startswith("Detached from the gray body at 6s")
+
+
+def test_one_stray_box_away_from_the_host_is_not_a_removal():
+    observations = _host(frames=8)
+    seated = (0.44, 0.43, 0.05, 0.02)
+    track = [(0.10, 0.20, 0.08, 0.02), (0.15, 0.22, 0.08, 0.02), seated, seated, seated, (0.10, 0.80, 0.08, 0.02), seated, seated]
+    observations.extend(_obs("Object_1", float(t), *box) for t, box in enumerate(track))
+    joins = find_joins(_doc(observations))
+    assert len(joins) == 1
+    assert joins[0].released is None
 
 
 def test_locate_asks_for_the_hole_and_the_start_of_the_gap():
