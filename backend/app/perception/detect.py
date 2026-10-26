@@ -90,6 +90,26 @@ class MotionDetector:
         ]
 
 
+# Phone video is often 4K. MSER walks the whole image, and a few hundred
+# full-resolution frames will occupy the process until it stops answering.
+PROPOSAL_MAX_EDGE = 960
+
+
+def _mser_view(gray: np.ndarray) -> tuple[np.ndarray, float]:
+    """Return a view whose long side fits the proposal budget, and the scale used."""
+    height, width = gray.shape[:2]
+    edge = max(height, width)
+    if edge <= PROPOSAL_MAX_EDGE or edge <= 0:
+        return gray, 1.0
+    scale = PROPOSAL_MAX_EDGE / edge
+    resized = cv2.resize(
+        gray,
+        (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+        interpolation=cv2.INTER_AREA,
+    )
+    return resized, scale
+
+
 class ProposalDetector:
     """Motion regions plus stable extremal regions. Still not a class label."""
 
@@ -107,11 +127,25 @@ class ProposalDetector:
         height, width = frame.shape[:2]
         boxes = [item.bbox for item in self.motion.detect(frame, context)]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        regions, _bboxes = self.mser.detectRegions(gray)
+        view, scale = _mser_view(gray)
+        view_height, view_width = view.shape[:2]
+        if scale == 1.0:
+            self.mser.setMinArea(60)
+            self.mser.setMaxArea(14400)
+        else:
+            view_area = view_width * view_height
+            self.mser.setMinArea(max(60, int(view_area * 0.002)))
+            self.mser.setMaxArea(max(14400, int(view_area * 0.35)))
+        regions, _bboxes = self.mser.detectRegions(view)
         area_min = width * height * 0.002
         area_max = width * height * 0.35
         for region in regions:
             x, y, w, h = cv2.boundingRect(region.reshape(-1, 1, 2))
+            if scale != 1.0:
+                x = int(round(x / scale))
+                y = int(round(y / scale))
+                w = int(round(w / scale))
+                h = int(round(h / scale))
             if not area_min <= w * h <= area_max:
                 continue
             if w < 6 or h < 6:

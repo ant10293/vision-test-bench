@@ -352,3 +352,44 @@ def test_reference_shows_a_still_while_it_processes(client, tmp_path: Path):
         assert clip.is_file()
     finally:
         settings.ingest_inline = True
+
+
+def test_worker_keeps_the_server_loop_free_during_a_job(monkeypatch):
+    from app.jobs import worker
+
+    def blocking(_job_id: str) -> None:
+        time.sleep(0.3)
+
+    claims = {"n": 0}
+
+    def claim(_worker_id: str):
+        claims["n"] += 1
+        if claims["n"] == 1:
+            return "job-1"
+        return None
+
+    monkeypatch.setattr(worker, "recover_incomplete", lambda: 0)
+    monkeypatch.setattr(worker, "claim_next", claim)
+    monkeypatch.setattr(worker, "run_claimed_job", blocking)
+    monkeypatch.setattr(worker.settings, "worker_poll_seconds", 0.05)
+
+    async def main():
+        stop = asyncio.Event()
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            while not stop.is_set():
+                await asyncio.sleep(0.05)
+                ticks += 1
+
+        loop_task = asyncio.create_task(worker.worker_loop(stop))
+        tick_task = asyncio.create_task(ticker())
+        await asyncio.sleep(0.35)
+        stop.set()
+        await loop_task
+        tick_task.cancel()
+        return ticks
+
+    ticks = asyncio.run(main())
+    assert ticks >= 3

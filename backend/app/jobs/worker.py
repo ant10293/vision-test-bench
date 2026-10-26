@@ -79,25 +79,36 @@ def claim_next(worker_id: str) -> str | None:
         session.close()
 
 
+def run_claimed_job(job_id: str) -> None:
+    """Run one job on this thread, with its own event loop.
+
+    The worker lives in the API process. Tracking and frame work are synchronous
+    and can occupy a core for minutes. Running that on the server loop stops the
+    process from answering until the stage returns.
+    """
+    session = _session()
+    try:
+        job = session.get(Job, job_id)
+        if job is None:
+            return
+        asyncio.run(execute_job(session, job))
+    except Exception:
+        log.exception("job %s crashed", job_id)
+    finally:
+        session.close()
+
+
 async def worker_loop(stop: asyncio.Event) -> None:
     worker_id = uuid4().hex[:12]
-    recovered = recover_incomplete()
+    recovered = await asyncio.to_thread(recover_incomplete)
     if recovered:
         log.info("recovered %s interrupted jobs", recovered)
     while not stop.is_set():
-        job_id = claim_next(worker_id)
+        job_id = await asyncio.to_thread(claim_next, worker_id)
         if job_id is None:
             try:
                 await asyncio.wait_for(stop.wait(), timeout=settings.worker_poll_seconds)
             except TimeoutError:
                 continue
             continue
-        session = _session()
-        try:
-            job = session.get(Job, job_id)
-            if job is not None:
-                await execute_job(session, job)
-        except Exception:
-            log.exception("job %s crashed", job_id)
-        finally:
-            session.close()
+        await asyncio.to_thread(run_claimed_job, job_id)

@@ -12,7 +12,17 @@ import { api, formatWhen, type ProjectSummary } from "../lib/api";
 import type { VideoInfo } from "../lib/types";
 import { videoReady } from "../lib/uploadProgress";
 import { useUploads } from "../stores/uploads";
-import { TaskDetailPage } from "./Tasks";
+import { TaskProjectSections } from "./Tasks";
+
+function projectDetailHelp(reference: boolean, spansDays: boolean): string {
+  const lead = reference
+    ? "Add a path or drop a file, depending on the storage setting."
+    : "Drop videos to add them.";
+  const running = reference
+    ? "Analysis keeps running if you switch pages."
+    : "Upload and analysis keep running if you switch pages.";
+  return spansDays ? `${lead} ${running}` : `${lead} ${running} Drag a card to reorder it.`;
+}
 
 function compareDisplayOrder(left: VideoInfo, right: VideoInfo): number {
   const leftRank = left.order_index;
@@ -187,6 +197,7 @@ export function ProjectsPage() {
   const beginCreate = useUploads((state) => state.beginCreate);
   const clearDraft = useUploads((state) => state.clearDraft);
   const forgetProject = useUploads((state) => state.forgetProject);
+  const noteTask = useUploads((state) => state.noteTask);
   const adoptServer = useUploads((state) => state.adoptServer);
   const mode = routeProjectId ? "edit" : view.mode === "create" ? "create" : "library";
   const editId = routeProjectId;
@@ -239,6 +250,7 @@ export function ProjectsPage() {
     onSuccess: async () => {
       setError("");
       await client.invalidateQueries({ queryKey: ["videos"] });
+      if (editId) await client.invalidateQueries({ queryKey: ["task", editId] });
     },
     onError: (err: Error) => setError(err.message),
   });
@@ -316,6 +328,10 @@ export function ProjectsPage() {
   useEffect(() => {
     if (mode === "edit" && editId && projectVideos.data) adoptServer(editId, projectVideos.data);
   }, [mode, editId, projectVideos.data, adoptServer]);
+
+  useEffect(() => {
+    if (editId && editing?.is_task) noteTask(editId);
+  }, [editId, editing?.is_task, noteTask]);
 
   useEffect(() => {
     if (!pendingDetail || pendingDetail.id !== routeProjectId) return;
@@ -463,6 +479,7 @@ export function ProjectsPage() {
     if (!editId || !chosen.length) return;
     try {
       await api.attachVideos(editId, chosen.map((video) => video.id));
+      if (editing?.is_task) await api.reconcileTask(editId);
       await client.invalidateQueries({ queryKey: ["videos"] });
       await client.invalidateQueries({ queryKey: ["task", editId] });
     } catch (err) {
@@ -478,10 +495,12 @@ export function ProjectsPage() {
   if (routeProjectId && !editing && !detailLoading) {
     return <p className="text-sm text-[var(--rose)]">Project not found.</p>;
   }
-  if (pendingHere?.spansDays || editing?.is_task) return <TaskDetailPage />;
   if (detailLoading) return <ProjectDetailSkeleton onBack={backToProjects} />;
-  const editingVideos = (shown ?? []).filter(videoReady);
+  const spansDaysView = Boolean(editing?.is_task);
   const assetRows = items.filter((item) => (creating ? item.projectId === "" : item.projectId === editId));
+  const editingVideos = (shown ?? []).filter(
+    (video) => videoReady(video) && (!spansDaysView || !assetRows.some((item) => item.videoId === video.id)),
+  );
   const reference = labSettings.data?.video_storage === "reference";
   const sorting = drag?.active ? cellsWithSlot(editingVideos, drag.id, drag.index) : null;
   const draggedVideo = drag ? editingVideos.find((video) => video.id === drag.id) : undefined;
@@ -559,11 +578,17 @@ export function ProjectsPage() {
                   <h2 className="min-w-0 pr-36 text-lg">{editing ? editing.name : <Bone width="12rem" />}</h2>
                   {mode === "edit" && editId && <ProjectCosts projectId={editId} className="is-end is-overlay" />}
                 </div>
+                {spansDaysView && editing?.description ? (
+                  <p className="pr-36 text-sm text-[var(--muted)]">{editing.description}</p>
+                ) : null}
                 <p className="pr-36 text-sm text-[var(--muted)]">
-                  {storagePending ? <Bone width="80%" /> : reference
-                    ? "Add a path or drop a file, depending on the storage setting. Analysis keeps running if you switch pages. Drag a card to reorder it."
-                    : "Drop videos to add them. Upload and analysis keep running if you switch pages. Drag a card to reorder it."}
+                  {storagePending ? <Bone width="80%" /> : projectDetailHelp(reference, spansDaysView)}
                 </p>
+                {spansDaysView && (
+                  <p className="pr-36 text-xs text-[var(--amber)]">
+                    Project time is the capture clock. Clip time is seconds from the start of that recording. File modification time and upload time are stored separately.
+                  </p>
+                )}
               </>
             )}
           </div>
@@ -656,7 +681,7 @@ export function ProjectsPage() {
                 deleting={deleteVideo.isPending && deleteVideo.variables === cell.video.id}
                 actionLabel={`Delete ${cell.video.filename}`}
                 actionTitle="Delete video"
-                onGrab={(event) => grabCard(cell.video as VideoInfo, cell.sortIndex, event)}
+                onGrab={spansDaysView ? undefined : (event) => grabCard(cell.video as VideoInfo, cell.sortIndex, event)}
                 onDelete={() => {
                   const filename = cell.video?.filename ?? "this video";
                   const id = cell.video?.id ?? "";
@@ -711,6 +736,7 @@ export function ProjectsPage() {
           )}
         </div>
       )}
+      {spansDaysView && editId && <TaskProjectSections projectId={editId} />}
       {pickerOpen && (
         <LibraryPicker
           videos={libraryCatalog.data ?? []}

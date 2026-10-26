@@ -33,8 +33,24 @@ Also list timestamped observations with normalized bounding boxes (x, y, w, h in
 On every supplied frame, include one observation for each object that is even partly visible, with its own
 tight box around that object alone. A box around a larger object does not count for a smaller part that
 can still be distinguished, including a part resting on it, around it, or partly covered by a hand.
-Do not skip a frame because the object looks the same as before. Omit an object from a frame only when
-it is fully out of view or fully hidden, and do not invent a box in that case.
+Do not skip a frame because the object looks the same as before. A change in brightness, color cast,
+or shadow is not disappearance. If the shape and the color relative to the parts around it still match
+an earlier view, box that same object again, including when this frame is dimmer, warmer, or more
+shadowed. A darker part stays that part: do not drop it, and do not redraw it as a shadow or as the
+edge of a lighter neighbor. A gap, hole, or edge that identified it before still identifies it.
+A long object is still that object when only its end, face, or head is showing. Do not wait for the
+long side or a repeating surface pattern. Box that end or head, including when it sits in the middle
+of a ring, and do not let the ring's box stand in for it.
+When the repeating surface and the head or top are both in view, the same box includes the head or top.
+Do not stop where the repeating surface ends. A box that holds only that surface leaves the head or top unidentified.
+A compact faceted part touching a ring is its own object. Box it when any face is visible, even if most
+of it is covered. Do not leave it out because the view is end-on or because the ring beside it already
+has a box.
+If that faceted part is seen face-on, surrounding an end and surrounded by the ring, it still gets
+its own box on the flats. The ring's box and the inner end's box do not count for it.
+When the edges are faint, keep the box tight on that part instead of growing it across the hand or a
+neighbor. Omit an object from a frame only when it is fully out of view or fully hidden, and do not
+invent a box in that case.
 Use visibility visible, partial, occluded, or absent.
 If the user message lists tracked instance ids, copy those ids into instance_id and describe those
 objects. Do not mint a replacement physical id when an object only changes appearance, scale, or

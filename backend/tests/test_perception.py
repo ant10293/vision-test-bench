@@ -411,3 +411,34 @@ def test_presets_are_distinct_and_do_not_substitute():
     except ValueError:
         failed = True
     assert failed
+
+
+def test_proposal_detector_shrinks_phone_frames():
+    import time
+
+    from app.perception.detect import PROPOSAL_MAX_EDGE, ProposalDetector, _mser_view
+    from app.perception.types import DetectionContext
+
+    small, scale = _mser_view(np.zeros((360, 640), np.uint8))
+    assert scale == 1.0
+    assert small.shape == (360, 640)
+
+    view, scale = _mser_view(np.zeros((3840, 2160), np.uint8))
+    assert scale < 1
+    assert max(view.shape) == PROPOSAL_MAX_EDGE
+
+    frame = np.zeros((3840, 2160, 3), np.uint8)
+    frame[800:2800, 600:1500] = 220
+    detector = ProposalDetector(False)
+    started = time.perf_counter()
+    found = detector.detect(
+        frame,
+        DetectionContext(
+            timestamp=1.0,
+            index=1,
+            scene_chunk=0,
+            research_mode="fixed_camera",
+        ),
+    )
+    assert time.perf_counter() - started < 1
+    assert all(0 <= item.bbox[0] <= 1 and 0 <= item.bbox[1] <= 1 for item in found)

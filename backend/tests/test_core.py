@@ -2,7 +2,7 @@
 
 from app.demo.scenarios import SCENARIOS, build_document
 from app.pipeline.infer import _merge_instruction, _window_note, _windows
-from app.pipeline.prompts import ACTIONS, FOUNDATIONAL, TEMPLATES, WORKFLOW
+from app.pipeline.prompts import ACTIONS, FOUNDATIONAL, SCENE, TEMPLATES, WORKFLOW
 from app.pipeline.validate import validate_document
 from app.schemas.analysis import AnalysisDocument
 from app.schemas.enums import RECOGNIZED_ACTIONS
@@ -106,6 +106,16 @@ def test_window_note_names_the_shared_timestamps():
     assert "fewer pieces" in opening
     assert "The supplied frames are at 18 s, 19 s, 20 s, 21 s, and 22 s." in opening
     assert "tight box around that object alone" in opening
+    assert "color cast, or shadow is not disappearance" in opening
+    assert "do not redraw it as a shadow" in opening
+    assert "only its end, face, or head is showing" in opening
+    assert "compact faceted part" in opening
+    assert "includes the head or top" in opening
+    assert "own box on the flats" in opening
+    assert "color cast" in SCENE
+    assert "end, face, or head" in SCENE
+    assert "includes the head or top" in SCENE
+    assert "own box on the flats" in SCENE
     merge = _merge_instruction(windows)
     assert "18 s and 19 s" in merge
     assert "keep the earlier ids" in merge

@@ -1,111 +1,42 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { AssetDropZone } from "../components/AssetDropZone";
-import { LibraryPicker } from "../components/LibraryPicker";
-import { ProjectCosts } from "../components/ProjectCosts";
+import { Link } from "react-router-dom";
 import { Bone } from "../components/Skeleton";
-import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
-import { VideoCard, VideoFace } from "../components/VideoCard";
 import { api, evidenceClass, formatTime, type TaskBundle, type TaskClip } from "../lib/api";
 import { captureToLocalInput, localInputToCapture } from "../lib/captureTime";
 import { humanize, labeledId } from "../lib/humanize";
 import { clipPosition } from "../lib/taskOrder";
-import type { VideoInfo } from "../lib/types";
-import { videoReady } from "../lib/uploadProgress";
-import { useUploads } from "../stores/uploads";
 
 const MODES = ["", "fixed_camera", "constrained_head_mounted", "unconstrained_head_mounted"];
 
-function inDisplayOrder(videos: VideoInfo[]): VideoInfo[] {
-  if (!videos.some((video) => video.order_index != null)) return videos;
-  return [...videos].sort((left, right) => {
-    const leftRank = left.order_index;
-    const rightRank = right.order_index;
-    if (leftRank == null && rightRank == null) return 0;
-    if (leftRank == null) return 1;
-    if (rightRank == null) return -1;
-    return leftRank - rightRank;
-  });
-}
-
-function TaskDetailSkeleton() {
+function TaskSectionsSkeleton() {
   return (
-    <div className="space-y-5" aria-busy="true">
-      <p className="sr-only">Loading project</p>
-      <header>
-        <Link className="text-sm text-[var(--muted)]" to="/projects">← Back to projects</Link>
-        <h1 className="mt-2 text-2xl font-medium"><Bone width="14rem" /></h1>
-        <p className="mt-2"><Bone width="70%" /></p>
-      </header>
-      <div className="drop-zone" aria-hidden="true">
-        <Bone width="16rem" />
-        <Bone width="10rem" />
-      </div>
-      <section className="space-y-2">
-        <h2 className="text-lg"><Bone width="8rem" /></h2>
-        {Array.from({ length: 3 }, (_, index) => (
-          <div key={index} className="panel p-3"><Bone width="60%" /></div>
-        ))}
-      </section>
-    </div>
+    <section className="space-y-2" aria-busy="true">
+      <p className="sr-only">Loading chronology</p>
+      <h2 className="text-lg"><Bone width="8rem" /></h2>
+      {Array.from({ length: 3 }, (_, index) => (
+        <div key={index} className="panel p-3"><Bone width="60%" /></div>
+      ))}
+    </section>
   );
 }
 
-export function TaskDetailPage() {
-  const { projectId = "" } = useParams();
+/** Sessions, chronology, and cross-session reading. The project page supplies the shared detail around this. */
+export function TaskProjectSections({ projectId }: { projectId: string }) {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["task", projectId], queryFn: () => api.task(projectId), enabled: Boolean(projectId) });
-  const labSettings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
-  const projectVideos = useQuery({
-    queryKey: ["videos", projectId],
-    queryFn: () => api.videos(projectId),
-    enabled: Boolean(projectId),
-  });
-  const reference = labSettings.data?.video_storage === "reference";
-  const [error, setError] = useState("");
   const [sessionName, setSessionName] = useState("");
   const [openSessions, setOpenSessions] = useState<Record<string, boolean>>({});
   const [compare, setCompare] = useState<string[]>([]);
   const [dragId, setDragId] = useState("");
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const library = useQuery({
-    queryKey: ["videos", "library"],
-    queryFn: api.unassignedVideos,
-    enabled: pickerOpen,
-  });
   const refresh = async () => {
     await client.invalidateQueries({ queryKey: ["task", projectId] });
     await client.invalidateQueries({ queryKey: ["videos"] });
   };
-  const noteTask = useUploads((state) => state.noteTask);
-  const enqueue = useUploads((state) => state.enqueue);
-  const enqueuePaths = useUploads((state) => state.enqueuePaths);
-  const removeItem = useUploads((state) => state.removeItem);
-  const adoptServer = useUploads((state) => state.adoptServer);
-  const uploadItems = useUploads((state) => state.items);
-  const assetRows = useMemo(
-    () => uploadItems.filter((item) => item.projectId === projectId),
-    [uploadItems, projectId],
-  );
-  const deleteVideo = useMutation({
-    mutationFn: (id: string) => api.deleteVideo(id),
-    onSuccess: async () => {
-      setError("");
-      await refresh();
-    },
-    onError: (err: Error) => setError(err.message),
-  });
-  useEffect(() => {
-    noteTask(projectId);
-  }, [noteTask, projectId]);
-  useEffect(() => {
-    if (projectVideos.data) adoptServer(projectId, projectVideos.data);
-  }, [adoptServer, projectId, projectVideos.data]);
   const task = query.data;
   const clipById = useMemo(() => new Map((task?.clips ?? []).map((clip) => [clip.id, clip])), [task]);
-  if (query.isError) return <p className="text-[var(--rose)]">{(query.error as Error).message}</p>;
-  if (!task) return <TaskDetailSkeleton />;
+  if (query.isError) return <p className="text-sm text-[var(--rose)]">{(query.error as Error).message}</p>;
+  if (!task) return <TaskSectionsSkeleton />;
   const displayIds = [
     ...task.order.ranked.flat(),
     ...task.clips.map((clip) => clip.id).filter((id) => !task.order.ranked.flat().includes(id)),
@@ -122,108 +53,6 @@ export function TaskDetailPage() {
 
   return (
     <div className="space-y-5">
-      <header>
-        <Link className="text-sm text-[var(--muted)]" to="/projects">← Back to projects</Link>
-        <div className="relative mt-2">
-          <h1 className="min-w-0 pr-36 text-lg">{task.project.name}</h1>
-          <ProjectCosts projectId={projectId} className="is-end is-overlay" />
-        </div>
-        {task.project.description ? <p className="pr-36 text-sm text-[var(--muted)]">{task.project.description}</p> : null}
-        <p className="pr-36 text-xs text-[var(--amber)]">
-          Project time is the capture clock. Clip time is seconds from the start of that recording. File modification time and upload time are stored separately.
-        </p>
-      </header>
-
-      <StorageSettings />
-      {reference ? (
-        <>
-          <VideoPathForm
-            hint="One full path per line. Each recording stays where it is, and this task reads it from that path."
-            onAdd={(paths) => {
-              setError("");
-              enqueuePaths(projectId, paths);
-            }}
-          />
-          <AssetDropZone
-            chooser={false}
-            accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
-            prompt=""
-            chooseLabel="Choose files"
-            libraryLabel="Choose from library"
-            onChooseLibrary={() => setPickerOpen(true)}
-            supported=""
-            rows={assetRows.map((item) => ({
-              id: item.key,
-              name: item.name,
-              url: item.previewUrl,
-              subtitle: item.subtitle,
-              progress: item.progress,
-              failed: item.phase === "error",
-            }))}
-            onRemove={removeItem}
-            onFiles={() => undefined}
-          />
-        </>
-      ) : (
-      <AssetDropZone
-        multiple
-        accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
-        prompt="Drag and drop recordings here,"
-        chooseLabel="Choose files"
-        libraryLabel="Choose from library"
-        onChooseLibrary={() => setPickerOpen(true)}
-        supported="Supported: MP4, MOV, WebM"
-        rows={assetRows.map((item) => ({
-          id: item.key,
-          name: item.name,
-          url: item.previewUrl,
-          subtitle: item.subtitle,
-          progress: item.progress,
-          failed: item.phase === "error",
-        }))}
-        onRemove={removeItem}
-        onFiles={(files) => {
-          if (files.length) enqueue(projectId, files);
-        }}
-      />
-      )}
-      {error && <p className="text-sm text-[var(--rose)]">{error}</p>}
-
-      {projectVideos.isPending ? (
-        <div className="video-grid" aria-busy="true">
-          <p className="sr-only">Loading videos</p>
-          {Array.from({ length: 3 }, (_, index) => (
-            <div key={index} className="video-card is-static panel overflow-hidden">
-              <VideoFace />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="video-grid">
-          {inDisplayOrder(projectVideos.data ?? []).filter((video) => videoReady(video) && !assetRows.some((item) => item.videoId === video.id)).map((video, index) => (
-            <VideoCard
-              key={video.id}
-              video={video}
-              order={index + 1}
-              deleting={deleteVideo.isPending && deleteVideo.variables === video.id}
-              actionLabel={`Delete ${video.filename}`}
-              actionTitle="Delete video"
-              onDelete={() => {
-                if (window.confirm(`Delete “${video.filename}”? This removes it from the project and the video library. A referenced original stays on disk.`)) deleteVideo.mutate(video.id);
-              }}
-            />
-          ))}
-        </div>
-      )}
-      {projectVideos.isError && <p className="text-sm text-[var(--rose)]">{(projectVideos.error as Error).message}</p>}
-      {projectVideos.isSuccess && !assetRows.length && !inDisplayOrder(projectVideos.data).filter(videoReady).length && (
-        <p className="text-sm text-[var(--muted)]">
-          {reference
-            ? "This project has no videos yet. Add a path above, or choose from the library."
-            : "This project has no videos yet. Drop one above, or choose from the library."}
-        </p>
-      )}
-
       <section className="space-y-2">
         <h2 className="text-lg">Chronology</h2>
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -428,26 +257,6 @@ export function TaskDetailPage() {
           </div>
         ))}
       </section>
-      {pickerOpen && (
-        <LibraryPicker
-          videos={library.data ?? []}
-          loading={library.isLoading}
-          error={library.isError ? (library.error as Error).message : ""}
-          onClose={() => setPickerOpen(false)}
-          onOpen={async (chosen) => {
-            setPickerOpen(false);
-            if (!chosen.length) return;
-            try {
-              await api.attachVideos(projectId, chosen.map((video) => video.id));
-              await api.reconcileTask(projectId);
-              setError("");
-              await refresh();
-            } catch (err) {
-              setError(err instanceof Error ? err.message : "Could not add those videos");
-            }
-          }}
-        />
-      )}
     </div>
   );
 }
