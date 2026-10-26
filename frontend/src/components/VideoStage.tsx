@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { api } from "../lib/api";
 import type { Bundle, TrackPointSample } from "../lib/types";
 import { observationsAt, tracksAt } from "../lib/analysis";
-import { labeledId } from "../lib/humanize";
+import { humanize, labeledId } from "../lib/humanize";
 import { labelSpan, wrapLines } from "../lib/wrapText";
 import { useInspector } from "../stores/ui";
 
@@ -305,7 +305,7 @@ function TrackMark({
         <rect x={x} y={y} width={w} height={h} fill={color} fillOpacity={0.08} stroke={color} strokeWidth={2} strokeDasharray={uncertain ? "6 4" : undefined} />
       )}
       {layers.ids && (
-        <text x={x} y={Math.max(14, y - 4)} fill={color} fontSize={14} fontFamily="IBM Plex Sans, sans-serif">{point.track_ref}</text>
+        <text x={x} y={Math.max(14, y - 4)} fill={color} fontSize={14} fontFamily="IBM Plex Sans, sans-serif">{humanize(point.track_ref)}</text>
       )}
       {layers.status && (
         <text x={x} y={y + h + 14} fill={color} fontSize={12} fontFamily="IBM Plex Sans, sans-serif">{point.status || point.continuity}</text>

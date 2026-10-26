@@ -49,7 +49,7 @@ export function PerceptionPanel({ bundle }: { bundle: Bundle }) {
       <ul className="space-y-2">
         {instances.map((item) => (
           <li key={item.instance_id} className="rounded border border-[var(--line)] p-2">
-            <button className="font-medium" onClick={() => setTime(item.first_seen)}>{item.instance_id}</button>
+            <button className="font-medium" onClick={() => setTime(item.first_seen)}>{humanize(item.instance_id)}</button>
             <span className="ml-2 text-xs text-[var(--muted)]">
               {item.status} · {formatTime(item.first_seen)}–{formatTime(item.last_seen)} · {item.observation_count} observations
               {item.uncertain ? " · uncertain" : ""}
@@ -76,13 +76,13 @@ export function PerceptionPanel({ bundle }: { bundle: Bundle }) {
           <label className="text-xs text-[var(--muted)]">Keep
             <select className="field" value={keep} onChange={(event) => setKeep(event.target.value)}>
               <option value="">Instance</option>
-              {instances.map((item) => <option key={item.instance_id} value={item.instance_id}>{item.instance_id}</option>)}
+              {instances.map((item) => <option key={item.instance_id} value={item.instance_id}>{humanize(item.instance_id)}</option>)}
             </select>
           </label>
           <label className="text-xs text-[var(--muted)]">Merge into it
             <select className="field" value={drop} onChange={(event) => setDrop(event.target.value)}>
               <option value="">Instance</option>
-              {instances.map((item) => <option key={item.instance_id} value={item.instance_id}>{item.instance_id}</option>)}
+              {instances.map((item) => <option key={item.instance_id} value={item.instance_id}>{humanize(item.instance_id)}</option>)}
             </select>
           </label>
           <button className="btn" disabled={!keep || !drop || keep === drop} onClick={() => refresh(api.mergeInstances(bundle.run.id, keep, drop))}>Merge instances</button>
@@ -106,8 +106,8 @@ function HypothesisRow({
     <div className="rounded border border-[var(--line)] p-2">
       <button className="text-xs" onClick={() => onSeek(item.timestamp)}>{formatTime(item.timestamp)} · {item.decision}</button>
       <div className="text-xs text-[var(--muted)]">
-        {item.subject_instance_id} → {item.candidate_instance_id}
-        {item.runner_up_instance_id ? ` · runner-up ${item.runner_up_instance_id}` : ""}
+        {humanize(item.subject_instance_id)} → {humanize(item.candidate_instance_id)}
+        {item.runner_up_instance_id ? ` · runner-up ${humanize(item.runner_up_instance_id)}` : ""}
       </div>
       <div className="text-xs text-[var(--muted)]">
         Appearance {score(item.appearance_cosine)} · motion {score(item.motion_agreement)} · association {score(item.association_score)} · margin {score(item.margin)}

@@ -208,7 +208,7 @@ function trackSegments(bundle: Bundle): Segment[] {
         key: `${ref}-${start.timestamp}-${status}`,
         start: start.timestamp,
         end: Math.max(end.timestamp, start.timestamp + 0.05),
-        label: `${ref} · ${status}`,
+        label: `${humanize(ref)} · ${humanize(status)}`,
         color: TRACK_COLOR[status] ?? "#465066",
       });
     };

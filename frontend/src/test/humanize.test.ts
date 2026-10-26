@@ -28,6 +28,7 @@ describe("humanize", () => {
 
   it("reads local ids as words", () => {
     expect(humanize("Object_1")).toBe("Object 1");
+    expect(humanize("track_1")).toBe("Track 1");
   });
 
   it("puts a colon between an object id and its name", () => {
