@@ -8,7 +8,7 @@ from app.schemas.analysis import AnalysisDocument
 from app.schemas.enums import RECOGNIZED_ACTIONS
 from app.providers.sam import parse_sam_output
 from app.video.probe import snap_timestamps
-from app.video.sampling import plan_uniform, uniform_targets
+from app.video.sampling import budget_indices, plan_uniform, uniform_targets
 
 
 def test_uniform_targets_use_duration_not_frame_index():
@@ -24,8 +24,34 @@ def test_timestamps_snap_to_presentation_times():
 
 def test_plan_uniform_records_reason():
     frames = plan_uniform(1.0, 1.0, [0.0, 0.5, 1.0])
-    assert frames
+    assert [frame.timestamp for frame in frames] == [0.0, 1.0]
     assert all(frame.reason == "uniform" for frame in frames)
+
+
+def test_one_hertz_grid_includes_a_partial_final_second():
+    pts = [float(index) for index in range(22)] + [21.918]
+    frames = plan_uniform(21.952, 1.0, pts)
+    stamps = [frame.timestamp for frame in frames]
+    assert stamps[0] == 0.0
+    assert 21.0 in stamps
+    assert stamps[-1] == 21.918
+
+
+def test_exact_grid_endpoint_is_sampled():
+    frames = plan_uniform(2.0, 2.0, [0.0, 0.5, 1.0, 1.5, 1.967])
+    assert [frame.timestamp for frame in frames] == [0.0, 0.5, 1.0, 1.5, 1.967]
+
+
+def test_short_tail_does_not_add_another_sample():
+    frames = plan_uniform(1.02, 1.0, [0.0, 1.0])
+    assert [frame.timestamp for frame in frames] == [0.0, 1.0]
+
+
+def test_frame_budget_keeps_the_closing_sample():
+    indexes = budget_indices(50, 48)
+    assert indexes[0] == 0
+    assert indexes[-1] == 49
+    assert len(indexes) <= 48
 
 
 def test_prompts_do_not_name_the_hardware_task():

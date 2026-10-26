@@ -37,6 +37,7 @@ from app.video.frames import contact_sheet, extract_frame, read_bgr
 from app.video.probe import presentation_timestamps
 from app.video.sampling import (
     annotate_sharpness,
+    budget_indices,
     measure_motion,
     plan_adaptive,
     plan_uniform,
@@ -356,22 +357,22 @@ def _sample(session, run, video, stage) -> None:
     preset = run.sampling_preset
     if run.modality == "native_video":
         fps = 1.0
-        samples = plan_uniform(video.duration_sec, fps, pts)
-        samples = [item for item in samples if start <= item.timestamp <= end]
+        samples = plan_uniform(end, fps, pts)
+        samples = [item for item in samples if start <= item.timestamp <= end + 0.01]
         note = (
             "Native video was selected for the model. Preview frames were still extracted so the "
             "inspector can show evidence, but they are not a claim that the model saw only those frames."
         )
     elif preset == "adaptive":
-        coarse = plan_uniform(video.duration_sec, 4.0, pts)
-        coarse = [item for item in coarse if start <= item.timestamp <= end][:80]
+        coarse = plan_uniform(end, 4.0, pts)
+        coarse = [item for item in coarse if start <= item.timestamp <= end + 0.01][:80]
         coarse_rows = sample_run_frames(session, video, run.id, coarse)
         signals = measure_motion(
             [data_path(*Path(row.path).parts) for row in coarse_rows],
             [row.timestamp for row in coarse_rows],
         )
         adapted = plan_adaptive(video.duration_sec, pts, coarse, signals)
-        samples = [item for item in adapted.frames if start <= item.timestamp <= end]
+        samples = [item for item in adapted.frames if start <= item.timestamp <= end + 0.01]
         note = (
             f"Adaptive sampling kept {len(samples)} frames from a {len(coarse)}-frame motion pass. "
             "This is not full-frame coverage."
@@ -379,16 +380,19 @@ def _sample(session, run, video, stage) -> None:
         stage.checkpoint_json = {"scene_changes": adapted.scene_change_times}
     else:
         fps = preset_fps(preset, config.get("custom_fps"))
-        samples = plan_uniform(video.duration_sec, fps, pts)
-        samples = [item for item in samples if start <= item.timestamp <= end]
+        samples = plan_uniform(end, fps, pts)
+        samples = [item for item in samples if start <= item.timestamp <= end + 0.01]
+        if samples:
+            span = f" from {samples[0].timestamp:.3f} s through {samples[-1].timestamp:.3f} s"
+        else:
+            span = ""
         note = (
-            f"Uniform {fps:g} FPS sampling snapped to presentation timestamps. "
+            f"Uniform {fps:g} FPS sampling snapped to presentation timestamps{span}. "
             f"{len(samples)} frames will be available. The source has about {video.frame_count} frames."
         )
     limit = int(config.get("max_frames") or 48)
     if len(samples) > limit:
-        step = len(samples) / limit
-        samples = [samples[min(len(samples) - 1, int(i * step))] for i in range(limit)]
+        samples = [samples[index] for index in budget_indices(len(samples), limit)]
         note += f" The frame budget truncated the set to {limit}."
     rows = sample_run_frames(session, video, run.id, samples)
     paths = {round(row.timestamp, 3): data_path(*Path(row.path).parts) for row in rows}

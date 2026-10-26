@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
 import { Bone, MediaPlaceholder } from "../components/Skeleton";
-import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
+import { StorageSettings } from "../components/StorageSettings";
 import { api, formatTime } from "../lib/api";
 import type { VideoInfo } from "../lib/types";
 import { LIBRARY_QUEUE, useUploads } from "../stores/uploads";
@@ -52,7 +52,7 @@ export function VideosPage() {
   const labSettings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const items = useUploads((state) => state.items);
   const enqueueUnassigned = useUploads((state) => state.enqueueUnassigned);
-  const enqueueUnassignedPaths = useUploads((state) => state.enqueueUnassignedPaths);
+  const referenceDropped = useUploads((state) => state.referenceDropped);
   const removeItem = useUploads((state) => state.removeItem);
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteVideo(id),
@@ -79,15 +79,11 @@ export function VideosPage() {
           <Bone width="16rem" />
           <Bone width="10rem" />
         </div>
-      ) : reference ? (
-        <VideoPathForm onAdd={(paths) => enqueueUnassignedPaths(paths)} />
-      ) : null}
-      {!storagePending && (
+      ) : (
         <AssetDropZone
-          chooser={!reference}
           accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
           multiple
-          prompt={reference ? "Or" : "Drag and drop videos here or"}
+          prompt="Drag and drop videos here or"
           chooseLabel="Choose files"
           supported="Supported: MP4, MOV, WebM"
           rows={rows.map((item) => ({
@@ -99,8 +95,10 @@ export function VideosPage() {
             failed: item.phase === "error",
           }))}
           onRemove={removeItem}
-          onFiles={(files) => {
-            if (files.length) enqueueUnassigned(files);
+          onFiles={(files, paths) => {
+            if (!files.length) return;
+            if (reference) referenceDropped(LIBRARY_QUEUE, files, paths);
+            else enqueueUnassigned(files);
           }}
         />
       )}

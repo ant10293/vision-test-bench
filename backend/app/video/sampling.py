@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,10 +64,49 @@ def preset_fps(preset: str, custom_fps: float | None) -> float:
     return PRESET_FPS.get(preset, 1.0)
 
 
+def _closing_time(last: float, end: float) -> float | None:
+    """Return the end of the range when the grid leaves a real tail unseen.
+
+    A 1 fps grid on a 21.952 s clip otherwise stops at 21 s. The final state
+    is usually in that partial second, so it gets its own sample. A tail
+    shorter than about one frame is left to the nearest grid point.
+    """
+    if end - last <= 0.04:
+        return None
+    closing = math.floor((end + 1e-9) * 1000) / 1000
+    if closing - last <= 0.04:
+        return None
+    return closing
+
+
 def plan_uniform(duration: float, fps: float, pts: list[float]) -> list[SampledFrame]:
     targets = uniform_targets(duration, fps)
+    if targets:
+        closing = _closing_time(targets[-1], duration)
+        if closing is not None:
+            targets = [*targets, closing]
     snapped = snap_timestamps(targets, pts)
     return [SampledFrame(timestamp=item, reason="uniform") for item in snapped]
+
+
+def budget_indices(count: int, limit: int) -> list[int]:
+    """Pick up to `limit` indexes, always keeping the first and last."""
+    if count <= 0:
+        return []
+    if limit <= 0 or count <= limit:
+        return list(range(count))
+    if limit == 1:
+        return [count - 1]
+    step = (count - 1) / (limit - 1)
+    chosen: list[int] = []
+    seen: set[int] = set()
+    for i in range(limit):
+        index = min(count - 1, int(round(i * step)))
+        if index in seen:
+            continue
+        seen.add(index)
+        chosen.append(index)
+    return chosen
 
 
 def _hist_corr(a: np.ndarray, b: np.ndarray) -> float:

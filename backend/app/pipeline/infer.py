@@ -21,6 +21,7 @@ from app.schemas.analysis import AnalysisDocument, Coverage
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
 from app.services.credentials import load_secret
 from app.services.storage import data_path, resolve_stored
+from app.video.sampling import budget_indices
 
 
 class BudgetExceeded(RuntimeError):
@@ -270,10 +271,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
 
 def _budget_frames(frames: list[FrameAsset], limit: int) -> list[FrameAsset]:
     ordered = sorted(frames, key=lambda item: item.timestamp)
-    if len(ordered) <= limit:
-        return ordered
-    step = len(ordered) / limit
-    return [ordered[min(len(ordered) - 1, int(i * step))] for i in range(limit)]
+    return [ordered[index] for index in budget_indices(len(ordered), limit)]
 
 
 # Adjacent calls repeat this many frames so a window boundary is a shared moment,

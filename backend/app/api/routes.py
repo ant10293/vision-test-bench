@@ -99,6 +99,7 @@ from app.services.ingest import (
     schedule_ingest,
 )
 from app.services.lab_settings import load_settings, save_settings
+from app.services.locate import locate_dropped_video
 from app.services.storage import data_path, is_external, resolve_stored, safe_filename
 
 router = APIRouter(prefix="/api")
@@ -384,6 +385,23 @@ def put_lab_settings(payload: dict) -> dict:
         return save_settings(str(payload.get("video_storage") or ""))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/videos/locate")
+def locate_video(payload: dict) -> dict:
+    from app.video.probe import VideoError
+
+    name = str(payload.get("name") or "")
+    try:
+        size = int(payload["size"])
+        mtime_ms = int(payload["mtime_ms"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, "size and modification time are required") from exc
+    try:
+        path = locate_dropped_video(name, size, mtime_ms)
+    except VideoError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"path": str(path)}
 
 
 @router.post("/videos/reference")

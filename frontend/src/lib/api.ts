@@ -125,6 +125,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ...(projectId ? { project_id: projectId } : {}), path }),
     }),
+  locateVideo: (payload: { name: string; size: number; mtime_ms: number }) =>
+    request<{ path: string }>("/api/videos/locate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   orderVideos: (projectId: string, videoIds: string[]) =>
     request<VideoInfo[]>(`/api/projects/${projectId}/videos/order`, {
       method: "POST",

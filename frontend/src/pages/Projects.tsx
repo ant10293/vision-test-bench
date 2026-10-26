@@ -6,7 +6,7 @@ import { AssetDropZone } from "../components/AssetDropZone";
 import { LibraryPicker } from "../components/LibraryPicker";
 import { ProjectCosts } from "../components/ProjectCosts";
 import { Bone, MediaPlaceholder } from "../components/Skeleton";
-import { StorageSettings, VideoPathForm } from "../components/StorageSettings";
+import { StorageSettings } from "../components/StorageSettings";
 import { VideoCard, VideoFace } from "../components/VideoCard";
 import { api, formatWhen, type ProjectSummary } from "../lib/api";
 import type { VideoInfo } from "../lib/types";
@@ -15,9 +15,7 @@ import { useUploads } from "../stores/uploads";
 import { TaskProjectSections } from "./Tasks";
 
 function projectDetailHelp(reference: boolean, spansDays: boolean): string {
-  const lead = reference
-    ? "Add a path or drop a file, depending on the storage setting."
-    : "Drop videos to add them.";
+  const lead = "Drop videos to add them.";
   const running = reference
     ? "Analysis keeps running if you switch pages."
     : "Upload and analysis keep running if you switch pages.";
@@ -190,9 +188,8 @@ export function ProjectsPage() {
   const setView = useUploads((state) => state.setView);
   const items = useUploads((state) => state.items);
   const stageFiles = useUploads((state) => state.stageFiles);
-  const stagePaths = useUploads((state) => state.stagePaths);
   const enqueue = useUploads((state) => state.enqueue);
-  const enqueuePaths = useUploads((state) => state.enqueuePaths);
+  const referenceDropped = useUploads((state) => state.referenceDropped);
   const removeItem = useUploads((state) => state.removeItem);
   const beginCreate = useUploads((state) => state.beginCreate);
   const clearDraft = useUploads((state) => state.clearDraft);
@@ -289,7 +286,7 @@ export function ProjectsPage() {
     },
   });
   const draftItems = items.filter((item) => item.projectId === "");
-  const canSave = Boolean(name.trim()) && (draftItems.some((item) => item.phase === "staged") || libraryPicks.length > 0) && !saving;
+  const canSave = Boolean(name.trim()) && (draftItems.some((item) => item.phase === "staged" || item.phase === "resolving") || libraryPicks.length > 0) && !saving;
   const creating = mode === "create";
   const studiesReady = projects.data !== undefined;
   const libraryLoading = mode === "library" && !projects.isError && !studiesReady;
@@ -517,8 +514,6 @@ export function ProjectsPage() {
         </header>
       )}
 
-      {mode === "library" && <StorageSettings />}
-
       {mode === "library" && projects.isError && (
         <p className="text-sm text-[var(--rose)]">{(projects.error as Error).message}</p>
       )}
@@ -570,7 +565,7 @@ export function ProjectsPage() {
                   />
                   Across several days
                 </label>
-                <p className="mt-0.5 text-sm text-[var(--muted)]">Add a name and at least one video. You can drop files or choose videos from the library. Upload and analysis keep going after you save.</p>
+                <p className="mt-0.5 text-sm text-[var(--muted)]">Add a name and at least one video. You can drop files or choose videos from the library. Processing keeps going after you save.</p>
               </div>
             ) : (
               <>
@@ -598,19 +593,10 @@ export function ProjectsPage() {
               <Bone width="16rem" />
               <Bone width="10rem" />
             </div>
-          ) : reference ? (
-            <VideoPathForm
-              onAdd={(paths) => {
-                if (creating) stagePaths(paths);
-                else if (editId) enqueuePaths(editId, paths);
-              }}
-            />
-          ) : null}
-          {!storagePending && <AssetDropZone
-            chooser={!reference}
+          ) : <AssetDropZone
             accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
             multiple
-            prompt={reference ? "" : "Drag and drop videos here,"}
+            prompt="Drag and drop videos here,"
             chooseLabel="Choose files"
             libraryLabel="Choose from library"
             onChooseLibrary={() => setPickerOpen(true)}
@@ -639,9 +625,12 @@ export function ProjectsPage() {
               }
               removeItem(id);
             }}
-            onFiles={(files) => {
+            onFiles={(files, paths) => {
               if (!files.length) return;
-              if (creating) stageFiles(files);
+              if (reference) {
+                if (creating) referenceDropped("", files, paths);
+                else if (editId) referenceDropped(editId, files, paths);
+              } else if (creating) stageFiles(files);
               else if (editId) enqueue(editId, files);
             }}
           />}
@@ -712,7 +701,7 @@ export function ProjectsPage() {
       {libraryVideos.isError && <p className="text-sm text-[var(--rose)]">{(libraryVideos.error as Error).message}</p>}
       {mode === "edit" && projectVideos.isSuccess && !editingVideos.length && !assetRows.length && (
         <p className="text-sm text-[var(--muted)]" aria-live="polite">
-          {reference ? "This project has no videos yet. Add a path above, or choose from the library." : "This project has no videos yet. Drop one above, or choose from the library."}
+          This project has no videos yet. Drop one above, or choose from the library.
         </p>
       )}
       {(creating || (mode === "edit" && editing)) && (

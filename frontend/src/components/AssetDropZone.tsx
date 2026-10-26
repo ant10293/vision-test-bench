@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { pathsForDrop } from "../lib/droppedPath";
 
 type Item = { name: string; url: string; file: File };
 
@@ -21,7 +22,7 @@ type Props = {
   pending?: boolean;
   pendingLabel?: string;
   error?: string;
-  onFiles: (files: File[]) => void;
+  onFiles: (files: File[], paths?: string[]) => void;
   defer?: boolean;
   onStagedChange?: (files: File[]) => void;
   settings?: ReactNode;
@@ -87,12 +88,13 @@ export function AssetDropZone({
     return Array.from(event.dataTransfer?.types ?? []).includes("Files");
   }
 
-  function take(list: FileList | null) {
+  function take(list: FileList | null, hintedPaths?: string[]) {
     const files = [...(list ?? [])];
     const chosen = multiple ? files : files.slice(0, 1);
     if (!chosen.length) return;
+    const paths = hintedPaths?.slice(0, chosen.length);
     if (controlled) {
-      onFiles(chosen);
+      onFiles(chosen, paths);
       return;
     }
     const added = chosen.map((file) => ({ name: file.name, url: URL.createObjectURL(file), file }));
@@ -104,7 +106,7 @@ export function AssetDropZone({
       publish(next);
       return next;
     });
-    if (!defer) onFiles(chosen);
+    if (!defer) onFiles(chosen, paths);
   }
 
   function remove(url: string) {
@@ -149,10 +151,12 @@ export function AssetDropZone({
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragOver(false);
         }}
         onDrop={(event) => {
+          const files = event.dataTransfer.files;
+          const hinted = pathsForDrop([...files], event.dataTransfer);
           event.preventDefault();
           setDragOver(false);
           if (!chooser || !isFileDrag(event)) return;
-          take(event.dataTransfer.files);
+          take(files, hinted);
         }}
         onKeyDown={(event) => {
           if (!chooser) return;

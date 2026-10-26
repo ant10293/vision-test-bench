@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { api, type VideoStorage } from "../lib/api";
 import { SettingsFieldset } from "./SettingsFieldset";
 
@@ -44,57 +43,5 @@ export function StorageSettings() {
       {save.isError && <p className="text-sm text-[var(--rose)]">{(save.error as Error).message}</p>}
       <p className="text-xs text-[var(--muted)]">Choose how a new video is added. This applies to the next file you add.</p>
     </SettingsFieldset>
-  );
-}
-
-export function VideoPathForm({
-  onAdd,
-  pending = false,
-  error = "",
-  hint = "One full path per line. The lab reads each file where it is and does not copy it.",
-}: {
-  onAdd: (paths: string[]) => void | Promise<void>;
-  pending?: boolean;
-  error?: string;
-  hint?: string;
-}) {
-  const [value, setValue] = useState("");
-  const [localError, setLocalError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  return (
-    <form
-      className="panel space-y-2 p-3"
-      onSubmit={(event) => {
-        event.preventDefault();
-        const paths = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-        if (!paths.length) {
-          setLocalError("Enter the full path to a video.");
-          return;
-        }
-        setLocalError("");
-        setBusy(true);
-        void Promise.resolve(onAdd(paths))
-          .then(() => setValue(""))
-          .catch((err: unknown) => setLocalError(err instanceof Error ? err.message : "Could not add the videos"))
-          .finally(() => setBusy(false));
-      }}
-    >
-      <label className="block text-sm">
-        Paths to the videos
-        <textarea
-          className="field mt-1 block min-h-24 w-full resize-y"
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-          placeholder={"/Users/you/Videos/clip.mov"}
-          aria-label="Video paths"
-          spellCheck={false}
-          disabled={pending || busy}
-        />
-      </label>
-      <p className="text-xs text-[var(--muted)]">{hint}</p>
-      {(localError || error) && <p className="text-sm text-[var(--rose)]">{localError || error}</p>}
-      <button className="btn primary" type="submit" disabled={pending || busy}>{pending || busy ? "Adding…" : "Add videos"}</button>
-    </form>
   );
 }

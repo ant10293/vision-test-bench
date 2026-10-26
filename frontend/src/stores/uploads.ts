@@ -1,10 +1,11 @@
 import { create } from "zustand";
 import { api } from "../lib/api";
+import { droppedPath } from "../lib/droppedPath";
 import { queryClient } from "../lib/queryClient";
 import type { VideoInfo } from "../lib/types";
 import { analysisPercent, progressLabel, progressStepCount, RECONCILE_DETAIL, uploadPercent, videoReady } from "../lib/uploadProgress";
 
-export type UploadPhase = "staged" | "uploading" | "analyzing" | "reconciling" | "error";
+export type UploadPhase = "resolving" | "staged" | "uploading" | "analyzing" | "reconciling" | "error";
 
 export type UploadItem = {
   key: string;
@@ -34,6 +35,7 @@ type UploadStore = {
   enqueuePaths: (projectId: string, paths: string[]) => void;
   enqueueUnassigned: (files: File[]) => void;
   enqueueUnassignedPaths: (paths: string[]) => void;
+  referenceDropped: (projectId: string, files: File[], hintedPaths?: string[]) => void;
   removeItem: (key: string) => void;
   clearDraft: () => void;
   forgetProject: (projectId: string) => void;
@@ -112,6 +114,45 @@ function addPaths(projectId: string, pathList: string[], subtitle: string) {
     };
   });
   useUploads.setState((state) => ({ items: [...state.items, ...added] }));
+}
+
+function queueReferenced(projectId: string, fileList: File[], hinted: string[]) {
+  const added: UploadItem[] = fileList.map((file, index) => {
+    const key = crypto.randomUUID();
+    const direct = hinted[index] || droppedPath(file);
+    if (direct) paths.set(key, direct);
+    return {
+      key,
+      projectId,
+      name: file.name,
+      previewUrl: URL.createObjectURL(file),
+      phase: direct ? "staged" : "resolving",
+      progress: null,
+      subtitle: direct ? (projectId ? "Queued" : "Ready") : "Finding the original file",
+    };
+  });
+  useUploads.setState((state) => ({ items: [...state.items, ...added] }));
+  if (projectId && added.some((item) => item.phase === "staged")) kick(projectId);
+  fileList.forEach((file, index) => {
+    if (added[index].phase === "resolving") void resolveDropped(added[index].key, file);
+  });
+}
+
+async function resolveDropped(key: string, file: File) {
+  try {
+    const found = await api.locateVideo({ name: file.name, size: file.size, mtime_ms: Math.round(file.lastModified) });
+    if (cancelled.has(key)) return;
+    const item = useUploads.getState().items.find((entry) => entry.key === key);
+    if (!item || item.phase !== "resolving") return;
+    paths.set(key, found.path);
+    const queued = Boolean(item.projectId);
+    patchItem(key, { phase: "staged", subtitle: queued ? "Queued" : "Ready" });
+    if (queued) kick(item.projectId);
+  } catch (error) {
+    if (cancelled.has(key) || !useUploads.getState().items.some((entry) => entry.key === key)) return;
+    const message = error instanceof Error ? error.message : "Could not find the original file";
+    patchItem(key, { phase: "error", progress: null, subtitle: message });
+  }
 }
 
 function addItems(projectId: string, fileList: File[], subtitle: string) {
@@ -365,6 +406,7 @@ export const useUploads = create<UploadStore>((set, get) => ({
     addPaths(LIBRARY_QUEUE, pathList, "Queued");
     kick(LIBRARY_QUEUE);
   },
+  referenceDropped: (projectId, fileList, hintedPaths = []) => queueReferenced(projectId, fileList, hintedPaths),
   removeItem: (key) => release(key, true),
   clearDraft: () => {
     for (const item of get().items.filter((entry) => entry.projectId === "")) release(item.key, false);
@@ -374,15 +416,15 @@ export const useUploads = create<UploadStore>((set, get) => ({
   },
   beginCreate: async (name, options) => {
     const trimmed = name.trim();
-    const pending = get().items.some((item) => item.projectId === "" && item.phase === "staged");
+    const pending = get().items.some((item) => item.projectId === "" && (item.phase === "staged" || item.phase === "resolving"));
     if (!trimmed || (!pending && !options?.allowEmpty)) throw new Error("Name the project and add at least one video.");
     const project = await api.createProject(trimmed, "", Boolean(options?.spansDays));
     if (options?.spansDays) taskProjects.add(project.id);
     if (pending) {
       set((state) => ({
         items: state.items.map((item) =>
-          item.projectId === "" && item.phase === "staged"
-            ? { ...item, projectId: project.id, subtitle: "Queued" }
+          item.projectId === "" && (item.phase === "staged" || item.phase === "resolving")
+            ? { ...item, projectId: project.id, subtitle: item.phase === "resolving" ? item.subtitle : "Queued" }
             : item,
         ),
       }));
