@@ -114,6 +114,8 @@ def test_subscription_env_drops_a_loopback_proxy(monkeypatch):
     monkeypatch.setenv("https_proxy", "http://127.0.0.1:62763")
     monkeypatch.setenv("ALL_PROXY", "socks5://localhost:62762")
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.example.com:8080")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
     from app.providers.claude_code import subscription_env
 
     env = subscription_env()
@@ -121,6 +123,24 @@ def test_subscription_env_drops_a_loopback_proxy(monkeypatch):
     assert "https_proxy" not in env
     assert "ALL_PROXY" not in env
     assert env["HTTP_PROXY"] == "http://proxy.example.com:8080"
+    assert env.get("NO_PROXY") != "*"
+
+
+def test_subscription_env_bypasses_the_sandbox_proxy_when_that_is_the_only_one(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:62763")
+    monkeypatch.setenv("__CURSOR_SANDBOX_ENV_RESTORE", "builtin")
+    for name in (
+        "ALL_PROXY", "HTTP_PROXY", "http_proxy", "all_proxy", "NO_PROXY", "no_proxy",
+        "GIT_HTTP_PROXY", "GIT_HTTPS_PROXY", "SOCKS_PROXY", "SOCKS5_PROXY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    from app.providers.claude_code import subscription_env
+
+    env = subscription_env()
+    assert "HTTPS_PROXY" not in env
+    assert "__CURSOR_SANDBOX_ENV_RESTORE" not in env
+    assert env["NO_PROXY"] == "*"
+    assert env["no_proxy"] == "*"
 
 
 def test_claude_code_uses_the_model_output_maximum(monkeypatch):

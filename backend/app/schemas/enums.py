@@ -187,6 +187,7 @@ RECOGNIZED_ACTIONS = {
     "close",
     "place",
     "transfer",
+    "unknown",
 }
 
 OBJECT_COLORS = [

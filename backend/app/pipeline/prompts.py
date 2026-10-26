@@ -13,7 +13,7 @@ Rules:
 - Provenance is separate: you are producing an AI prediction. Do not describe your inference as a measurement.
 - An attempted action is not a completed action unless the resulting physical state is visible.
 - Spatial proximity is not attachment, insertion, containment, or support.
-- Keep stable object ids across the clip. If identity is uncertain, keep the uncertainty explicit instead of merging ids.
+- Keep stable object ids across the clip. A part seen again keeps its existing id, including when occlusion, stacking, or an end-on angle shows fewer pieces than an earlier view. Record which ids remain possible as an ambiguity. Create a new id only when the visible appearance contradicts every existing object.
 - Use timestamps in seconds from the start of the supplied media.
 - Do not assume the person performed a correct, complete, or optimal procedure.
 - A merely observed order is not a necessary physical dependency.
@@ -47,7 +47,7 @@ with identity_relation set to provisional instead of inserting it as a confirmed
 
 ACTIONS = """
 Produce an ordered list of granular physical actions. Prefer verbs such as pick_up, put_down, move,
-rotate, insert, remove, attach, detach, align, adjust, push, pull, twist, release, and inspect
+rotate, insert, remove, attach, detach, align, adjust, push, pull, twist, release, inspect, and approach
 when they fit, and say unknown rather than forcing one.
 Each action needs start, end, actor or hand when visible, object ids, initial state, final state,
 outcome (completed, attempted, failed, or unknown), uncertainty from 0 to 1, and evidence.
@@ -68,6 +68,8 @@ Derive a structured procedure from the observed actions without assuming it is t
 Each step needs required objects, preconditions, the expected physical action, an observable completion
 condition, supporting action ids, a time interval, and uncertainty.
 Dependencies must use category necessary_physical, observed_temporal, inferred, or unknown.
+from_step and to_step must be workflow step ids such as Step_1 and Step_2.
+Supporting actions belong in the step's action_local_ids. Do not put action ids in from_step or to_step.
 Do not turn chronological order into a necessary dependency unless the physics requires it.
 Independent actions may share a parallel_group instead of a false sequence.
 """.strip()

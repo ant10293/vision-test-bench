@@ -37,22 +37,35 @@ _API_ENV = (
     "ANTHROPIC_BASE_URL",
     "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
 )
-# A lab process started from an editor sandbox inherits a localhost proxy.
-# Claude Code then either gets ERR_PROXY_TUNNEL or sits on the dead proxy
-# until the request is killed. A proxy on a real host is left alone.
+# Cursor's sandbox proxy listens on localhost and allowlists package registries.
+# api.anthropic.com is not on that list, so CONNECT returns 403 and Claude Code
+# reports ERR_PROXY_TUNNEL. Drop loopback proxies. A proxy on a real host stays.
 _PROXY_ENV = (
     "ALL_PROXY",
+    "CLAUDE_CODE_HTTPS_PROXY",
+    "DOCKER_HTTPS_PROXY",
     "GIT_HTTP_PROXY",
     "GIT_HTTPS_PROXY",
+    "GLOBAL_AGENT_HTTP_PROXY",
+    "GLOBAL_AGENT_HTTPS_PROXY",
+    "GRPC_PROXY",
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "NPM_CONFIG_HTTP_PROXY",
+    "NPM_CONFIG_HTTPS_PROXY",
+    "NPM_CONFIG_PROXY",
     "SOCKS5_PROXY",
     "SOCKS_PROXY",
+    "YARN_HTTPS_PROXY",
     "all_proxy",
     "git_http_proxy",
     "git_https_proxy",
+    "grpc_proxy",
     "http_proxy",
     "https_proxy",
+    "npm_config_http_proxy",
+    "npm_config_https_proxy",
+    "npm_config_proxy",
     "socks5_proxy",
     "socks_proxy",
 )
@@ -113,15 +126,33 @@ def _loopback_proxy(value: str) -> bool:
     return host in _LOOPBACK_HOSTS
 
 
+def _is_proxy_var(name: str) -> bool:
+    lowered = name.lower()
+    if lowered == "no_proxy":
+        return False
+    return lowered in {item.lower() for item in _PROXY_ENV} or lowered.endswith("_proxy")
+
+
 def subscription_env() -> dict[str, str]:
-    """Drop API credentials and loopback proxies so the CLI uses the plan login."""
+    """Drop API credentials and the editor sandbox proxy so the CLI uses the plan login."""
     env = os.environ.copy()
     for name in _API_ENV:
         env.pop(name, None)
-    for name in _PROXY_ENV:
-        value = env.get(name)
-        if value and _loopback_proxy(value):
-            env.pop(name, None)
+    # Cursor sets this when a shell was sandboxed. Claude Code then routes API
+    # calls through the sandbox proxy, which refuses api.anthropic.com.
+    env.pop("__CURSOR_SANDBOX_ENV_RESTORE", None)
+    kept_real_proxy = False
+    for name in list(env):
+        if not _is_proxy_var(name):
+            continue
+        value = env.get(name) or ""
+        if value and not _loopback_proxy(value):
+            kept_real_proxy = True
+            continue
+        env.pop(name, None)
+    if not kept_real_proxy:
+        env["NO_PROXY"] = "*"
+        env["no_proxy"] = "*"
     return env
 
 
@@ -489,10 +520,18 @@ def parse_cli_payload(stdout: str) -> dict:
     return payload
 
 
-def response_from_payload(payload: dict, request: GenerationRequest, latency_ms: int, version: str) -> ProviderResponse:
+def response_from_payload(
+    payload: dict,
+    request: GenerationRequest,
+    latency_ms: int,
+    version: str,
+    stderr: str = "",
+) -> ProviderResponse:
     if payload.get("is_error") or payload.get("subtype") in {"error", "error_during_execution"}:
-        detail = payload.get("result") or payload.get("error") or "Claude Code run failed"
-        message = str(detail)[:2000]
+        detail = str(payload.get("result") or payload.get("error") or "").strip()
+        if not detail:
+            detail = stderr.strip()[-800:] or "Claude Code run failed"
+        message = detail[:2000]
         lowered = message.lower()
         if "not logged" in lowered or "login" in lowered or "authentication" in lowered:
             raise AuthenticationError(message)
@@ -661,10 +700,10 @@ async def complete(request: GenerationRequest) -> ProviderResponse:
         except ProviderError:
             payload = None
         if isinstance(payload, dict):
-            return response_from_payload(payload, request, latency_ms, version)
+            return response_from_payload(payload, request, latency_ms, version, err)
         detail = (err or out or "Claude Code failed").strip()
         lowered = detail.lower()
         if "not logged" in lowered or "/login" in lowered:
             raise AuthenticationError(detail[-800:])
         raise ProviderError(detail[-800:] or "Claude Code failed")
-    return response_from_payload(parse_cli_payload(out), request, latency_ms, version)
+    return response_from_payload(parse_cli_payload(out), request, latency_ms, version, err)

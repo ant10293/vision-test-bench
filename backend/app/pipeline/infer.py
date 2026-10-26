@@ -168,7 +168,7 @@ async def produce_document(
             run,
             stage,
             system,
-            user + f"\n\nThis is window {index + 1} of {len(windows)} in temporal order.",
+            user + _window_note(index, windows),
             window,
             video,
             schema,
@@ -181,9 +181,7 @@ async def produce_document(
         run,
         stage,
         system,
-        "Merge these partial JSON analyses in time order. Do not invent events from gaps between windows. "
-        "Keep every state, transition, relationship, workflow step, dependency, and ambiguity from the windows.\n\n"
-        + "\n\n".join(item.model_dump_json() for item in partials),
+        _merge_instruction(windows) + "\n\n" + "\n\n".join(item.model_dump_json() for item in partials),
         [],
         video,
         schema,
@@ -278,6 +276,89 @@ def _budget_frames(frames: list[FrameAsset], limit: int) -> list[FrameAsset]:
     return [ordered[min(len(ordered) - 1, int(i * step))] for i in range(limit)]
 
 
-def _windows(frames: list[FrameAsset], size: int) -> list[list[FrameAsset]]:
+# Adjacent calls repeat this many frames so a window boundary is a shared moment,
+# not a fresh scene. Two frames is enough to show the arrangement on both sides.
+WINDOW_OVERLAP = 2
+
+
+def _windows(
+    frames: list[FrameAsset], size: int, overlap: int = WINDOW_OVERLAP
+) -> list[list[FrameAsset]]:
     size = max(size, 1)
-    return [frames[index : index + size] for index in range(0, len(frames), size)] or [[]]
+    if not frames:
+        return [[]]
+    if len(frames) <= size:
+        return [list(frames)]
+    overlap = min(max(overlap, 0), size - 1)
+    step = size - overlap
+    windows: list[list[FrameAsset]] = []
+    start = 0
+    while start < len(frames):
+        windows.append(frames[start : start + size])
+        if start + size >= len(frames):
+            break
+        start += step
+    return windows
+
+
+def _frame_time(frame: FrameAsset) -> float:
+    return float(frame.timestamp)
+
+
+def _shared_times(left: list[FrameAsset], right: list[FrameAsset]) -> list[float]:
+    right_times = {round(_frame_time(frame), 3) for frame in right}
+    return [_frame_time(frame) for frame in left if round(_frame_time(frame), 3) in right_times]
+
+
+def _fmt_times(times: list[float]) -> str:
+    parts = [f"{value:.3f}".rstrip("0").rstrip(".") + " s" for value in times]
+    if len(parts) <= 1:
+        return parts[0] if parts else ""
+    if len(parts) == 2:
+        return f"{parts[0]} and {parts[1]}"
+    return ", ".join(parts[:-1]) + ", and " + parts[-1]
+
+
+def _window_note(index: int, windows: list[list[FrameAsset]]) -> str:
+    total = len(windows)
+    sentences = [f"This is window {index + 1} of {total} in temporal order."]
+    if total > 1:
+        if index > 0:
+            shared = _shared_times(windows[index - 1], windows[index])
+            if shared:
+                sentences.append(
+                    f"The opening frames at {_fmt_times(shared)} repeat the end of the previous window "
+                    "and are the same moments."
+                )
+        if index + 1 < total:
+            shared = _shared_times(windows[index], windows[index + 1])
+            if shared:
+                sentences.append(
+                    f"The closing frames at {_fmt_times(shared)} are repeated at the start of the next window."
+                )
+        sentences.append(
+            "Continue existing object ids across repeated frames. A later view that shows fewer pieces "
+            "because of occlusion, stacking, or an end-on angle keeps those ids and records an ambiguity. "
+            "Create a new object id only when appearance contradicts every existing object."
+        )
+    return "\n\n" + " ".join(sentences)
+
+
+def _merge_instruction(windows: list[list[FrameAsset]]) -> str:
+    shared: list[float] = []
+    for left, right in zip(windows, windows[1:], strict=False):
+        for timestamp in _shared_times(left, right):
+            if timestamp not in shared:
+                shared.append(timestamp)
+    boundary = f" The shared timestamps are {_fmt_times(shared)}." if shared else ""
+    return (
+        "Merge these partial JSON analyses in time order. Adjacent windows share their boundary frames, "
+        "and those shared timestamps are the same moments."
+        + boundary
+        + " Continue object ids across the boundary. When a later window shows fewer pieces of an arrangement "
+        "already described, because the parts are occluded, stacked, or seen end-on, keep the earlier ids "
+        "and record which of them remain possible as an ambiguity. Create a new object id only when appearance "
+        "contradicts every earlier object. Do not duplicate actions that fall on the shared frames. "
+        "Do not invent events from gaps between windows. Keep every state, transition, relationship, "
+        "workflow step, dependency, and ambiguity from the windows."
+    )

@@ -174,7 +174,22 @@ def validate_document(document: AnalysisDocument, duration: float) -> list[Valid
                 )
 
     graph: dict[str, list[str]] = {step_id: [] for step_id in steps}
+    kept_dependencies = []
     for dep in document.dependencies:
+        if _names_action(dep.from_step, actions, steps) or _names_action(dep.to_step, actions, steps):
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    code="dependency_names_action",
+                    message=(
+                        f"Dependency {dep.from_step} → {dep.to_step} names an action. "
+                        "Dependencies connect workflow steps, so this edge was dropped."
+                    ),
+                    entity_type="dependency",
+                    entity_id=f"{dep.from_step}->{dep.to_step}",
+                )
+            )
+            continue
         if dep.from_step not in steps or dep.to_step not in steps:
             issues.append(
                 ValidationIssue(
@@ -186,7 +201,9 @@ def validate_document(document: AnalysisDocument, duration: float) -> list[Valid
                 )
             )
             dep.accepted = False
+            kept_dependencies.append(dep)
             continue
+        kept_dependencies.append(dep)
         if dep.from_step == dep.to_step:
             issues.append(
                 ValidationIssue(
@@ -198,6 +215,7 @@ def validate_document(document: AnalysisDocument, duration: float) -> list[Valid
                 )
             )
         graph[dep.from_step].append(dep.to_step)
+    document.dependencies = kept_dependencies
 
     cycles = _cycles(graph)
     for cycle in cycles:
@@ -246,6 +264,12 @@ def validate_document(document: AnalysisDocument, duration: float) -> list[Valid
             )
     document.validation_issues = issues
     return issues
+
+
+def _names_action(endpoint: str, actions: set[str], steps: set[str]) -> bool:
+    if endpoint in steps:
+        return False
+    return endpoint in actions or endpoint.lower().startswith("action_")
 
 
 def _cycles(graph: dict[str, list[str]]) -> list[list[str]]:
