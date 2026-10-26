@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from app.providers.types import (
     AuthenticationError,
@@ -36,6 +37,26 @@ _API_ENV = (
     "ANTHROPIC_BASE_URL",
     "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
 )
+# A lab process started from an editor sandbox inherits a localhost proxy.
+# Claude Code then either gets ERR_PROXY_TUNNEL or sits on the dead proxy
+# until the request is killed. A proxy on a real host is left alone.
+_PROXY_ENV = (
+    "ALL_PROXY",
+    "GIT_HTTP_PROXY",
+    "GIT_HTTPS_PROXY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "SOCKS5_PROXY",
+    "SOCKS_PROXY",
+    "all_proxy",
+    "git_http_proxy",
+    "git_https_proxy",
+    "http_proxy",
+    "https_proxy",
+    "socks5_proxy",
+    "socks_proxy",
+)
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 _login_proc: asyncio.subprocess.Process | None = None
 _login_master: int | None = None
 _login_url = ""
@@ -84,11 +105,23 @@ def resolve_binary(binary: str) -> str | None:
     return shutil.which(binary)
 
 
+def _loopback_proxy(value: str) -> bool:
+    raw = value.strip()
+    if "://" not in raw:
+        raw = "//" + raw
+    host = (urlparse(raw).hostname or "").lower()
+    return host in _LOOPBACK_HOSTS
+
+
 def subscription_env() -> dict[str, str]:
-    """Drop API credentials so the CLI uses the Claude plan login."""
+    """Drop API credentials and loopback proxies so the CLI uses the plan login."""
     env = os.environ.copy()
     for name in _API_ENV:
         env.pop(name, None)
+    for name in _PROXY_ENV:
+        value = env.get(name)
+        if value and _loopback_proxy(value):
+            env.pop(name, None)
     return env
 
 

@@ -109,6 +109,20 @@ def test_subscription_env_hides_the_api_key(monkeypatch):
     assert "ANTHROPIC_AUTH_TOKEN" not in env
 
 
+def test_subscription_env_drops_a_loopback_proxy(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:62763")
+    monkeypatch.setenv("https_proxy", "http://127.0.0.1:62763")
+    monkeypatch.setenv("ALL_PROXY", "socks5://localhost:62762")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example.com:8080")
+    from app.providers.claude_code import subscription_env
+
+    env = subscription_env()
+    assert "HTTPS_PROXY" not in env
+    assert "https_proxy" not in env
+    assert "ALL_PROXY" not in env
+    assert env["HTTP_PROXY"] == "http://proxy.example.com:8080"
+
+
 def test_claude_code_uses_the_model_output_maximum(monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "32000")
     from app.providers.claude_code import generation_env
