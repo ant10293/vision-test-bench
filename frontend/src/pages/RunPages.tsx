@@ -459,7 +459,6 @@ export function ObjectsPage() {
         <input className="field max-w-xs" placeholder="Add a missed object" value={label} onChange={(event) => setLabel(event.target.value)} />
         <button className="btn" disabled={!label} onClick={async () => { await api.addObject(bundle.run.id, label, "Added by the researcher."); setLabel(""); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Add</button>
       </div>
-      <PerceptionPanel bundle={bundle} />
       <div className={OBJECT_GRID}>
         {bundle.objects.map((object) => (
           <ObjectTile key={object.id} object={object} onOpen={() => { setOpen(object.local_id); setPreview(null); }} />
@@ -524,6 +523,7 @@ export function ObjectsPage() {
           </div>
         </div>
       )}
+      <PerceptionPanel bundle={bundle} />
     </div>
   );
 }
