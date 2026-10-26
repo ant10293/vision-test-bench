@@ -112,7 +112,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
 
   const visible = overlay ? observationsAt(bundle, time) : [];
   const trackHits = tracksAt(bundle.tracks?.points ?? [], time);
-  const showTracks = layers.boxes || layers.ids || layers.status || layers.trajectory || layers.uncertain;
+  const showTracks = layers.tracks || layers.trajectory || layers.uncertain;
   const src = bundle.video ? bundle.video.playback_url : "";
 
   useEffect(() => {
@@ -321,10 +321,10 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
           </select>
         </label>
         <button className="btn" onClick={() => useInspector.getState().setOverlay(!overlay)}>{overlay ? "Hide boxes" : "Show boxes"}</button>
+        <button className="btn" aria-pressed={layers.tracks} onClick={() => useInspector.getState().setLayer("tracks", !layers.tracks)}>
+          {layers.tracks ? "Hide tracks" : "Show tracks"}
+        </button>
         {([
-          ["boxes", "track boxes"],
-          ["ids", "track ids"],
-          ["status", "track status"],
           ["trajectory", "trajectory"],
           ["uncertain", "uncertain tracks"],
         ] as const).map(([key, label]) => (
@@ -379,7 +379,7 @@ function TrackMark({
   points: TrackPointSample[];
   time: number;
   content: { vw: number; vh: number };
-  layers: { boxes: boolean; ids: boolean; status: boolean; trajectory: boolean; uncertain: boolean };
+  layers: { tracks: boolean; trajectory: boolean; uncertain: boolean };
 }) {
   if (!point.bbox) return null;
   const uncertain = layers.uncertain && (point.continuity === "uncertain" || point.status === "ambiguous" || point.continuity === "reassociated");
@@ -405,14 +405,12 @@ function TrackMark({
           }).join(" ")}
         />
       )}
-      {layers.boxes && (
-        <rect x={x} y={y} width={w} height={h} fill={color} fillOpacity={0.08} stroke={color} strokeWidth={2} strokeDasharray={uncertain ? "6 4" : undefined} />
-      )}
-      {layers.ids && (
-        <text x={x} y={Math.max(14, y - 4)} fill={color} fontSize={14} fontFamily="IBM Plex Sans, sans-serif">{humanize(point.track_ref)}</text>
-      )}
-      {layers.status && (
-        <text x={x} y={y + h + 14} fill={color} fontSize={12} fontFamily="IBM Plex Sans, sans-serif">{point.status || point.continuity}</text>
+      {layers.tracks && (
+        <>
+          <rect x={x} y={y} width={w} height={h} fill={color} fillOpacity={0.08} stroke={color} strokeWidth={2} strokeDasharray={uncertain ? "6 4" : undefined} />
+          <text x={x} y={Math.max(14, y - 4)} fill={color} fontSize={14} fontFamily="IBM Plex Sans, sans-serif">{humanize(point.track_ref)}</text>
+          <text x={x} y={y + h + 14} fill={color} fontSize={12} fontFamily="IBM Plex Sans, sans-serif">{point.status || point.continuity}</text>
+        </>
       )}
     </g>
   );
