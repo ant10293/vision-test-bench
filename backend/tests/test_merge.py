@@ -152,6 +152,79 @@ def test_merge_that_already_has_records_is_left_in_place():
     assert [item.timestamp for item in restored.transitions] == [3]
 
 
+def test_a_renumbered_window_does_not_replace_the_merged_part():
+    first = _doc(
+        objects=[
+            {"local_id": "Object_1", "label": "light-gray bar"},
+            {"local_id": "Object_2", "label": "spoked wheel"},
+        ],
+        observations=[
+            {
+                "object_local_id": "Object_1",
+                "timestamp": 14,
+                "bbox": {"x": 0.5, "y": 0.2, "w": 0.04, "h": 0.04},
+                "visibility": "visible",
+                "evidence": _evidence(),
+            }
+        ],
+    )
+    second = _doc(
+        objects=[
+            {"local_id": "Object_1", "label": "toy motorcycle"},
+            {"local_id": "Object_2", "label": "loose light-grey bar"},
+        ],
+        observations=[
+            {
+                "object_local_id": "Object_2",
+                "timestamp": 15,
+                "bbox": {"x": 0.6, "y": 0.2, "w": 0.02, "h": 0.02},
+                "visibility": "partial",
+                "description": "grey bar",
+                "evidence": _evidence(),
+            },
+            {
+                "object_local_id": "Object_1",
+                "timestamp": 15,
+                "bbox": {"x": 0.3, "y": 0.3, "w": 0.4, "h": 0.1},
+                "visibility": "visible",
+                "description": "whole motorcycle",
+                "evidence": _evidence(),
+            },
+        ],
+    )
+    merged = _doc(
+        objects=[
+            {"local_id": "Object_1", "label": "light-gray bar"},
+            {"local_id": "Object_2", "label": "spoked wheel"},
+            {"local_id": "Object_4", "label": "light-gray body"},
+        ],
+        observations=[
+            {
+                "object_local_id": "Object_1",
+                "timestamp": 15,
+                "bbox": {"x": 0.6, "y": 0.2, "w": 0.02, "h": 0.02},
+                "visibility": "partial",
+                "description": "the bar",
+                "evidence": _evidence(),
+            },
+            {
+                "object_local_id": "Object_4",
+                "timestamp": 15,
+                "bbox": {"x": 0.3, "y": 0.3, "w": 0.4, "h": 0.1},
+                "visibility": "visible",
+                "description": "assembly",
+                "evidence": _evidence(),
+            },
+        ],
+    )
+    restored = restore_omitted_records(merged, [first, second])
+    by_object = {(item.object_local_id, item.timestamp): item for item in restored.observations}
+    assert by_object[("Object_1", 15)].description == "the bar"
+    assert ("Object_2", 15) not in by_object
+    assert by_object[("Object_4", 15)].description == "assembly"
+    assert ("Object_1", 14) in by_object
+
+
 def test_merge_keeps_a_box_the_window_saw_when_the_merge_omits_that_frame():
     boxed = {
         "object_local_id": "Object_2",

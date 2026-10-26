@@ -147,6 +147,25 @@ def _mime(container: str, path: Path) -> str:
     return "video/mp4"
 
 
+def parse_presentation_times(stdout: str) -> list[float]:
+    """Read ffprobe CSV frame times.
+
+    A frame with side data (Dolby Vision, rotation, ambient metadata) is printed
+    as ``0.000000,,,,``. The time is the first field. Later fields are not part
+    of the timestamp, and parsing the whole line drops every frame.
+    """
+    times: list[float] = []
+    for line in stdout.splitlines():
+        field = line.split(",", 1)[0].strip()
+        if not field or field == "N/A":
+            continue
+        try:
+            times.append(float(field))
+        except ValueError:
+            continue
+    return times
+
+
 def presentation_timestamps(path: Path, cache: Path | None = None) -> list[float]:
     """Actual frame presentation times. Cached because ffprobe frame scans are expensive."""
     if cache and cache.exists():
@@ -171,20 +190,23 @@ def presentation_timestamps(path: Path, cache: Path | None = None) -> list[float
         ]
     )
     if proc.returncode != 0:
-        raise VideoError(proc.stderr.strip() or "could not read frame timestamps")
-    times: list[float] = []
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line or line == "N/A":
-            continue
-        try:
-            times.append(float(line))
-        except ValueError:
-            continue
+        raise VideoError(_tail(proc.stderr) or "could not read frame timestamps")
+    times = parse_presentation_times(proc.stdout)
+    if not times:
+        sample = next((line.strip() for line in proc.stdout.splitlines() if line.strip()), "")
+        detail = f" Unparsed line: {sample[:160]}" if sample else ""
+        raise VideoError(f"could not read frame timestamps.{detail}")
     if cache:
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(times))
     return times
+
+
+def _tail(text: str, limit: int = 1500) -> str:
+    detail = text.strip()
+    if len(detail) <= limit:
+        return detail
+    return detail[-limit:]
 
 
 def snap_timestamps(targets: list[float], pts: list[float]) -> list[float]:

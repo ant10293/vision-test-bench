@@ -1,0 +1,296 @@
+"""Keep one id for one physical part across analysis windows.
+
+The first window sees the parts while they are separate and names them.
+A later window sees those same parts turned, held, or split into two visible
+arms, and it names them again. Label text does not survive that. The shared
+frames do: the box that covers the same pixels is the same part. A second box
+that only appears afterward and touches that part is the same part at a new
+angle, not a new object.
+"""
+
+from __future__ import annotations
+
+from app.perception.assignment import iou
+from app.schemas.analysis import AnalysisDocument, BBox, ObservationPrediction
+
+# A shared frame decides identity when the two boxes cover mostly the same pixels.
+MATCH_IOU = 0.5
+# A later box this close to a known part is another view of that part.
+TOUCH_GAP = 0.04
+
+
+def align_to_roster(roster: AnalysisDocument, later: AnalysisDocument) -> AnalysisDocument:
+    """Rewrite a later window onto the first window's ids."""
+    if not roster.objects or not later.observations:
+        return later
+    mapping = _mapping(roster, later)
+    objects = _objects(roster, later, mapping)
+    if not mapping:
+        return later.model_copy(update={"objects": objects})
+    return _apply(later, mapping, objects=objects)
+
+
+def drop_split_objects(roster: AnalysisDocument, document: AnalysisDocument) -> AnalysisDocument:
+    """Remove an object the merge added for a second view of a roster part.
+
+    The merge keeps the first window's records. An extra id is removed when its
+    boxes touch one of those parts, and the box is kept on that part.
+    """
+    roster_ids = {obj.local_id for obj in roster.objects}
+    if not roster_ids:
+        return document
+    mapping = _touch_map(
+        document,
+        roster_ids,
+        {item: item for item in roster_ids},
+        {obj.local_id: obj.label for obj in document.objects},
+        {obj.local_id: obj.label for obj in roster.objects},
+    )
+    if not mapping:
+        return document
+    kept = [obj for obj in document.objects if obj.local_id not in mapping]
+    return _apply(document, mapping, objects=kept)
+
+
+def _mapping(roster: AnalysisDocument, later: AnalysisDocument) -> dict[str, str]:
+    roster_ids = [obj.local_id for obj in roster.objects]
+    later_ids = [obj.local_id for obj in later.objects]
+    shared = _times(roster) & _times(later)
+    roster_boxes = _boxes(roster)
+    later_boxes = _boxes(later)
+    matched: dict[str, str] = {}
+    for later_id in later_ids:
+        best_id = ""
+        best = 0.0
+        for roster_id in roster_ids:
+            peak = 0.0
+            for timestamp in shared:
+                left = later_boxes.get((later_id, timestamp))
+                right = roster_boxes.get((roster_id, timestamp))
+                if left is None or right is None:
+                    continue
+                peak = max(peak, iou(_tuple(left), _tuple(right)))
+            if peak > best:
+                best = peak
+                best_id = roster_id
+        if best_id and best >= MATCH_IOU:
+            matched[later_id] = best_id
+    roster_set = set(roster_ids)
+    matched.update(
+        _touch_map(
+            later,
+            roster_set,
+            matched,
+            {obj.local_id: obj.label for obj in later.objects},
+            {obj.local_id: obj.label for obj in roster.objects},
+        )
+    )
+    used = set(roster_set) | set(matched.values())
+    for later_id in later_ids:
+        if later_id in matched or later_id not in roster_set:
+            continue
+        # This window reused a roster id for a part that did not match it.
+        fresh = _fresh_id(used)
+        matched[later_id] = fresh
+        used.add(fresh)
+    return {later_id: target for later_id, target in matched.items() if later_id != target}
+
+
+def _touch_map(
+    document: AnalysisDocument,
+    roster_ids: set[str],
+    already: dict[str, str] | None,
+    labels: dict[str, str],
+    roster_labels: dict[str, str],
+) -> dict[str, str]:
+    """Map an id that never overlapped a shared frame onto the part its box touches.
+
+    A large neighbor often contains the new box. The part it belongs to is the
+    touching box whose roster name shares the most words with it.
+    """
+    assigned = dict(already or {})
+    boxes = _boxes(document)
+    # shared-word count, target id, and whether another part tied that count.
+    best: dict[str, tuple[int, str, bool]] = {}
+    for (object_id, timestamp), box in boxes.items():
+        target = assigned.get(object_id, object_id)
+        if target not in roster_ids and object_id not in assigned:
+            continue
+        for (other_id, other_time), other in boxes.items():
+            if other_time != timestamp or other_id == object_id or other_id in assigned:
+                continue
+            if _separation(box, other) > TOUCH_GAP:
+                continue
+            shared = len(_word_set(labels.get(other_id, "")) & _target_words(target, roster_labels, labels))
+            current = best.get(other_id)
+            if current is None or shared > current[0]:
+                best[other_id] = (shared, target, False)
+            elif shared == current[0] and target != current[1]:
+                best[other_id] = (shared, current[1], True)
+    return {
+        other_id: target
+        for other_id, (shared, target, tied) in best.items()
+        if shared > 0 and not tied
+    }
+
+
+def _target_words(target: str, roster_labels: dict[str, str], document_labels: dict[str, str]) -> set[str]:
+    """The roster name, plus the document name when it is still describing that part.
+
+    A later window can reuse an id for a different part. Its label is added only
+    when it still shares a word with the roster name, so a stud that inherited
+    the fork's id cannot lend the fork the word "stud".
+    """
+    roster_name = roster_labels.get(target, "")
+    document_name = document_labels.get(target, "")
+    words = _word_set(roster_name)
+    extra = _word_set(document_name)
+    if words & extra:
+        words |= extra
+    return words
+
+
+def _word_set(label: str) -> set[str]:
+    skip = {
+        "with", "from", "that", "this", "piece", "part",
+        "upper", "lower", "left", "right", "first", "second", "front", "back",
+    }
+    return {word for word in _tokens(label) if word not in skip}
+
+
+def _tokens(label: str) -> list[str]:
+    cleaned = label.casefold().replace("/", " ").replace("-", " ")
+    return [word.strip("().,") for word in cleaned.split() if len(word.strip("().,")) > 3]
+
+
+def _objects(
+    roster: AnalysisDocument, later: AnalysisDocument, mapping: dict[str, str]
+) -> list:
+    by_id = {obj.local_id: obj for obj in roster.objects}
+    seen = set(by_id)
+    for obj in later.objects:
+        target = mapping.get(obj.local_id, obj.local_id)
+        if target in seen:
+            continue
+        seen.add(target)
+        by_id[target] = obj.model_copy(update={"local_id": target})
+    return list(by_id.values())
+
+
+def _apply(document: AnalysisDocument, mapping: dict[str, str], objects: list) -> AnalysisDocument:
+    if not mapping:
+        return document
+    return document.model_copy(
+        update={
+            "objects": objects,
+            "observations": _observations(document.observations, mapping),
+            "states": [
+                item.model_copy(update={"object_local_id": mapping.get(item.object_local_id, item.object_local_id)})
+                for item in document.states
+            ],
+            "transitions": [
+                item.model_copy(update={"object_local_id": mapping.get(item.object_local_id, item.object_local_id)})
+                for item in document.transitions
+            ],
+            "relationships": [
+                item.model_copy(
+                    update={
+                        "subject_local_id": mapping.get(item.subject_local_id, item.subject_local_id),
+                        "other_local_id": mapping.get(item.other_local_id, item.other_local_id)
+                        if item.other_local_id
+                        else None,
+                    }
+                )
+                for item in document.relationships
+            ],
+            "actions": [
+                item.model_copy(update={"object_local_ids": _ids(item.object_local_ids, mapping)})
+                for item in document.actions
+            ],
+            "workflow_steps": [
+                item.model_copy(update={"required_objects": _ids(item.required_objects, mapping)})
+                for item in document.workflow_steps
+            ],
+            "ambiguities": [
+                item.model_copy(update={"object_local_ids": _ids(item.object_local_ids, mapping)})
+                for item in document.ambiguities
+            ],
+        }
+    )
+
+
+def _observations(observations: list[ObservationPrediction], mapping: dict[str, str]) -> list[ObservationPrediction]:
+    grouped: dict[tuple[str, float], list[ObservationPrediction]] = {}
+    order: list[tuple[str, float]] = []
+    for item in observations:
+        object_id = mapping.get(item.object_local_id, item.object_local_id)
+        key = (object_id, round(float(item.timestamp), 3))
+        if key not in grouped:
+            order.append(key)
+            grouped[key] = []
+        grouped[key].append(item.model_copy(update={"object_local_id": object_id}))
+    merged: list[ObservationPrediction] = []
+    for key in order:
+        rows = grouped[key]
+        kept = rows[0]
+        box = kept.bbox
+        separate: list[ObservationPrediction] = []
+        for extra in rows[1:]:
+            if box is None:
+                box = extra.bbox
+                kept = extra
+                continue
+            if extra.bbox is not None and _separation(box, extra.bbox) <= TOUCH_GAP:
+                box = _union(box, extra.bbox)
+            else:
+                separate.append(extra)
+        merged.append(kept if box is kept.bbox else kept.model_copy(update={"bbox": box}))
+        merged.extend(separate)
+    return merged
+
+
+def _fresh_id(used: set[str]) -> str:
+    number = 1
+    while f"Object_{number}" in used:
+        number += 1
+    return f"Object_{number}"
+
+
+def _ids(values: list[str], mapping: dict[str, str]) -> list[str]:
+    seen: list[str] = []
+    for value in values:
+        mapped = mapping.get(value, value)
+        if mapped not in seen:
+            seen.append(mapped)
+    return seen
+
+
+def _times(document: AnalysisDocument) -> set[float]:
+    return {round(float(item.timestamp), 3) for item in document.observations}
+
+
+def _boxes(document: AnalysisDocument) -> dict[tuple[str, float], BBox]:
+    found: dict[tuple[str, float], BBox] = {}
+    for item in document.observations:
+        if item.bbox is None:
+            continue
+        found[(item.object_local_id, round(float(item.timestamp), 3))] = item.bbox
+    return found
+
+
+def _tuple(box: BBox) -> tuple[float, float, float, float]:
+    return (box.x, box.y, box.w, box.h)
+
+
+def _separation(a: BBox, b: BBox) -> float:
+    dx = max(0.0, max(a.x, b.x) - min(a.x + a.w, b.x + b.w))
+    dy = max(0.0, max(a.y, b.y) - min(a.y + a.h, b.y + b.h))
+    return max(dx, dy)
+
+
+def _union(a: BBox, b: BBox) -> BBox:
+    x1 = min(a.x, b.x)
+    y1 = min(a.y, b.y)
+    x2 = min(1.0, max(a.x + a.w, b.x + b.w))
+    y2 = min(1.0, max(a.y + a.h, b.y + b.h))
+    return BBox(x=x1, y=y1, w=max(x2 - x1, 1e-4), h=max(y2 - y1, 1e-4))

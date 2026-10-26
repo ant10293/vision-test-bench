@@ -16,7 +16,7 @@ from app.perception.presets import config_from_mapping
 from app.pipeline.deterministic_doc import document_from_spatial
 from app.schemas.analysis import Coverage
 from app.services.storage import data_path, resolve_stored
-from app.video.sampling import measure_motion
+from app.video.sampling import distinct_moments, measure_motion
 from app.video.spatial import analyze_sequence
 
 
@@ -123,6 +123,7 @@ def _paths(session: Session, run: AnalysisRun, video: VideoAsset, config) -> tup
                 .order_by(FrameAsset.timestamp)
             )
         )
+    sampled = distinct_moments(sampled)
     sampled_paths = [data_path(*Path(frame.path).parts) for frame in sampled]
     sampled_times = [frame.timestamp for frame in sampled]
     if not config.separate_stream:

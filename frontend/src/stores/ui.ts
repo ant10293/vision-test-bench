@@ -28,7 +28,7 @@ export const useInspector = create<InspectorState>((set) => ({
   playing: false,
   speed: 1,
   overlay: true,
-  layers: { tracks: true, trajectory: false, uncertain: true },
+  layers: { tracks: false, trajectory: false, uncertain: false },
   seedMode: false,
   selectedObject: null,
   selectedAction: null,

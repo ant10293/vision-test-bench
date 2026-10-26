@@ -62,25 +62,35 @@ def _union_observations(
     maps: list[dict[str, str]],
     merged: AnalysisDocument,
 ) -> list[ObservationPrediction]:
-    """Keep a box a window actually saw when the text-only merge leaves that frame out."""
+    """Keep a box a window actually saw when the text-only merge leaves that frame out.
+
+    The merge's own box wins when both describe the same part at the same time.
+    A window id that was not aligned to a merged part is left out: copying it
+    through would put that part's box on a different object.
+    """
     chosen: dict[tuple, ObservationPrediction] = {}
     order: list[tuple] = []
 
-    def consider(item: ObservationPrediction) -> None:
+    def consider(item: ObservationPrediction, replace: bool) -> None:
         key = (item.object_local_id, round(float(item.timestamp), 3))
         current = chosen.get(key)
         if current is None:
             chosen[key] = item
             order.append(key)
             return
+        if replace and item.bbox is not None:
+            chosen[key] = item
+            return
         if current.bbox is None and item.bbox is not None:
             chosen[key] = item
 
     for partial, mapping in zip(partials, maps, strict=True):
         for item in partial.observations:
-            consider(item.model_copy(update={"object_local_id": _obj(mapping, item.object_local_id)}))
+            if item.object_local_id not in mapping:
+                continue
+            consider(item.model_copy(update={"object_local_id": mapping[item.object_local_id]}), replace=False)
     for item in merged.observations:
-        consider(item)
+        consider(item, replace=True)
     return [chosen[key] for key in order]
 
 

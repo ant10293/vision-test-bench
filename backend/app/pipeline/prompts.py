@@ -12,8 +12,8 @@ Rules:
 - Classify every conclusion as DIRECTLY_OBSERVED, INFERRED, or UNKNOWN.
 - Provenance is separate: you are producing an AI prediction. Do not describe your inference as a measurement.
 - An attempted action is not a completed action unless the resulting physical state is visible.
-- Spatial proximity is not attachment, insertion, containment, or support.
-- Keep stable object ids across the clip. A part seen again keeps its existing id, including when occlusion, stacking, or an end-on angle shows fewer pieces than an earlier view. Record which ids remain possible as an ambiguity. Create a new id only when the visible appearance contradicts every existing object.
+- Spatial proximity is not attachment, insertion, containment, or support. Insertion is a different event: a free part meets a host and its separate visible extent then shrinks or ends while it stays with that host. The seated part is often partly hidden. That is the inserted state, not a failure to see the part.
+- Keep stable object ids across the clip. A part seen again keeps its existing id, including when it is rotated, partly covered, or reduced to an end or a head. Record which ids remain possible as an ambiguity. Omit an id when that part is fully hidden. Do not keep an id alive by pointing it at a different part. Create a new id only when the visible appearance contradicts every existing object.
 - Use timestamps in seconds from the start of the supplied media.
 - Do not assume the person performed a correct, complete, or optimal procedure.
 - A merely observed order is not a necessary physical dependency.
@@ -50,8 +50,11 @@ has a box.
 If that faceted part is seen face-on, surrounding an end and surrounded by the ring, it still gets
 its own box on the flats. The ring's box and the inner end's box do not count for it.
 When the edges are faint, keep the box tight on that part instead of growing it across the hand or a
-neighbor. Omit an object from a frame only when it is fully out of view or fully hidden, and do not
-invent a box in that case.
+neighbor. A rotated or partly covered part is still that part: box the visible portion, even when the
+long side is no longer the side you saw before. Omit an object from a frame when it is fully out of
+view or fully hidden, and do not invent a box in that case. Do not keep its id by boxing a different
+part, including a larger neighbor of a similar color. A box many times larger than the part is the
+wrong box.
 Use visibility visible, partial, occluded, or absent.
 If the user message lists tracked instance ids, copy those ids into instance_id and describe those
 objects. Do not mint a replacement physical id when an object only changes appearance, scale, or
@@ -73,7 +76,11 @@ rotate, insert, remove, attach, detach, align, adjust, push, pull, twist, releas
 when they fit, and say unknown rather than forcing one.
 Each action needs start, end, actor or hand when visible, object ids, initial state, final state,
 outcome (completed, attempted, failed, or unknown), uncertainty from 0 to 1, and evidence.
-Do not describe an attempted insertion as a successful insertion unless the inserted state is visible.
+Insert means a free part meets a host and its separate visible extent then shrinks or ends while the
+part stays with the host. The remainder is often hidden inside the host. That hidden remainder is the
+inserted state, so do not call the action an approach or leave it unconfirmed merely because the free
+part is no longer a separate silhouette. Approach means the part moves toward a host and stays a
+separate, fully visible object. Do not call an approach an insertion.
 """.strip()
 
 STATES = """
@@ -94,6 +101,9 @@ from_step and to_step must be workflow step ids such as Step_1 and Step_2.
 Supporting actions belong in the step's action_local_ids. Do not put action ids in from_step or to_step.
 Do not turn chronological order into a necessary dependency unless the physics requires it.
 Independent actions may share a parallel_group instead of a false sequence.
+Name the step for the physical change. When a supporting action is an insertion, the step name and
+the expected action say insert. Do not paraphrase that action as handle, bring, or inspect.
+The observed result says whether the part's separate visible extent ended at the host.
 """.strip()
 
 AMBIGUITY = """
@@ -102,6 +112,19 @@ ambiguous state changes, unverifiable completion, conflicting evidence, alternat
 camera motion confused with object motion, and unobserved intervals.
 Do not resolve them by guessing.
 """.strip()
+
+LOCATE_PART = """
+You are locating one known physical part. The first image is a tight crop of that part from an earlier moment. Every later image is a full frame, labeled with its timestamp.
+
+The part may be rotated, partly covered by fingers, or seen at a changed angle. A different orientation is still the same part. Box only the visible portion of this part, tightly, on each full frame where any of it is visible. Do not box the hand. Do not box a larger neighbor, even one of a similar color.
+
+If the part is fully hidden or not in that frame, set bbox to null and visibility to absent. Do not invent a box, and do not substitute a different part.
+
+Return JSON only: {"observations": [{"timestamp": number, "visibility": "visible" | "partial" | "absent", "bbox": {"x": number, "y": number, "w": number, "h": number} | null}]}
+x, y, w, and h are fractions of the full frame, each from 0 to 1, with the origin at the top left.
+Do not return an observation for the reference crop.
+""".strip()
+
 
 REINSPECT = """
 You are reinspecting one uncertain interval. Compare the visible state before and after the interval.

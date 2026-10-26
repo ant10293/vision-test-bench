@@ -15,7 +15,10 @@ from app.video.probe import VideoError
 def _run(cmd: list[str]) -> None:
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
-        raise VideoError(proc.stderr.strip() or f"command failed: {cmd[0]}")
+        detail = proc.stderr.strip()
+        if len(detail) > 1500:
+            detail = detail[-1500:]
+        raise VideoError(detail or f"command failed: {cmd[0]}")
 
 
 def make_proxy(source: Path, dest: Path) -> None:
@@ -23,6 +26,9 @@ def make_proxy(source: Path, dest: Path) -> None:
     _run(
         [
             "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
             "-y",
             "-i",
             str(source),
@@ -47,6 +53,9 @@ def extract_frame(source: Path, timestamp: float, dest: Path, accurate: bool = T
     if accurate:
         cmd = [
             "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
             "-y",
             "-i",
             str(source),
@@ -56,11 +65,16 @@ def extract_frame(source: Path, timestamp: float, dest: Path, accurate: bool = T
             "1",
             "-q:v",
             "2",
+            "-update",
+            "1",
             str(dest),
         ]
     else:
         cmd = [
             "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
             "-y",
             "-ss",
             stamp,
@@ -70,6 +84,8 @@ def extract_frame(source: Path, timestamp: float, dest: Path, accurate: bool = T
             "1",
             "-q:v",
             "3",
+            "-update",
+            "1",
             str(dest),
         ]
     _run(cmd)

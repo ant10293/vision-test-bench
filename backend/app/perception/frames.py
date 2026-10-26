@@ -33,6 +33,9 @@ def extract_tracking_frames(
     proc = subprocess.run(
         [
             "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
             "-y",
             "-i",
             str(source),
@@ -49,7 +52,10 @@ def extract_tracking_frames(
         check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or "ffmpeg could not extract tracking frames")
+        detail = proc.stderr.strip()
+        if len(detail) > 1500:
+            detail = detail[-1500:]
+        raise RuntimeError(detail or "ffmpeg could not extract tracking frames")
     files = sorted(dest.glob("*.jpg"))
     rows = []
     for index, path in enumerate(files):

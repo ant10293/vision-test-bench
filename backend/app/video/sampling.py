@@ -89,6 +89,22 @@ def plan_uniform(duration: float, fps: float, pts: list[float]) -> list[SampledF
     return [SampledFrame(timestamp=item, reason="uniform") for item in snapped]
 
 
+# Two timestamps this close are one picture. A 60 fps frame is about 0.017 s
+# apart, so a 2 ms pair is the same moment stored twice.
+SAME_MOMENT_SEC = 0.02
+
+
+def distinct_moments(frames: list, gap: float = SAME_MOMENT_SEC) -> list:
+    """Drop a frame that repeats the previous one within `gap` seconds."""
+    ordered = sorted(frames, key=lambda item: float(item.timestamp))
+    kept: list = []
+    for frame in ordered:
+        if kept and float(frame.timestamp) - float(kept[-1].timestamp) < gap:
+            continue
+        kept.append(frame)
+    return kept
+
+
 def budget_indices(count: int, limit: int) -> list[int]:
     """Pick up to `limit` indexes, always keeping the first and last."""
     if count <= 0:

@@ -37,6 +37,13 @@ function objectThumbnail(object: Bundle["objects"][number] | null | undefined): 
   return initial?.url || object.primary_image_url;
 }
 
+/** Stills left out of the object gallery: boxed frames, and the crop that duplicates unobstructed. */
+function isGalleryImage(kind: string) {
+  if (kind === "boxed" || kind.endsWith("_boxed")) return false;
+  if (kind === "crop" || kind === "primary") return false;
+  return true;
+}
+
 function analysisTab(pathname: string, runId: string): string {
   const base = `/runs/${runId}`;
   if (!pathname.startsWith(base)) return "";
@@ -425,16 +432,16 @@ function ActionDetail({ bundle, actionId }: { bundle: Bundle; actionId: string }
 function ObjectTile({ object, onOpen }: { object: Bundle["objects"][number] | null; onOpen?: () => void }) {
   const thumb = objectThumbnail(object);
   const media = thumb ? (
-    <img src={thumb} alt="" className="h-36 w-full bg-black object-contain" />
+    <img src={thumb} alt="" className="max-h-48 w-auto max-w-full object-contain" />
   ) : object ? (
-    <div className="grid h-36 place-items-center text-xs text-[var(--muted)]">No crop yet</div>
+    <div className="grid h-48 place-items-center text-xs text-[var(--muted)]">No crop yet</div>
   ) : (
-    <div className="h-36 w-full bg-black"><Bone className="bone-fill" /></div>
+    <div className="h-48 w-full"><Bone className="bone-fill" /></div>
   );
   const body = (
     <>
-      {media}
-      <div className="space-y-1 p-3 text-sm">
+      <div className="flex flex-1 items-center justify-center p-3">{media}</div>
+      <div className="mt-auto space-y-1 px-3 pb-3 text-sm">
         {object ? (
           <>
             <div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ background: object.color }} />{humanize(object.local_id)}</div>
@@ -451,9 +458,9 @@ function ObjectTile({ object, onOpen }: { object: Bundle["objects"][number] | nu
       </div>
     </>
   );
-  if (!object) return <div className="panel overflow-hidden text-left" aria-hidden="true">{body}</div>;
+  if (!object) return <div className="panel flex h-full flex-col overflow-hidden text-left" aria-hidden="true">{body}</div>;
   return (
-    <button type="button" className="panel overflow-hidden text-left" onClick={onOpen}>
+    <button type="button" className="panel flex h-full flex-col overflow-hidden text-left" onClick={onOpen}>
       {body}
     </button>
   );
@@ -468,7 +475,7 @@ export function ObjectsPage() {
   const client = useQueryClient();
   const selected = bundle.objects.find((item) => item.local_id === open);
   const selectedThumb = objectThumbnail(selected);
-  const shots = selected?.images.filter((image) => image.url) ?? [];
+  const shots = selected?.images.filter((image) => image.url && isGalleryImage(image.kind)) ?? [];
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
@@ -511,17 +518,17 @@ export function ObjectsPage() {
               </select>
               <button className="btn" disabled={!mergeDrop} onClick={async () => { await api.mergeObjects(bundle.run.id, selected.local_id, mergeDrop); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Merge</button>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="flex flex-wrap items-start gap-3">
               {shots.map((image, index) => (
                 <button
                   key={image.id}
                   type="button"
-                  className="block w-full border-0 bg-transparent p-0 text-left"
+                  className="block w-fit max-w-full border-0 bg-transparent p-0 text-left"
                   aria-label={`View ${humanize(image.kind)} at ${image.timestamp.toFixed(2)} seconds`}
                   onClick={() => setPreview(index)}
                 >
-                  <img src={image.url} alt={humanize(image.kind)} className="h-20 w-full rounded bg-black object-contain" />
-                  <div className="text-[10px] text-[var(--muted)]">{humanize(image.kind)} · {image.timestamp.toFixed(2)}s</div>
+                  <img src={image.url} alt={humanize(image.kind)} className="h-64 w-auto max-w-full rounded" />
+                  <div className="mt-1 text-[10px] text-[var(--muted)]">{humanize(image.kind)} · {image.timestamp.toFixed(2)}s</div>
                 </button>
               ))}
             </div>
@@ -705,7 +712,7 @@ export function PipelinePage() {
             {stage.checkpoint?.reason ? ` · ${humanize(String(stage.checkpoint.reason))}` : ""}
           </div>
           {stage.status === "failed" && (
-            <button className="btn" onClick={async () => { await api.retryStage(bundle.run.id, stage.stage); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Retry</button>
+            <button className="btn h-fit self-center" onClick={async () => { await api.retryStage(bundle.run.id, stage.stage); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Retry</button>
           )}
         </div>
       ))}

@@ -4,16 +4,21 @@ from app.demo.scenarios import SCENARIOS, build_document
 from app.pipeline.infer import _merge_instruction, _window_note, _windows
 from app.pipeline.prompts import ACTIONS, FOUNDATIONAL, SCENE, TEMPLATES, WORKFLOW
 from app.pipeline.validate import validate_document
+from app.providers.sam import parse_sam_output
 from app.schemas.analysis import AnalysisDocument
 from app.schemas.enums import RECOGNIZED_ACTIONS
-from app.providers.sam import parse_sam_output
-from app.video.probe import snap_timestamps
-from app.video.sampling import budget_indices, plan_uniform, uniform_targets
+from app.video.probe import parse_presentation_times, snap_timestamps
+from app.video.sampling import budget_indices, distinct_moments, plan_uniform, uniform_targets
 
 
 def test_uniform_targets_use_duration_not_frame_index():
     times = uniform_targets(2.0, 2.0)
     assert times == [0.0, 0.5, 1.0, 1.5]
+
+
+def test_presentation_times_keep_the_first_csv_field():
+    stdout = "0.000000,,,,\nN/A\n21.935000,,,,\nnot-a-time\n"
+    assert parse_presentation_times(stdout) == [0.0, 21.935]
 
 
 def test_timestamps_snap_to_presentation_times():
@@ -26,6 +31,12 @@ def test_plan_uniform_records_reason():
     frames = plan_uniform(1.0, 1.0, [0.0, 0.5, 1.0])
     assert [frame.timestamp for frame in frames] == [0.0, 1.0]
     assert all(frame.reason == "uniform" for frame in frames)
+
+
+def test_closing_sample_stays_on_the_last_picture():
+    pts = [float(index) for index in range(22)] + [21.935]
+    frames = plan_uniform(21.951667, 1.0, pts)
+    assert frames[-1].timestamp == 21.935
 
 
 def test_one_hertz_grid_includes_a_partial_final_second():
@@ -45,6 +56,21 @@ def test_exact_grid_endpoint_is_sampled():
 def test_short_tail_does_not_add_another_sample():
     frames = plan_uniform(1.02, 1.0, [0.0, 1.0])
     assert [frame.timestamp for frame in frames] == [0.0, 1.0]
+
+
+def test_frames_two_milliseconds_apart_are_one_moment():
+    class Frame:
+        def __init__(self, timestamp: float) -> None:
+            self.timestamp = timestamp
+
+    frames = [Frame(float(second)) for second in range(22)]
+    frames += [Frame(second + 0.002) for second in range(10, 22)]
+    frames.append(Frame(21.935))
+    kept = [frame.timestamp for frame in distinct_moments(frames)]
+    assert 14.0 in kept
+    assert 14.002 not in kept
+    assert kept[-1] == 21.935
+    assert len(kept) == 23
 
 
 def test_frame_budget_keeps_the_closing_sample():
@@ -157,6 +183,10 @@ def test_unknown_action_is_in_the_vocabulary_and_approach_is_offered():
     assert "unknown" in RECOGNIZED_ACTIONS
     assert "approach" in ACTIONS
     assert "say unknown rather than forcing one" in ACTIONS
+    assert "inserted state" in ACTIONS
+    assert "Do not paraphrase that action as handle, bring, or inspect." in WORKFLOW
+    assert "Do not keep an id alive" in FOUNDATIONAL
+    assert "rotated or partly covered part" in SCENE
     assert "from_step and to_step must be workflow step ids" in WORKFLOW
 
 

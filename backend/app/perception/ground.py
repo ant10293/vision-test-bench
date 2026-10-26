@@ -27,8 +27,12 @@ def object_id_map(partial: AnalysisDocument, merged: AnalysisDocument) -> dict[s
         key = " ".join(obj.label.casefold().split())
         if merged_labels.get(obj.local_id) == key:
             mapping[obj.local_id] = obj.local_id
-        else:
-            mapping[obj.local_id] = labels.get(key, obj.local_id)
+            continue
+        matched = labels.get(key)
+        if matched:
+            mapping[obj.local_id] = matched
+        # A reused id with a different label is a different part. Leaving it
+        # unmapped stops that box from landing on the earlier part.
     return mapping
 
 

@@ -15,6 +15,8 @@ from app.models.domain import Artifact, SegmentationMask
 from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRevision, AnalysisRun, Job, PipelineStageRun
 from app.models.util import utcnow
+from app.perception.assembly import apply_assembly
+from app.perception.continuity import reconcile_identity
 from app.perception.ground import apply_perception
 from app.perception.types import TrackingCancelled
 from app.pipeline.infer import (
@@ -24,6 +26,7 @@ from app.pipeline.infer import (
     produce_document,
     save_working,
 )
+from app.pipeline.locate_pass import locate_missing
 from app.pipeline.perception_stage import load_spatial_document, run_spatial_stage
 from app.pipeline.prompts import compose
 from app.pipeline.validate import validate_document
@@ -38,6 +41,7 @@ from app.video.probe import presentation_timestamps
 from app.video.sampling import (
     annotate_sharpness,
     budget_indices,
+    distinct_moments,
     measure_motion,
     plan_adaptive,
     plan_uniform,
@@ -104,7 +108,7 @@ async def execute_job(session: Session, job: Job) -> None:
                 continue
             except Exception as exc:
                 stage.status = "failed"
-                stage.error = str(exc)[:2000]
+                stage.error = _error_text(exc)
                 stage.finished_at = utcnow()
                 if name in {"segmentation", "reinspection", "transcription", "audio_context"}:
                     session.commit()
@@ -128,17 +132,25 @@ async def execute_job(session: Session, job: Job) -> None:
             log.exception("verification waiting on run %s was not settled", run.id)
     except Exception as exc:
         run.status = "failed"
-        run.error = str(exc)[:2000]
+        run.error = _error_text(exc)
         run.finished_at = utcnow()
         if job.attempt < job.max_attempts and not isinstance(exc, (UnsupportedMode, BudgetExceeded)):
             job.status = "pending"
-            job.error = str(exc)[:2000]
+            job.error = _error_text(exc)
             job.worker_id = ""
         else:
             job.status = "failed"
-            job.error = str(exc)[:2000]
+            job.error = _error_text(exc)
             job.finished_at = utcnow()
         session.commit()
+
+
+def _error_text(exc: BaseException, limit: int = 2000) -> str:
+    """Keep the end of a long failure. ffmpeg puts the cause after its banner."""
+    text = str(exc).strip()
+    if len(text) <= limit:
+        return text
+    return text[-limit:]
 
 
 def _fail_job(session, job, run, message: str) -> None:
@@ -440,8 +452,8 @@ async def _model_stage(session, run, video, stage) -> None:
         stage.checkpoint_json = {"source": run.provider_id}
         _remember(session, run, document, stage.stage)
         return
-    frames = list(
-        session.scalars(select(FrameAsset).where(FrameAsset.run_id == run.id).order_by(FrameAsset.timestamp))
+    frames = distinct_moments(
+        list(session.scalars(select(FrameAsset).where(FrameAsset.run_id == run.id).order_by(FrameAsset.timestamp)))
     )
     coverage = Coverage.model_validate(run.coverage_json or {})
     spatial = load_spatial_document(run.id)
@@ -453,6 +465,7 @@ async def _model_stage(session, run, video, stage) -> None:
     config["max_images_per_call"] = caps_window
     run.config_json = config
     document = await produce_document(session, run, video, frames, stage.stage, coverage, spatial)
+    document, locate_info = await _ground(session, run, stage, document, frames)
     if document.perception is None and spatial is not None and spatial.perception is not None:
         document = apply_perception(document, spatial)
     if run.provider_id == "fixture":
@@ -470,7 +483,36 @@ async def _model_stage(session, run, video, stage) -> None:
         "objects": len(document.objects),
         "actions": len(document.actions),
         "modality": run.modality,
+        **({"locate": locate_info} if locate_info else {}),
     }
+
+
+async def _ground(session, run, stage, document: AnalysisDocument, frames: list[FrameAsset]):
+    """Keep ids on the part they belong to, find that part again, then read insertions."""
+    if stage.stage != "scene_analysis" and not document.observations:
+        prior = load_working(run.id)
+        if prior.observations:
+            document = document.model_copy(
+                update={
+                    "objects": document.objects or prior.objects,
+                    "observations": prior.observations,
+                    "states": document.states or prior.states,
+                    "transitions": document.transitions or prior.transitions,
+                    "relationships": document.relationships or prior.relationships,
+                    "ambiguities": list(document.ambiguities or prior.ambiguities),
+                    "workflow_steps": document.workflow_steps or prior.workflow_steps,
+                    "dependencies": document.dependencies or prior.dependencies,
+                    "actions": document.actions or prior.actions,
+                }
+            )
+    locate_info = None
+    if document.observations:
+        document = reconcile_identity(document)
+        if stage.stage == "scene_analysis":
+            document, locate_info = await locate_missing(session, run, document, frames)
+            document = reconcile_identity(document)
+        document = apply_assembly(document)
+    return document, locate_info
 
 
 def _remember(session, run, document: AnalysisDocument, note: str) -> None:

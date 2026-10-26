@@ -12,6 +12,7 @@ from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRun, ModelRequestRow
 from app.perception.evidence import evidence_text
 from app.perception.ground import apply_perception
+from app.perception.roster import align_to_roster, drop_split_objects
 from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
@@ -164,16 +165,21 @@ async def produce_document(
     windows = _windows(selected, int(config.get("max_images_per_call") or 16))
     partials: list[AnalysisDocument] = []
     for index, window in enumerate(windows):
+        note = _window_note(index, windows)
+        if partials:
+            note += _closed_roster(partials[0])
         text_doc = await _call(
             session,
             run,
             stage,
             system,
-            user + _window_note(index, windows),
+            user + note,
             window,
             video,
             schema,
         )
+        if partials:
+            text_doc = align_to_roster(partials[0], text_doc)
         partials.append(text_doc)
     if len(partials) == 1:
         return _with_perception(partials[0], spatial_document)
@@ -187,7 +193,8 @@ async def produce_document(
         video,
         schema,
     )
-    return _with_perception(restore_omitted_records(merged, partials), spatial_document)
+    merged = drop_split_objects(partials[0], restore_omitted_records(merged, partials))
+    return _with_perception(merged, spatial_document)
 
 
 def _with_perception(document: AnalysisDocument, spatial: AnalysisDocument | None) -> AnalysisDocument:
@@ -317,6 +324,17 @@ def _fmt_times(times: list[float]) -> str:
     return ", ".join(parts[:-1]) + ", and " + parts[-1]
 
 
+def _closed_roster(roster: AnalysisDocument) -> str:
+    lines = [f"{obj.local_id}: {obj.label}" for obj in roster.objects if obj.label]
+    if not lines:
+        return ""
+    return (
+        "\n\nThe objects are already named. Use only these ids. A part seen at a new angle, "
+        "including a second arm of a piece that was one object, keeps that id and one box around "
+        "the whole piece. Do not add an object.\n" + "\n".join(lines)
+    )
+
+
 def _window_note(index: int, windows: list[list[FrameAsset]]) -> str:
     total = len(windows)
     sentences = [f"This is window {index + 1} of {total} in temporal order."]
@@ -367,8 +385,11 @@ def _boxing_rule(frames: list[FrameAsset]) -> str:
         "the view is end-on or because the ring beside it already has a box. If that faceted part is seen "
         "face-on, surrounding an end and surrounded by the ring, it still gets its own box on the flats. "
         "The ring's box and the inner end's box do not count for it. When the edges are faint, keep "
-        "the box tight on that part instead of growing it across the hand or a neighbor. Leave an "
-        "object out of a frame only when it is fully out of view or fully hidden, and do not invent a box then."
+        "the box tight on that part instead of growing it across the hand or a neighbor. A rotated or "
+        "partly covered part is still that part: box the visible portion, even when its long side is no "
+        "longer the side you saw before. Leave an object out of a frame when it is fully out of view or "
+        "fully hidden, and do not invent a box then. Do not keep its id by boxing a different part, "
+        "including a larger neighbor of a similar color. A box many times larger than the part is the wrong box."
     )
 
 

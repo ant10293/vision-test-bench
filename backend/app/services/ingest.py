@@ -33,7 +33,7 @@ from app.video.probe import (
     sha256_file,
     snap_timestamps,
 )
-from app.video.sampling import plan_uniform
+from app.video.sampling import SAME_MOMENT_SEC, plan_uniform
 
 log = logging.getLogger("learnloop.ingest")
 
@@ -553,16 +553,16 @@ def sample_run_frames(
 ) -> list[FrameAsset]:
     original = resolve_stored(video.stored_path)
     rows: list[FrameAsset] = []
-    existing = {
-        round(frame.timestamp, 3): frame
-        for frame in session.scalars(
-            select(FrameAsset).where(FrameAsset.video_id == video.id, FrameAsset.run_id == run_id)
-        )
-    }
+    existing = list(
+        session.scalars(select(FrameAsset).where(FrameAsset.video_id == video.id, FrameAsset.run_id == run_id))
+    )
+    used: set[str] = set()
     for ordinal, sample in enumerate(samples):
-        key = round(sample.timestamp, 3)
-        if key in existing:
-            rows.append(existing[key])
+        match = _closest_frame(existing, sample.timestamp, used)
+        if match is not None:
+            match.ordinal = ordinal
+            used.add(match.id)
+            rows.append(match)
             continue
         dest = data_path("frames", video.id, run_id, f"{ordinal:04d}_{sample.timestamp:.3f}.jpg")
         if not dest.exists():
@@ -583,6 +583,24 @@ def sample_run_frames(
             ordinal=ordinal,
         )
         session.add(row)
+        used.add(row.id)
         rows.append(row)
+    for frame in existing:
+        if frame.id not in used:
+            session.delete(frame)
     session.flush()
     return rows
+
+
+def _closest_frame(frames: list[FrameAsset], timestamp: float, used: set[str]) -> FrameAsset | None:
+    """A frame a few milliseconds away is the same picture, not a second sample."""
+    best: FrameAsset | None = None
+    best_gap = SAME_MOMENT_SEC
+    for frame in frames:
+        if frame.id in used:
+            continue
+        gap = abs(float(frame.timestamp) - timestamp)
+        if gap < best_gap:
+            best = frame
+            best_gap = gap
+    return best
