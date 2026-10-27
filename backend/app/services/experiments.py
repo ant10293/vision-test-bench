@@ -17,6 +17,7 @@ from app.perception.presets import preset
 from app.pipeline.prompts import TEMPLATES, compose
 from app.providers.catalog import lookup
 from app.providers.claude_code import load_claude_code
+from app.providers.codex_cli import load_codex
 from app.providers.cursor_cli import load_cursor_cli
 from app.providers.types import UnsupportedMode
 from app.schemas.enums import PIPELINE_STAGES, ResearchMode
@@ -50,6 +51,14 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
     temperature = payload.get("temperature")
     if temperature is not None and not caps.supports_temperature:
         raise UnsupportedMode(f"{model_id} does not accept temperature. Leave it unset.")
+    openai_transport = "api"
+    if provider_id == "openai":
+        openai_transport = load_codex()["transport"]
+        if openai_transport == "codex" and temperature is not None:
+            raise UnsupportedMode(
+                "Codex does not accept temperature. Leave it unset, "
+                "or switch OpenAI runs to the API key."
+            )
     anthropic_transport = "api"
     if provider_id == "anthropic":
         anthropic_transport = load_claude_code()["transport"]
@@ -112,6 +121,8 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "git_revision": _git(),
         "perception": perception,
     }
+    if provider_id == "openai":
+        config["openai_transport"] = openai_transport
     if provider_id == "anthropic":
         config["anthropic_transport"] = anthropic_transport
     if provider_id == "cursor":

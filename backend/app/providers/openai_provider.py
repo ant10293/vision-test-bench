@@ -8,8 +8,10 @@ import time
 from openai import AsyncOpenAI
 
 from app.providers.catalog import lookup
+from app.providers.codex_cli import complete, load_codex, probe
 from app.providers.common import data_url, translate
 from app.providers.types import (
+    AuthenticationError,
     GenerationRequest,
     ModelCapabilities,
     ProviderResponse,
@@ -30,6 +32,15 @@ class OpenAIProvider:
         return AsyncOpenAI(api_key=secret, timeout=timeout)
 
     async def validate(self, secret: str) -> None:
+        if load_codex()["transport"] == "codex":
+            status = await probe()
+            if not status["installed"]:
+                raise AuthenticationError(status["error"] or "Codex executable not found")
+            if not status["logged_in"]:
+                raise AuthenticationError(
+                    status["error"] or "Codex CLI is not signed in with ChatGPT"
+                )
+            return
         try:
             client = self._client(secret, 30)
             await client.models.list()
@@ -59,6 +70,13 @@ class OpenAIProvider:
             raise UnsupportedMode(
                 f"{request.model_id} accepts at most {caps.max_images} images in one request."
             )
+        if request.metadata.get("transport") == "codex":
+            if request.temperature is not None:
+                raise UnsupportedMode(
+                    "Codex does not accept temperature. Leave it unset, "
+                    "or switch OpenAI runs to the API key."
+                )
+            return await complete(request)
         content: list[dict] = [{"type": "input_text", "text": request.user_prompt}]
         detail = "low" if request.image_detail == "low" else "high"
         for frame in request.frames:

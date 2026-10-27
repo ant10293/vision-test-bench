@@ -42,6 +42,9 @@ def provider_ids() -> list[str]:
 
 def run_transport(provider_id: str, config: dict | None) -> str:
     saved = config or {}
+    if provider_id == "openai":
+        transport = str(saved.get("openai_transport") or "api")
+        return transport if transport in {"api", "codex"} else "api"
     if provider_id == "anthropic":
         transport = str(saved.get("anthropic_transport") or "api")
         return transport if transport in {"api", "claude_code"} else "api"
@@ -53,6 +56,8 @@ def run_transport(provider_id: str, config: dict | None) -> str:
 
 def needs_secret(provider_id: str, transport: str = "api") -> bool:
     if provider_id in _LOCAL:
+        return False
+    if provider_id == "openai" and transport == "codex":
         return False
     if provider_id == "anthropic" and transport == "claude_code":
         return False

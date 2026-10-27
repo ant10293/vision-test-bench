@@ -29,7 +29,7 @@ Open http://127.0.0.1:5173. The API is http://127.0.0.1:8000. On a fresh data di
 
 ## What needs a key
 
-OpenAI, Anthropic, Gemini, Meta Muse, and an optional OpenAI-compatible endpoint. Configure keys on the Providers page or through environment variables. A provider is shown as connected only after a real validation request succeeds. Live inference was not executed in this workspace. See `PROVIDERS.md`.
+OpenAI, Anthropic, Gemini, Meta Muse, and an optional OpenAI-compatible endpoint. Configure keys on the Providers page or through environment variables. OpenAI can instead use a ChatGPT plan through the local Codex CLI, the same way Anthropic can use Claude Code and Cursor can use the agent CLI. A provider is shown as connected only after a real validation request succeeds. Live inference was not executed in this workspace. See `PROVIDERS.md`.
 
 ## Documents
 

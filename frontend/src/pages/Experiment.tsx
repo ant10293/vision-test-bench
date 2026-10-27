@@ -45,6 +45,7 @@ export function ExperimentPage() {
     return provider?.models ?? [];
   }, [providers.data, providerId]);
   const selected: Capability | undefined = models.find((item) => item.model_id === modelId) ?? models[0];
+  const codexRun = providerId === "openai" && providers.data?.find((item) => item.id === "openai")?.codex?.transport === "codex";
   const reasoningOptions = selected?.reasoning_efforts ?? [];
   const effort = reasoningOptions.includes(reasoning) ? reasoning : "";
 
@@ -60,7 +61,7 @@ export function ExperimentPage() {
         sampling_preset: preset,
         analysis_pass: pass,
         segmentation_mode: segmentation,
-        temperature: temperature === "" ? null : Number(temperature),
+        temperature: codexRun || temperature === "" ? null : Number(temperature),
         reasoning_effort: effort || null,
         prompt_key: "scene",
         max_frames: 48,
@@ -116,6 +117,9 @@ export function ExperimentPage() {
           <div>Image {yes(selected.image)} · Native video {yes(selected.native_video)} · Structured JSON {yes(selected.structured_output)} · Temperature {yes(selected.supports_temperature)}</div>
           <div>Max images per call {selected.max_images}. Reasoning: {selected.reasoning_efforts.map(effortLabel).join(", ") || "not offered"}.</div>
           <div>{selected.notes}</div>
+          {codexRun && (
+            <div>This run uses the linked ChatGPT plan through Codex in read-only mode. Spend counts against the plan, and the lab records the call as unpriced. Temperature is left unset.</div>
+          )}
           {providerId === "anthropic" && providers.data?.find((item) => item.id === "anthropic")?.claude_code?.transport === "claude_code" && (
             <div>This run uses the linked Claude Code subscription. Spend counts against the plan, and the lab records the call as unpriced.</div>
           )}
@@ -169,7 +173,7 @@ export function ExperimentPage() {
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Temperature">
-          <input className="field stretch" disabled={!selected?.supports_temperature} value={temperature} placeholder={selected?.supports_temperature ? "model default" : "unsupported"} onChange={(event) => setTemperature(event.target.value)} />
+          <input className="field stretch" disabled={codexRun || !selected?.supports_temperature} value={temperature} placeholder={codexRun || !selected?.supports_temperature ? "unsupported" : "model default"} onChange={(event) => setTemperature(event.target.value)} />
         </Field>
         <Field label="Reasoning effort">
           <select className="field stretch" value={effort} disabled={!reasoningOptions.length} onChange={(event) => setReasoning(event.target.value)}>

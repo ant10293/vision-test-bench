@@ -18,7 +18,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from app.providers.claude_code import login_url_from, mask_account, subscription_env
+from app.providers.claude_code import login_url_from, subscription_env
+from app.providers.cli_account import link_status, mask_account
 from app.providers.types import (
     AuthenticationError,
     GenerationRequest,
@@ -112,19 +113,7 @@ def child_env(transport: str, secret: str = "") -> dict[str, str]:
 
 
 def _empty_status(binary: str, transport: str, error: str = "") -> dict:
-    return {
-        "binary": binary,
-        "transport": transport,
-        "installed": False,
-        "version": "",
-        "logged_in": False,
-        "auth_method": "",
-        "subscription": "",
-        "account": "",
-        "error": error,
-        "login_started": False,
-        "login_url": "",
-    }
+    return link_status(binary=binary, transport=transport, error=error)
 
 
 def _run_text(argv: list[str], env: dict[str, str], timeout: float) -> subprocess.CompletedProcess[str]:
@@ -208,19 +197,17 @@ def probe_sync(secret: str = "") -> dict:
             about = None
         if about is not None and about.returncode == 0:
             subscription = _subscription_tier(about.stdout or "")
-    return {
-        "binary": binary,
-        "transport": transport,
-        "installed": True,
-        "version": version_line,
-        "logged_in": logged_in,
-        "auth_method": transport if logged_in else "",
-        "subscription": subscription,
-        "account": _account_from(text) if logged_in else "",
-        "error": error,
-        "login_started": False,
-        "login_url": "",
-    }
+    return link_status(
+        binary=binary,
+        transport=transport,
+        installed=True,
+        version=version_line,
+        logged_in=logged_in,
+        auth_method=transport if logged_in else "",
+        subscription=subscription,
+        account=_account_from(text) if logged_in else "",
+        error=error,
+    )
 
 
 async def probe(secret: str = "") -> dict:

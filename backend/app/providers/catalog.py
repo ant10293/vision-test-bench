@@ -18,7 +18,9 @@ _SAM_NOTE = (
 )
 _OPENAI_NOTE = (
     "Public Responses API accepts images, not video files. Native video stays disabled "
-    "unless a future capability record explicitly enables it for that model id."
+    "unless a future capability record explicitly enables it for that model id. "
+    "A Codex subscription run attaches those frames in read-only mode and is recorded as unpriced plan usage. "
+    "An API key run uses the catalog list rate when one is set."
 )
 _ANTHROPIC_NOTE = (
     "Claude vision accepts images, not video files. Long sequences are windowed. "

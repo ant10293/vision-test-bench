@@ -319,7 +319,7 @@ async def _audio_context(session, run, video, stage) -> None:
         temperature=config.get("temperature"),
         timeout_s=float(config.get("timeout_s") or 180),
         image_detail=config.get("image_detail") or "low",
-        metadata={"transport": transport} if run.provider_id == "cursor" else {},
+        metadata={"transport": transport} if run.provider_id in {"openai", "cursor"} else {},
     )
     call = open_provider_call(
         session,

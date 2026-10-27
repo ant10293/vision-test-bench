@@ -234,7 +234,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
         reasoning_effort=config.get("reasoning_effort"),
         image_detail=config.get("image_detail") or "high",
         timeout_s=float(config.get("timeout_s") or 180),
-        metadata={"transport": transport} if run.provider_id in {"anthropic", "cursor"} else {},
+        metadata={"transport": transport} if run.provider_id in {"openai", "anthropic", "cursor"} else {},
     )
     estimate = rough_input_tokens(request)
     ceiling = config.get("cost_ceiling_usd")
@@ -256,6 +256,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
             "image_detail": request.image_detail,
             "estimated_input_tokens": estimate,
             "sdk_note": "recorded on the response",
+            **({"openai_transport": transport} if run.provider_id == "openai" else {}),
             **({"anthropic_transport": transport} if run.provider_id == "anthropic" else {}),
             **({"cursor_transport": transport} if run.provider_id == "cursor" else {}),
         },

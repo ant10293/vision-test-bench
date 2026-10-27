@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+from app.providers.cli_account import link_status, mask_account
 from app.providers.types import (
     AuthenticationError,
     GenerationRequest,
@@ -179,29 +180,8 @@ def generation_env() -> dict[str, str]:
     return env
 
 
-def mask_account(email: str) -> str:
-    if "@" not in email:
-        return ""
-    local, domain = email.split("@", 1)
-    if not local or not domain:
-        return ""
-    return f"{local[0]}…@{domain}"
-
-
 def _empty_status(binary: str, transport: str, error: str = "") -> dict:
-    return {
-        "binary": binary,
-        "transport": transport,
-        "installed": False,
-        "version": "",
-        "logged_in": False,
-        "auth_method": "",
-        "subscription": "",
-        "account": "",
-        "error": error,
-        "login_started": False,
-        "login_url": "",
-    }
+    return link_status(binary=binary, transport=transport, error=error)
 
 
 def _run_text(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
@@ -252,19 +232,17 @@ def probe_sync() -> dict:
         error = (auth.stderr or auth.stdout or "claude auth status failed").strip()[:500]
     elif not logged_in:
         error = "Claude Code is installed and not signed in."
-    return {
-        "binary": binary,
-        "transport": transport,
-        "installed": True,
-        "version": version.stdout.strip().splitlines()[0][:80] if version.stdout.strip() else "",
-        "logged_in": logged_in,
-        "auth_method": str(payload.get("authMethod") or ""),
-        "subscription": str(payload.get("subscriptionType") or ""),
-        "account": mask_account(str(payload.get("email") or "")),
-        "error": error,
-        "login_started": False,
-        "login_url": "",
-    }
+    return link_status(
+        binary=binary,
+        transport=transport,
+        installed=True,
+        version=version.stdout.strip().splitlines()[0][:80] if version.stdout.strip() else "",
+        logged_in=logged_in,
+        auth_method=str(payload.get("authMethod") or ""),
+        subscription=str(payload.get("subscriptionType") or ""),
+        account=mask_account(str(payload.get("email") or "")),
+        error=error,
+    )
 
 
 async def probe() -> dict:

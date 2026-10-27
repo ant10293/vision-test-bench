@@ -1,4 +1,4 @@
-import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, CursorCliSettings, CursorCliStatus, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
+import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, CodexSettings, CodexStatus, CursorCliSettings, CursorCliStatus, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
 import type { VerificationView, WorkflowTemplate } from "./verification";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -205,6 +205,17 @@ export const api = {
     ),
   addModel: (providerId: string, modelId: string) =>
     request(`/api/providers/${providerId}/models`, { method: "POST", body: JSON.stringify({ model_id: modelId }) }),
+  codex: () => request<CodexStatus>("/api/providers/openai/codex"),
+  saveCodex: (binary: string, transport: CodexSettings["transport"]) =>
+    request<CodexSettings>("/api/providers/openai/codex", {
+      method: "PUT",
+      body: JSON.stringify({ binary, transport }),
+    }),
+  linkCodex: (force = false) =>
+    request<CodexStatus>("/api/providers/openai/codex/link", {
+      method: "POST",
+      body: JSON.stringify({ force }),
+    }),
   claudeCode: () => request<ClaudeCodeStatus>("/api/providers/anthropic/claude-code"),
   saveClaudeCode: (binary: string, transport: ClaudeCodeSettings["transport"]) =>
     request<ClaudeCodeSettings>("/api/providers/anthropic/claude-code", {

@@ -169,7 +169,7 @@ async def _one(session, run, document, frames, object_id, times, secret, transpo
         reasoning_effort=config.get("reasoning_effort"),
         image_detail=config.get("image_detail") or "high",
         timeout_s=float(config.get("timeout_s") or 180),
-        metadata={"transport": transport} if run.provider_id in {"anthropic", "cursor"} else {},
+        metadata={"transport": transport} if run.provider_id in {"openai", "anthropic", "cursor"} else {},
     )
     row = open_provider_call(
         session,

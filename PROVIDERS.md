@@ -12,7 +12,9 @@ Prices in the catalog are approximate list prices for planning. They are not inv
 
 ## OpenAI
 
-Responses API, timestamped `input_image` frames, structured output via `json_schema` with `strict: false` so the research schema is not silently rewritten. Native video is refused. Public documentation does not accept video files on this API. A successful validation is `models.list`. Live calls were not run here.
+Responses API, timestamped `input_image` frames, structured output via `json_schema` with `strict: false` so the research schema is not silently rewritten. Native video is refused. Public documentation does not accept video files on this API. A successful API validation is `models.list`. Live calls were not run here.
+
+The ChatGPT plan, including Plus, is a separate transport. It calls the local `codex` executable with `exec`, a read-only sandbox, and one `--image` per frame. `--yolo` and write sandboxes are not passed. The prompt is sent on stdin. Structured output uses `--output-schema`. Temperature is rejected if set. `OPENAI_API_KEY` is removed from the child environment so a key cannot move the run onto API billing. Validation is `codex login status`, and only a ChatGPT login counts. `codex login` keeps the session in the CLI. Plan usage is recorded unpriced. Live calls were not run here.
 
 ## Anthropic
 
@@ -42,6 +44,6 @@ Same frame client as OpenAI, with native video forced off and the base URL taken
 
 ## Credentials
 
-Environment variables: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`, `MODEL_API_KEY` or `META_MODEL_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`, `CURSOR_API_KEY`. The Providers page can store a key in the encrypted local table instead. Responses, logs, and exports contain a hint at most (last four characters), never the key. Cursor account linking does not store a key; `agent login` keeps the session in the CLI.
+Environment variables: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`, `MODEL_API_KEY` or `META_MODEL_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`, `CURSOR_API_KEY`. The Providers page can store a key in the encrypted local table instead. Responses, logs, and exports contain a hint at most (last four characters), never the key. Cursor account linking does not store a key; `agent login` keeps the session in the CLI. ChatGPT plan linking does not store a key; `codex login` keeps the session in the CLI.
 
 `LEARNLOOP_LIVE_PROVIDERS=1` is the switch for future opt-in tests. The default suite does not call a paid API.

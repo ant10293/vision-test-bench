@@ -367,12 +367,8 @@ export interface AudioModelStatus {
   audio_bytes_leave_machine: boolean;
 }
 
-export interface ClaudeCodeSettings {
-  binary: string;
-  transport: "api" | "claude_code";
-}
-
-export interface ClaudeCodeStatus extends ClaudeCodeSettings {
+/** Identity fields shared by every local CLI transport. */
+export interface CliLinkStatus {
   installed: boolean;
   version: string;
   logged_in: boolean;
@@ -383,23 +379,27 @@ export interface ClaudeCodeStatus extends ClaudeCodeSettings {
   login_started: boolean;
   login_url: string;
 }
+
+export interface CodexSettings {
+  binary: string;
+  transport: "api" | "codex";
+}
+
+export interface CodexStatus extends CodexSettings, CliLinkStatus {}
+
+export interface ClaudeCodeSettings {
+  binary: string;
+  transport: "api" | "claude_code";
+}
+
+export interface ClaudeCodeStatus extends ClaudeCodeSettings, CliLinkStatus {}
 
 export interface CursorCliSettings {
   binary: string;
   transport: "login" | "api_key";
 }
 
-export interface CursorCliStatus extends CursorCliSettings {
-  installed: boolean;
-  version: string;
-  logged_in: boolean;
-  auth_method: string;
-  subscription: string;
-  account: string;
-  error: string;
-  login_started: boolean;
-  login_url: string;
-}
+export interface CursorCliStatus extends CursorCliSettings, CliLinkStatus {}
 
 export interface ProviderInfo {
   id: string;
@@ -410,6 +410,7 @@ export interface ProviderInfo {
   last_error: string;
   base_url: string;
   models: Capability[];
+  codex?: CodexSettings;
   claude_code?: ClaudeCodeSettings;
   cursor_cli?: CursorCliSettings;
 }

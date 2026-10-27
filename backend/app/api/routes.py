@@ -64,6 +64,9 @@ from app.providers.claude_code import (
     save_claude_code,
     submit_login_code,
 )
+from app.providers.codex_cli import begin_login as begin_codex_login
+from app.providers.codex_cli import load_codex, save_codex
+from app.providers.codex_cli import probe as probe_codex
 from app.providers.cursor_cli import account_model_options, load_cursor_cli, save_cursor_cli
 from app.providers.cursor_cli import begin_login as begin_cursor_login
 from app.providers.cursor_cli import probe as probe_cursor
@@ -102,8 +105,8 @@ from app.services.ingest import (
     schedule_ingest,
 )
 from app.services.lab_settings import load_settings, save_settings
-from app.services.materialize import cached_observation_crop
 from app.services.locate import locate_dropped_video
+from app.services.materialize import cached_observation_crop
 from app.services.storage import data_path, is_external, resolve_stored, safe_filename
 
 router = APIRouter(prefix="/api")
@@ -647,11 +650,34 @@ def list_providers(session: Session = Depends(db)) -> list[dict]:
                 "last_validated_at": status.last_validated_at.isoformat() if status and status.last_validated_at else None,
                 "base_url": status.extra_base_url if status else "",
                 "models": models,
+                **({"codex": load_codex()} if provider_id == "openai" else {}),
                 **({"claude_code": load_claude_code()} if provider_id == "anthropic" else {}),
                 **({"cursor_cli": load_cursor_cli()} if provider_id == "cursor" else {}),
             }
         )
     return payload
+
+
+@router.get("/providers/openai/codex")
+async def codex_status() -> dict:
+    return await probe_codex()
+
+
+@router.put("/providers/openai/codex")
+def put_codex(payload: dict) -> dict:
+    try:
+        return save_codex(payload.get("binary") or "codex", payload.get("transport") or "api")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/providers/openai/codex/link")
+async def link_codex(payload: dict | None = Body(default=None)) -> dict:
+    force = bool((payload or {}).get("force"))
+    try:
+        return await begin_codex_login(force=force)
+    except ProviderError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/providers/anthropic/claude-code")
@@ -736,7 +762,8 @@ async def validate_provider(provider_id: str, session: Session = Depends(db)) ->
         return {"ok": True, "provider_id": provider_id, "detail": "local provider"}
     secret, source = load_secret(session, provider_id)
     cursor_login = provider_id == "cursor" and load_cursor_cli()["transport"] == "login"
-    if cursor_login:
+    codex_login = provider_id == "openai" and load_codex()["transport"] == "codex"
+    if cursor_login or codex_login:
         secret, source = "", "cli"
     elif not secret:
         record_validation(session, provider_id, False, "no credentials configured")
