@@ -273,7 +273,95 @@ def test_a_tracked_region_lands_on_its_box_in_the_video():
     larger = by_id["region-1"]
     smaller = by_id["region-2"]
     assert larger.pieces[0].size[1] >= min(larger.pieces[0].size[0], larger.pieces[0].size[2]) * 0.5
-    assert larger.position[1] < smaller.position[1]
+    assert larger.position[2] == pytest.approx(0.0)
+    assert smaller.position[2] == pytest.approx(0.0)
+    assert larger.rotation_deg[0] == pytest.approx(-90.0)
+    assert scene.camera.keys[0].eye[2] > abs(scene.camera.keys[0].eye[0]) + abs(scene.camera.keys[0].eye[1])
+
+
+def test_each_research_mode_keeps_the_objects_on_one_floor():
+    from app.simulation.evaluate import evaluate_scene
+    from app.simulation.from_video import FOV_X_DEG, scene_from_tracks
+    from app.simulation.math3d import camera_matrix, intrinsics, project_point, rotation_matrix
+
+    tracks = [
+        {"track_ref": "region-1", "timestamp": 0.0, "bbox": {"x": 0.3, "y": 0.3, "w": 0.2, "h": 0.15}},
+    ]
+    for mode, overhead in (
+        ("fixed_camera", True),
+        ("constrained_head_mounted", False),
+        ("unconstrained_head_mounted", False),
+    ):
+        scene = scene_from_tracks(
+            tracks, width=640, height=360, fps=8, duration=1.0, scene_id=mode, research_mode=mode
+        )
+        obj = scene.objects[0]
+        assert obj.position[2] == pytest.approx(0.0)
+        assert obj.rotation_deg[0] == pytest.approx(-90.0)
+        facing = rotation_matrix(obj.rotation_deg) @ np.array([0.0, 1.0, 0.0])
+        assert facing[2] == pytest.approx(-1.0, abs=1e-6)
+        eye = scene.camera.keys[0].eye
+        assert (eye[2] > abs(eye[0]) + abs(eye[1])) is overhead
+        camera = camera_matrix(np.array(eye, dtype=float), np.array(scene.camera.keys[0].target, dtype=float))
+        projected = project_point(camera, intrinsics(scene.width, scene.height, FOV_X_DEG), np.array(obj.position))
+        assert projected is not None
+        bbox = tracks[0]["bbox"]
+        assert abs(projected["u"] - (bbox["x"] + bbox["w"] / 2) * scene.width) < 1e-4
+        assert abs(projected["v"] - (bbox["y"] + bbox["h"] / 2) * scene.height) < 1e-4
+    state = evaluate_scene(
+        scene_from_tracks(
+            [
+                {
+                    "track_ref": "region-1",
+                    "timestamp": 0.0,
+                    "bbox": {"x": 0.2, "y": 0.2, "w": 0.4, "h": 0.3},
+                    "oriented": {"cx": 0.45, "cy": 0.4, "w": 0.22, "h": 0.08, "angle_deg": 25.0},
+                },
+                {
+                    "track_ref": "region-1",
+                    "timestamp": 1.0,
+                    "bbox": {"x": 0.3, "y": 0.3, "w": 0.3, "h": 0.2},
+                    "oriented": {"cx": 0.5, "cy": 0.5, "w": 0.18, "h": 0.07, "angle_deg": 40.0},
+                },
+            ],
+            width=640,
+            height=360,
+            fps=8,
+            duration=1.0,
+            scene_id="turned",
+        ),
+        1.0,
+    )
+    placed = state["objects"][0]
+    assert placed["position"][2] == pytest.approx(0.0)
+    turned = rotation_matrix((-90.0, 0.0, 40.0))
+    assert np.allclose(np.array(placed["rotation"]).reshape(3, 3), turned, atol=1e-6)
+
+
+def test_a_rotated_box_follows_the_subject_instead_of_the_frame_edges():
+    from app.simulation.textures import _warp_box, box_from_alpha
+
+    horizontal = np.zeros((80, 140), dtype=np.uint8)
+    horizontal[34:46, 15:125] = 255
+    flat = box_from_alpha(horizontal, 0, 0, 140, 80, {"x": 0, "y": 0, "w": 1, "h": 1})
+    assert abs(flat["angle_deg"]) < 8
+    assert flat["w"] > flat["h"] * 2
+
+    diagonal = np.zeros((120, 120), dtype=np.uint8)
+    for offset in range(-4, 5):
+        for step in range(20, 100):
+            row = min(119, max(0, step + offset))
+            col = min(119, max(0, step))
+            diagonal[row, col] = 255
+    turned = box_from_alpha(diagonal, 0, 0, 120, 120, {"x": 0, "y": 0, "w": 1, "h": 1})
+    assert abs(abs(turned["angle_deg"]) - 45) < 12 or abs(abs(turned["angle_deg"]) - 135) < 12
+    assert turned["w"] * turned["h"] < 0.5
+
+    image = np.zeros((40, 80, 3), dtype=np.uint8)
+    image[2, 8] = (0, 0, 255)
+    warped = _warp_box(image, {"cx": 0.5, "cy": 0.5, "w": 1.0, "h": 1.0, "angle_deg": 0.0})
+    red_rows = warped[:, :, 2].max(axis=1)
+    assert int(np.argmax(red_rows)) < warped.shape[0] / 2
 
 
 def test_a_portrait_frame_stays_even_so_the_encoder_can_open_it():

@@ -19,12 +19,13 @@ def render_blender_scene(session: Session, run: AnalysisRun, stage: PipelineStag
     from app.simulation.from_video import records_from_document, scene_from_tracks
     from app.simulation.render import render_dataset
     from app.simulation.service import QUALITY_SAMPLES, dataset_dir
-    from app.simulation.textures import write_initial_textures
+    from app.simulation.textures import orient_tracks, write_initial_textures
 
     video = session.get(VideoAsset, run.video_id)
     if video is None:
         raise RuntimeError("The selected video is missing, so no scene was built.")
     tracks = records_from_document(load_working(run.id))
+    orient_tracks(playback_path(video), tracks, duration=float(video.duration_sec or 0))
     dataset_id = new_id()
     scene = scene_from_tracks(
         tracks,
@@ -34,13 +35,14 @@ def render_blender_scene(session: Session, run: AnalysisRun, stage: PipelineStag
         duration=video.duration_sec,
         scene_id=dataset_id,
         name=video.original_filename,
+        research_mode=run.research_mode or video.research_mode or "",
     )
     dataset = SimulationDataset(
         id=dataset_id,
         name=video.original_filename,
         preset="video",
         variant="objects",
-        camera_mode="fixed",
+        camera_mode=scene.camera_mode,
         research_mode=run.research_mode or video.research_mode or "",
         seed=1,
         quality="preview",

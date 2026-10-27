@@ -1,15 +1,16 @@
-"""Build a kinematic scene from the regions tracked in one video.
+"""Build a kinematic scene from the objects found in one video.
 
-Each shape is a solid in front of the camera. Its center stays on the ray
-through the tracked box. Distance is chosen so the solids are not coplanar.
-That distance is not a measurement from the footage.
+The objects lie on one horizontal surface, and one face points at that surface.
+A fixed camera looks straight down. A head-mounted camera looks along the
+surface, from the near side or from a corner. A rotated box turns the object
+in the surface when the frames provide one. None of this is a measured pose.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from app.simulation.math3d import intrinsics
+from app.simulation.math3d import camera_matrix, intrinsics
 from app.simulation.schema import (
     CameraKey,
     CameraRig,
@@ -24,12 +25,9 @@ from app.simulation.schema import (
 )
 
 PLANE_DEPTH_M = 2.0
-DEPTH_NEAR = 0.75
-DEPTH_FAR = 1.25
 THICKNESS = 0.5
 FOV_X_DEG = 48.0
-EYE = (0.0, -PLANE_DEPTH_M, 0.0)
-TARGET = (0.0, 0.0, 0.0)
+_FLOOR_TILT_DEG = -90.0
 _COLORS = (
     (0.85, 0.35, 0.28),
     (0.25, 0.55, 0.85),
@@ -77,8 +75,13 @@ def scene_from_tracks(
     duration: float,
     scene_id: str,
     name: str = "",
+    research_mode: str = "fixed_camera",
 ) -> Scene:
-    """tracks items have track_ref, timestamp, and bbox {x, y, w, h} in 0..1."""
+    """tracks items have track_ref, timestamp, and bbox {x, y, w, h} in 0..1.
+
+    An optional oriented box is {cx, cy, w, h, angle_deg}. w and h are fractions
+    of the frame. angle_deg turns the width edge in the floor.
+    """
     frame = _fit_frame(width, height)
     span = _span(duration, tracks)
     rate = _rate(fps)
@@ -86,14 +89,15 @@ def scene_from_tracks(
     if not grouped:
         raise ValueError("The analysis has no object boxes, so there is nothing to place in the Blender scene.")
     names = instance_ids_for(tracks, duration)
-    depths = _depths(grouped)
+    camera_mode, rig = _rig(research_mode)
+    eye = rig.keys[0].eye
+    target = rig.keys[0].target
     objects = []
     operations = []
     for index, (track_ref, rows) in enumerate(grouped.items()):
         instance_id = names[track_ref]
-        depth = depths[track_ref]
-        poses = [_place(row["bbox"], frame[0], frame[1], depth) for row in rows]
-        size = _median_size(poses)
+        poses = [_place(row, frame[0], frame[1], eye, target) for row in rows]
+        size = poses[0][1]
         objects.append(
             SceneObject(
                 instance_id=instance_id,
@@ -102,10 +106,11 @@ def scene_from_tracks(
                 pieces=[Piece(name="region", kind="box", size=size)],
                 material=Material(color=_COLORS[index % len(_COLORS)], roughness=0.55),
                 position=poses[0][0],
+                rotation_deg=poses[0][2],
             )
         )
         previous = float(rows[0]["timestamp"])
-        for step, (pose, _size) in enumerate(poses[1:], start=1):
+        for step, (pose, _size, rotation) in enumerate(poses[1:], start=1):
             end = min(span, float(rows[step]["timestamp"]))
             if end <= previous:
                 continue
@@ -117,6 +122,7 @@ def scene_from_tracks(
                     start=previous,
                     end=end,
                     position=pose,
+                    rotation_deg=rotation,
                 )
             )
             previous = end
@@ -125,7 +131,8 @@ def scene_from_tracks(
         name=name or "Tracked video",
         description=(
             "Shapes follow the objects found in the selected video. "
-            "Each one is a solid. Larger boxes sit closer to the camera. That distance is not a measurement."
+            "They lie on one horizontal surface, and one face points at that surface. "
+            "A rotated box can turn an object in the surface. That is not a measured pose."
         ),
         seed=1,
         width=frame[0],
@@ -136,18 +143,14 @@ def scene_from_tracks(
         objects=objects,
         constraints=[],
         operations=operations,
-        camera=CameraRig(
-            mode="fixed",
-            fov_x_deg=FOV_X_DEG,
-            keys=[CameraKey(t=0.0, eye=EYE, target=TARGET)],
-        ),
+        camera=rig,
         lights=[
             Light(id="key", position=(0.4, -1.2, 1.2), energy=180.0),
             Light(id="fill", position=(-0.6, -1.0, 0.8), energy=60.0, color=(0.85, 0.9, 1.0)),
         ],
         procedure=[],
         variant="tracked",
-        camera_mode="fixed",
+        camera_mode=camera_mode,
         expectation=Expectation(
             final_constraints={},
             summary="The shapes follow the objects found in the selected video.",
@@ -155,56 +158,77 @@ def scene_from_tracks(
     )
 
 
+def _rig(research_mode: str) -> tuple[str, CameraRig]:
+    """The camera changes with the recording. The floor stays z = 0."""
+    if research_mode == "constrained_head_mounted":
+        mode = "constrained_head"
+        eye = (0.0, -1.55, 1.15)
+        target = (0.0, 0.25, 0.0)
+    elif research_mode == "unconstrained_head_mounted":
+        mode = "unconstrained_head"
+        eye = (1.15, -1.15, 1.05)
+        target = (0.0, 0.15, 0.0)
+    else:
+        mode = "fixed"
+        eye = (0.0, 0.0, PLANE_DEPTH_M)
+        target = (0.0, 0.0, 0.0)
+    rig = CameraRig(mode=mode, fov_x_deg=FOV_X_DEG, keys=[CameraKey(t=0.0, eye=eye, target=target)])
+    return mode, rig
+
+
 def _place(
-    bbox: dict,
+    row: dict,
     width: int,
     height: int,
-    depth: float,
-) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    x = float(bbox["x"])
-    y = float(bbox["y"])
-    w = float(bbox["w"])
-    h = float(bbox["h"])
+    eye: tuple[float, float, float],
+    target: tuple[float, float, float],
+) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
+    oriented = row.get("oriented") if isinstance(row.get("oriented"), dict) else None
+    bbox = row["bbox"]
+    if oriented:
+        cx = float(oriented["cx"])
+        cy = float(oriented["cy"])
+        box_w = float(oriented["w"])
+        box_h = float(oriented["h"])
+        yaw = float(oriented.get("angle_deg") or 0.0)
+    else:
+        cx = float(bbox["x"]) + float(bbox["w"]) / 2.0
+        cy = float(bbox["y"]) + float(bbox["h"]) / 2.0
+        box_w = float(bbox["w"])
+        box_h = float(bbox["h"])
+        yaw = 0.0
+    point, depth = _on_floor(cx * width, cy * height, width, height, eye, target)
     camera = intrinsics(width, height, FOV_X_DEG)
-    u = (x + w / 2.0) * width
-    v = (y + h / 2.0) * height
-    x_cam = (u - camera["cx"]) * depth / camera["fx"]
-    y_cam = (camera["cy"] - v) * depth / camera["fy"]
-    width_m = max(w * width * depth / camera["fx"], 0.02)
-    height_m = max(h * height * depth / camera["fy"], 0.02)
-    # Camera sits on -Y and looks toward +Y. Optical depth is world Y plus that offset.
-    return (x_cam, depth - PLANE_DEPTH_M, y_cam), (width_m, _thickness(width_m, height_m), height_m)
+    width_m = max(box_w * width * depth / camera["fx"], 0.02)
+    height_m = max(box_h * height * depth / camera["fy"], 0.02)
+    size = (width_m, _thickness(width_m, height_m), height_m)
+    return point, size, (_FLOOR_TILT_DEG, 0.0, yaw)
+
+
+def _on_floor(
+    u: float,
+    v: float,
+    width: int,
+    height: int,
+    eye: tuple[float, float, float],
+    target: tuple[float, float, float],
+) -> tuple[tuple[float, float, float], float]:
+    """Where the pixel's ray meets the floor. The returned depth is along the ray."""
+    cam = camera_matrix(np.asarray(eye, dtype=float), np.asarray(target, dtype=float))
+    pixels = intrinsics(width, height, FOV_X_DEG)
+    dx = (u - pixels["cx"]) / pixels["fx"]
+    dy = (pixels["cy"] - v) / pixels["fy"]
+    direction = dx * cam[:3, 0] + dy * cam[:3, 1] - cam[:3, 2]
+    dir_z = float(direction[2])
+    depth = -float(eye[2]) / dir_z if abs(dir_z) > 1e-8 else PLANE_DEPTH_M
+    if depth <= 0.05:
+        depth = PLANE_DEPTH_M
+    point = np.asarray(eye, dtype=float) + depth * direction
+    return (float(point[0]), float(point[1]), 0.0), float(depth)
 
 
 def _thickness(width_m: float, height_m: float) -> float:
     return max(min(width_m, height_m) * THICKNESS, 0.02)
-
-
-def _median_size(poses: list[tuple[tuple[float, float, float], tuple[float, float, float]]]) -> tuple[float, float, float]:
-    widths = sorted(item[1][0] for item in poses)
-    heights = sorted(item[1][2] for item in poses)
-    mid = len(poses) // 2
-    width_m = widths[mid]
-    height_m = heights[mid]
-    return (width_m, _thickness(width_m, height_m), height_m)
-
-
-def _depths(grouped: dict[str, list[dict]]) -> dict[str, float]:
-    """Larger boxes are closer. One object stays on the reference depth."""
-    areas = {ref: _median_area(rows) for ref, rows in grouped.items()}
-    ordered = sorted(areas, key=lambda ref: areas[ref], reverse=True)
-    if len(ordered) < 2:
-        return {ref: PLANE_DEPTH_M for ref in ordered}
-    span = DEPTH_FAR - DEPTH_NEAR
-    return {
-        ref: PLANE_DEPTH_M * (DEPTH_NEAR + span * (index / (len(ordered) - 1)))
-        for index, ref in enumerate(ordered)
-    }
-
-
-def _median_area(rows: list[dict]) -> float:
-    areas = sorted(float(row["bbox"]["w"]) * float(row["bbox"]["h"]) for row in rows)
-    return areas[len(areas) // 2]
 
 
 def _group(tracks: list[dict], span: float) -> dict[str, list[dict]]:
@@ -224,13 +248,14 @@ def _group(tracks: list[dict], span: float) -> dict[str, list[dict]]:
         ref = str(item.get("track_ref") or "")
         if not ref:
             continue
-        grouped.setdefault(ref, []).append(
-            {
-                "timestamp": min(span, max(0.0, timestamp)),
-                "bbox": bbox,
-                "label": str(item.get("label") or ref),
-            }
-        )
+        kept_row = {
+            "timestamp": min(span, max(0.0, timestamp)),
+            "bbox": bbox,
+            "label": str(item.get("label") or ref),
+        }
+        if isinstance(item.get("oriented"), dict):
+            kept_row["oriented"] = item["oriented"]
+        grouped.setdefault(ref, []).append(kept_row)
     for rows in grouped.values():
         rows.sort(key=lambda row: row["timestamp"])
         kept = []
