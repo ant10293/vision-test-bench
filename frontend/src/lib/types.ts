@@ -171,6 +171,7 @@ export interface Observation {
   provenance: string;
   evidence_note: string;
   continuity: string;
+  confidence: number | null;
   coordinate_frame: string;
   camera_compensated: boolean;
   frame_id: string | null;

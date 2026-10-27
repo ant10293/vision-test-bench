@@ -518,6 +518,33 @@ def test_a_follow_up_box_on_a_different_surface_is_rejected():
     assert not same_surface(gray, solid(178, 201, 225))
 
 
+def test_a_located_box_keeps_its_confidence_and_a_bad_box_is_still_rejected():
+    from app.pipeline.locate_pass import _parse
+
+    scored = _parse(
+        '{"observations":[{"timestamp":6,"visibility":"visible","bbox":{"x":0.5,"y":0.2,"w":0.08,"h":0.025},"confidence":0.42}]}',
+        {6.0},
+    )
+    assert scored == [(6.0, BBox(x=0.5, y=0.2, w=0.08, h=0.025), "visible", 0.42)]
+    observations = [_obs("Object_1", float(t), 0.5, 0.2, 0.08, 0.025) for t in range(4)]
+    document = apply_located(_doc(observations), "Object_1", scored)
+    added = next(item for item in document.observations if item.timestamp == 6)
+    assert added.confidence == 0.42
+
+    too_big = _parse(
+        '{"observations":[{"timestamp":6,"visibility":"visible","bbox":{"x":0.4,"y":0.4,"w":0.2,"h":0.15},"confidence":0.9}]}',
+        {6.0},
+    )
+    rejected = apply_located(_doc(observations), "Object_1", too_big)
+    assert all(item.timestamp != 6 for item in rejected.observations)
+
+    absent = _parse(
+        '{"observations":[{"timestamp":6,"visibility":"absent","bbox":null,"confidence":0.8}]}',
+        {6.0},
+    )
+    assert absent[0][3] is None
+
+
 def test_a_located_box_cannot_be_a_larger_part():
     assert box_fits(0.001, 0.002)
     assert not box_fits(0.03, 0.002)

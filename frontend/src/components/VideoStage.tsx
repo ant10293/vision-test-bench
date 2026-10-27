@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type Pointer
 import { api } from "../lib/api";
 import type { Bundle, TrackPointSample } from "../lib/types";
 import { observationsAt, tracksAt } from "../lib/analysis";
+import { formatConfidence } from "../lib/confidence";
 import { humanize, labeledId } from "../lib/humanize";
 import { panStage, stageZoomByWheel, clampStageView, type StageView } from "../lib/stageZoom";
 import { labelSpan, wrapLines } from "../lib/wrapText";
@@ -274,6 +275,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
               const lines = label ? wrapLines(label, span.width, labelWidth) : [];
               const anchor = Math.max(LABEL_SIZE, y - 4);
               const firstBaseline = Math.max(LABEL_SIZE, anchor - Math.max(0, lines.length - 1) * LABEL_LINE);
+              const score = layers.confidence && obs.confidence != null ? formatConfidence(obs.confidence) : "";
               return (
                 <g key={`${obs.id}-${fontReady ? "font" : "fallback"}`}>
                   <rect
@@ -292,6 +294,9 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
                         <tspan key={index} x={span.x} dy={index === 0 ? 0 : LABEL_LINE}>{line}</tspan>
                       ))}
                     </text>
+                  )}
+                  {score && (
+                    <text x={x} y={y + 14} fill={color} fontSize={11} fontFamily="IBM Plex Sans, sans-serif">{score}</text>
                   )}
                 </g>
               );
@@ -321,6 +326,9 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
           </select>
         </label>
         <button className="btn" onClick={() => useInspector.getState().setOverlay(!overlay)}>{overlay ? "Hide boxes" : "Show boxes"}</button>
+        <button className="btn" aria-pressed={layers.confidence} onClick={() => useInspector.getState().setLayer("confidence", !layers.confidence)}>
+          {layers.confidence ? "Hide confidence" : "Show confidence"}
+        </button>
         <button className="btn" aria-pressed={layers.tracks} onClick={() => useInspector.getState().setLayer("tracks", !layers.tracks)}>
           {layers.tracks ? "Hide tracks" : "Show tracks"}
         </button>

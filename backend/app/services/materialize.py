@@ -83,6 +83,7 @@ def materialize(
             frame_id=frame.id if frame else None,
             sharpness=item.sharpness,
             occlusion=item.occlusion,
+            confidence=item.confidence,
             continuity=item.continuity.value if hasattr(item.continuity, "value") else str(item.continuity),
             coordinate_frame=item.coordinate_frame,
             camera_compensated=item.camera_compensated,

@@ -361,6 +361,7 @@ def _observations(session, revision_id: str) -> list[dict]:
             "evidence_note": row.evidence_note,
             "frame_id": row.frame_id,
             "continuity": row.continuity,
+            "confidence": row.confidence,
             "coordinate_frame": row.coordinate_frame,
             "camera_compensated": row.camera_compensated,
             "track_ref": row.track_ref,

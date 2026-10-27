@@ -58,6 +58,7 @@ _SCHEMA = {
                             {"type": "null"},
                         ]
                     },
+                    "confidence": {"anyOf": [{"type": "number"}, {"type": "null"}]},
                 },
                 "required": ["timestamp", "visibility", "bbox"],
             },
@@ -200,20 +201,22 @@ async def _one(session, run, document, frames, object_id, times, secret, transpo
     return apply_located(document, object_id, _on_the_same_surface(crop, frames, found))
 
 
-def _on_the_same_surface(reference, frames: list[FrameAsset], found: list[tuple[float, BBox | None, str]]):
+def _on_the_same_surface(
+    reference, frames: list[FrameAsset], found: list[tuple[float, BBox | None, str, float | None]]
+):
     """Drop a follow-up box whose pixels are a different surface from the reference crop."""
     kept = []
-    for timestamp, bbox, visibility in found:
+    for timestamp, bbox, visibility, confidence in found:
         if bbox is None:
-            kept.append((timestamp, bbox, visibility))
+            kept.append((timestamp, bbox, visibility, None))
             continue
         frame = _frame_at(frames, timestamp)
         image = cv2.imread(str(_stored(frame))) if frame is not None else None
         candidate = _crop(image, bbox, pad=0.0) if image is not None else None
         if candidate is not None and candidate.size and same_surface(reference, candidate):
-            kept.append((timestamp, bbox, visibility))
+            kept.append((timestamp, bbox, visibility, confidence))
         else:
-            kept.append((timestamp, None, visibility))
+            kept.append((timestamp, None, visibility, None))
     return kept
 
 
@@ -245,7 +248,7 @@ def _fraction_box(raw: dict, width: int, height: int) -> BBox | None:
 
 def _parse(
     text: str, allowed: set[float], sizes: dict[float, tuple[int, int]] | None = None
-) -> list[tuple[float, BBox | None, str]]:
+) -> list[tuple[float, BBox | None, str, float | None]]:
     try:
         payload = extract_json_object(text)
     except ParseFailure:
@@ -269,8 +272,21 @@ def _parse(
             width, height = _frame_size(sizes or {}, timestamp)
             bbox = _fraction_box(raw, width, height)
         visibility = str(row.get("visibility") or "visible")
-        found.append((timestamp, bbox, visibility))
+        found.append((timestamp, bbox, visibility, None if bbox is None else _score(row.get("confidence"))))
     return found
+
+
+def _score(raw) -> float | None:
+    """A model's 0–1 judgment. Anything else is left unset."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        score = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if score != score:
+        return None
+    return score
 
 
 def _frame_size(sizes: dict[float, tuple[int, int]], timestamp: float) -> tuple[int, int]:

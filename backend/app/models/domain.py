@@ -52,6 +52,7 @@ class ObjectObservation(Base):
     frame_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     sharpness: Mapped[float | None] = mapped_column(Float, nullable=True)
     occlusion: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     continuity: Mapped[str] = mapped_column(String(32), default="continuous")
     coordinate_frame: Mapped[str] = mapped_column(String(40), default="image")
     camera_compensated: Mapped[bool] = mapped_column(Boolean, default=False)

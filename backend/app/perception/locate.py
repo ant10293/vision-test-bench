@@ -112,7 +112,7 @@ def box_fits(area: float, reference: float) -> bool:
 def apply_located(
     document: AnalysisDocument,
     object_id: str,
-    found: list[tuple[float, BBox | None, str]],
+    found: list[tuple],
 ) -> AnalysisDocument:
     """Add boxes the follow-up look returned, when they fit this part."""
     reference = reference_time(document.observations, object_id)
@@ -130,7 +130,7 @@ def apply_located(
             continue
         others.setdefault(round(item.timestamp, 3), []).append(item.bbox)
     added: list[ObservationPrediction] = []
-    for timestamp, bbox, visibility in found:
+    for timestamp, bbox, visibility, confidence in (_with_confidence(item) for item in found):
         key = round(timestamp, 3)
         if bbox is None or visibility == "absent":
             continue
@@ -158,6 +158,7 @@ def apply_located(
                     frame_timestamps=[timestamp],
                 ),
                 continuity=Continuity.REASSOCIATED,
+                confidence=confidence,
             )
         )
     if not added:
@@ -165,6 +166,12 @@ def apply_located(
     observations = [*document.observations, *added]
     observations.sort(key=lambda item: (item.timestamp, item.object_local_id))
     return document.model_copy(update={"observations": observations})
+
+
+def _with_confidence(item: tuple) -> tuple[float, BBox | None, str, float | None]:
+    """Older callers pass timestamp, box, and visibility. A score is optional and does not decide acceptance."""
+    timestamp, bbox, visibility, *rest = item
+    return timestamp, bbox, visibility, rest[0] if rest else None
 
 
 def _iou(a: BBox, b: BBox) -> float:
