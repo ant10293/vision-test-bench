@@ -522,14 +522,29 @@ def test_a_located_box_keeps_its_confidence_and_a_bad_box_is_still_rejected():
     from app.pipeline.locate_pass import _parse
 
     scored = _parse(
-        '{"observations":[{"timestamp":6,"visibility":"visible","bbox":{"x":0.5,"y":0.2,"w":0.08,"h":0.025},"confidence":0.42}]}',
+        '{"observations":[{"timestamp":6,"visibility":"visible","bbox":{"x":0.5,"y":0.2,"w":0.08,"h":0.025},"confidence":0.75}]}',
         {6.0},
     )
-    assert scored == [(6.0, BBox(x=0.5, y=0.2, w=0.08, h=0.025), "visible", 0.42)]
+    assert scored == [(6.0, BBox(x=0.5, y=0.2, w=0.08, h=0.025), "visible", 0.75)]
     observations = [_obs("Object_1", float(t), 0.5, 0.2, 0.08, 0.025) for t in range(4)]
     document = apply_located(_doc(observations), "Object_1", scored)
     added = next(item for item in document.observations if item.timestamp == 6)
-    assert added.confidence == 0.42
+    assert added.confidence == 0.75
+
+    glare = _parse(
+        '{"observations":[{"timestamp":6,"visibility":"partial","bbox":{"x":0.5,"y":0.2,"w":0.08,"h":0.025},"confidence":0.61}]}',
+        {6.0},
+    )
+    left_out = apply_located(_doc(observations), "Object_1", glare)
+    assert all(item.timestamp != 6 for item in left_out.observations)
+
+    at_floor = [(6.0, BBox(x=0.5, y=0.2, w=0.08, h=0.025), "visible", 0.70)]
+    kept = apply_located(_doc(observations), "Object_1", at_floor)
+    assert next(item for item in kept.observations if item.timestamp == 6).confidence == 0.70
+
+    unscored = [(6.0, BBox(x=0.5, y=0.2, w=0.08, h=0.025), "visible")]
+    still = apply_located(_doc(observations), "Object_1", unscored)
+    assert next(item for item in still.observations if item.timestamp == 6).confidence is None
 
     too_big = _parse(
         '{"observations":[{"timestamp":6,"visibility":"visible","bbox":{"x":0.4,"y":0.4,"w":0.2,"h":0.15},"confidence":0.9}]}',

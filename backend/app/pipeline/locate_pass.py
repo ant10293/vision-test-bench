@@ -4,6 +4,7 @@ The scene pass names every object at once. It drops a part whose pose changed,
 or it draws that part's id on a neighbor. Extent matching removes the neighbor's
 box. This pass asks only where the missing part is, and only on the frames
 where its own box is absent. A box that comes back larger than the part is rejected.
+A box the model scores under 70% is rejected. A box with no score is still eligible.
 """
 
 from __future__ import annotations

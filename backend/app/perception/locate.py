@@ -18,6 +18,9 @@ from app.schemas.enums import Continuity, EvidenceClass, Provenance, Visibility
 # A follow-up box may be rotated. It may not be a different surface, such as skin.
 SATURATION_GAP = 40
 CHROMA_GAP = 30
+# The scene pass already left this frame out. A score under 70% is the glare
+# case: the second look boxed a bright patch and said it was unsure.
+MIN_CONFIDENCE = 0.70
 
 TAIL_FRAMES = 3
 
@@ -114,7 +117,10 @@ def apply_located(
     object_id: str,
     found: list[tuple],
 ) -> AnalysisDocument:
-    """Add boxes the follow-up look returned, when they fit this part."""
+    """Add boxes the follow-up look returned, when they fit this part.
+
+    A reported score under 70% is left out. A box with no score is still eligible.
+    """
     reference = reference_time(document.observations, object_id)
     if reference is None or reference.bbox is None:
         return document
@@ -133,6 +139,8 @@ def apply_located(
     for timestamp, bbox, visibility, confidence in (_with_confidence(item) for item in found):
         key = round(timestamp, 3)
         if bbox is None or visibility == "absent":
+            continue
+        if confidence is not None and confidence < MIN_CONFIDENCE:
             continue
         if (key, object_id) in occupied:
             continue
@@ -169,7 +177,7 @@ def apply_located(
 
 
 def _with_confidence(item: tuple) -> tuple[float, BBox | None, str, float | None]:
-    """Older callers pass timestamp, box, and visibility. A score is optional and does not decide acceptance."""
+    """Older callers pass timestamp, box, and visibility. A missing score stays eligible."""
     timestamp, bbox, visibility, *rest = item
     return timestamp, bbox, visibility, rest[0] if rest else None
 
