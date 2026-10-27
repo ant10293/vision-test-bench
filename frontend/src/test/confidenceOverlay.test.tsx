@@ -63,8 +63,11 @@ afterEach(() => {
 describe("confidence on the video overlay", () => {
   it("draws the model score as a percent and hides it without changing the box", () => {
     const view = stage();
-    expect(screen.getByText("42%")).toBeInTheDocument();
-    expect(view.container.querySelector("rect")).not.toBeNull();
+    const score = screen.getByText("42%");
+    const rect = view.container.querySelector("rect");
+    expect(score).toBeInTheDocument();
+    expect(rect).not.toBeNull();
+    expect(Number(score.getAttribute("x"))).toBe(Number(rect?.getAttribute("x")) + 4);
 
     fireEvent.click(screen.getByRole("button", { name: "Hide confidence" }));
 

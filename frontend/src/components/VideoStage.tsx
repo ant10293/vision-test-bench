@@ -12,6 +12,7 @@ import { useInspector } from "../stores/ui";
 const LABEL_SIZE = 14;
 const LABEL_LINE = LABEL_SIZE * 1.2;
 const LABEL_FONT = `${LABEL_SIZE}px "IBM Plex Sans", sans-serif`;
+const CONFIDENCE_INSET = 4;
 
 let labelCanvas: HTMLCanvasElement | null = null;
 
@@ -296,7 +297,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
                     </text>
                   )}
                   {score && (
-                    <text x={x} y={y + 14} fill={color} fontSize={11} fontFamily="IBM Plex Sans, sans-serif">{score}</text>
+                    <text x={x + CONFIDENCE_INSET} y={y + 14} fill={color} fontSize={11} fontFamily="IBM Plex Sans, sans-serif">{score}</text>
                   )}
                 </g>
               );
