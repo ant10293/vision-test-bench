@@ -99,8 +99,10 @@ function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
             }
           }}>Sign in again</button>
         )}
+        {loginUrl && (
+          <a className="btn primary inline-flex items-center" href={loginUrl} target="_blank" rel="noreferrer">Open the Claude sign-in page</a>
+        )}
       </div>
-      {loginUrl && <a className="text-sm text-[var(--blue)]" href={loginUrl} target="_blank" rel="noreferrer">Open the Claude sign-in page</a>}
       {awaiting && (
         <div className="flex flex-wrap items-center gap-2">
           <input className="field" spellCheck={false} placeholder="Paste the sign-in code" value={loginCode} onChange={(event) => setLoginCode(event.target.value)} />
@@ -221,8 +223,10 @@ function CursorCliPanel({ settings }: { settings: CursorCliSettings }) {
             }
           }}>Sign in again</button>
         )}
+        {loginUrl && (
+          <a className="btn primary inline-flex items-center" href={loginUrl} target="_blank" rel="noreferrer">Open the Cursor sign-in page</a>
+        )}
       </div>
-      {loginUrl && <a className="text-sm text-[var(--blue)]" href={loginUrl} target="_blank" rel="noreferrer">Open the Cursor sign-in page</a>}
       {note && <p className="text-sm">{note}</p>}
     </div>
   );
