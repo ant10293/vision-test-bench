@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import cv2
@@ -29,6 +30,7 @@ from app.schemas.analysis import AnalysisDocument, BBox
 from app.schemas.enums import OBJECT_COLORS
 from app.services.storage import data_path, relative
 from app.video.frames import read_bgr, sharpness_score
+from app.video.probe import VideoError
 
 
 def materialize(
@@ -338,6 +340,40 @@ def _extract_images(session, run_id, revision_id, obj: DetectedObject, observati
                 score=score,
             )
         )
+
+
+def cached_observation_crop(session: Session, observation_id: str) -> Path:
+    """Zoomed still of one observation: the boxed region of its frame, with a little margin.
+
+    The file is written once and reused. Curated stills only keep unobstructed, initial,
+    final, and alternate, so the object detail asks for the rest through this path.
+    """
+    dest = data_path("cache", "observation-crops", f"{observation_id}.jpg")
+    if dest.is_file() and dest.stat().st_size > 0:
+        return dest
+    obs = session.get(ObjectObservation, observation_id)
+    if obs is None or not obs.bbox_json or not obs.frame_id:
+        raise ValueError("observation has no frame crop")
+    frame = session.get(FrameAsset, obs.frame_id)
+    if frame is None:
+        raise ValueError("observation frame is missing")
+    path = data_path(*Path(frame.path).parts)
+    if not path.is_file():
+        raise ValueError("observation frame is missing")
+    try:
+        image = read_bgr(path)
+    except VideoError as exc:
+        raise ValueError("observation frame could not be read") from exc
+    crop = _crop(image, BBox.model_validate(obs.bbox_json))
+    if crop.size == 0:
+        raise ValueError("observation crop is empty")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{observation_id}.{os.getpid()}.jpg")
+    if not cv2.imwrite(str(tmp), crop, [int(cv2.IMWRITE_JPEG_QUALITY), 90]):
+        tmp.unlink(missing_ok=True)
+        raise ValueError("observation crop could not be written")
+    tmp.replace(dest)
+    return dest
 
 
 def _crop(image: np.ndarray, bbox: BBox, pad: float = 0.02) -> np.ndarray:

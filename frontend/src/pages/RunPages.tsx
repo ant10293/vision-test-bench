@@ -13,7 +13,7 @@ import { formatLogText } from "../lib/formatLog";
 import { humanize, humanizeText, labeledId } from "../lib/humanize";
 import { objectScene } from "../lib/sceneSlice";
 import { BundleContext, useBundle } from "../lib/bundleContext";
-import type { Bundle } from "../lib/types";
+import type { Bundle, Observation } from "../lib/types";
 import { useInspector } from "../stores/ui";
 import { AudioPage } from "./Audio";
 
@@ -37,11 +37,46 @@ function objectThumbnail(object: Bundle["objects"][number] | null | undefined): 
   return initial?.url || object.primary_image_url;
 }
 
-/** Stills left out of the object gallery: boxed frames, and the crop that duplicates unobstructed. */
+/** Stills left out of the fallback gallery: boxed frames, and the crop that duplicates unobstructed. */
 function isGalleryImage(kind: string) {
   if (kind === "boxed" || kind.endsWith("_boxed")) return false;
   if (kind === "crop" || kind === "primary") return false;
   return true;
+}
+
+const NAMED_STILLS = ["unobstructed", "initial", "final", "alternate"] as const;
+
+type ObjectShot = { id: string; url: string; caption: string };
+
+/** Every boxed observation, as a zoomed crop. Named stills keep their labels when the time matches. */
+function objectShots(object: Bundle["objects"][number], observations: Observation[]): ObjectShot[] {
+  const boxed = observations
+    .filter((item) => item.object_local_id === object.local_id && item.bbox && item.frame_id)
+    .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+  if (boxed.length) {
+    return boxed.map((item) => ({
+      id: item.id,
+      url: `/api/media/observations/${item.id}/crop`,
+      caption: observationCaption(item, object.images),
+    }));
+  }
+  return object.images
+    .filter((image) => image.url && isGalleryImage(image.kind))
+    .map((image) => ({
+      id: image.id,
+      url: image.url,
+      caption: `${humanize(image.kind)} · ${image.timestamp.toFixed(2)}s`,
+    }));
+}
+
+function observationCaption(observation: Observation, images: Bundle["objects"][number]["images"]): string {
+  const time = `${observation.timestamp.toFixed(2)}s`;
+  const roles = NAMED_STILLS.filter((kind) =>
+    images.some((image) => image.kind === kind && Math.abs(image.timestamp - observation.timestamp) < 0.001),
+  ).map((kind) => humanize(kind));
+  if (roles.length) return `${roles.join(", ")} · ${time}`;
+  if (observation.visibility && observation.visibility !== "visible") return `${humanize(observation.visibility)} · ${time}`;
+  return time;
 }
 
 function analysisTab(pathname: string, runId: string): string {
@@ -475,7 +510,7 @@ export function ObjectsPage() {
   const client = useQueryClient();
   const selected = bundle.objects.find((item) => item.local_id === open);
   const selectedThumb = objectThumbnail(selected);
-  const shots = selected?.images.filter((image) => image.url && isGalleryImage(image.kind)) ?? [];
+  const shots = selected ? objectShots(selected, bundle.observations) : [];
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
@@ -518,32 +553,32 @@ export function ObjectsPage() {
               </select>
               <button className="btn" disabled={!mergeDrop} onClick={async () => { await api.mergeObjects(bundle.run.id, selected.local_id, mergeDrop); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Merge</button>
             </div>
-            <div className="flex flex-wrap items-start gap-3">
-              {shots.map((image, index) => (
-                <button
-                  key={image.id}
-                  type="button"
-                  className="block w-fit max-w-full border-0 bg-transparent p-0 text-left"
-                  aria-label={`View ${humanize(image.kind)} at ${image.timestamp.toFixed(2)} seconds`}
-                  onClick={() => setPreview(index)}
-                >
-                  <img src={image.url} alt={humanize(image.kind)} className="h-64 w-auto max-w-full rounded" />
-                  <div className="mt-1 text-[10px] text-[var(--muted)]">{humanize(image.kind)} · {image.timestamp.toFixed(2)}s</div>
-                </button>
-              ))}
-            </div>
-            {preview != null && (
-              <AssetPreview
-                key={`${selected.local_id}:${preview}`}
-                images={shots.map((image) => ({
-                  src: image.url,
-                  filename: `${humanize(image.kind)} · ${image.timestamp.toFixed(2)}s`,
-                }))}
-                startIndex={preview}
-                onClose={() => setPreview(null)}
-              />
-            )}
           </div>
+          <div className="flex flex-wrap items-start gap-3 lg:col-span-2">
+            {shots.map((image, index) => (
+              <button
+                key={image.id}
+                type="button"
+                className="block w-fit max-w-full border-0 bg-transparent p-0 text-left"
+                aria-label={`View ${image.caption}`}
+                onClick={() => setPreview(index)}
+              >
+                <img src={image.url} alt={image.caption} className="h-64 w-auto max-w-full rounded bg-black object-contain" />
+                <div className="mt-1 text-[10px] text-[var(--muted)]">{image.caption}</div>
+              </button>
+            ))}
+          </div>
+          {preview != null && (
+            <AssetPreview
+              key={`${selected.local_id}:${preview}`}
+              images={shots.map((image) => ({
+                src: image.url,
+                filename: image.caption,
+              }))}
+              startIndex={preview}
+              onClose={() => setPreview(null)}
+            />
+          )}
         </div>
       )}
       <PerceptionPanel bundle={bundle} />

@@ -102,6 +102,7 @@ from app.services.ingest import (
     schedule_ingest,
 )
 from app.services.lab_settings import load_settings, save_settings
+from app.services.materialize import cached_observation_crop
 from app.services.locate import locate_dropped_video
 from app.services.storage import data_path, is_external, resolve_stored, safe_filename
 
@@ -591,6 +592,15 @@ def media_object_image(image_id: str, session: Session = Depends(db)) -> FileRes
     if image is None or not image.path:
         raise HTTPException(404, "image not found")
     return FileResponse(resolve_stored(image.path))
+
+
+@router.get("/media/observations/{observation_id}/crop")
+def media_observation_crop(observation_id: str, session: Session = Depends(db)) -> FileResponse:
+    try:
+        path = cached_observation_crop(session, observation_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @router.get("/prompts")
