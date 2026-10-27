@@ -8,23 +8,43 @@ id for a different label.
 
 from __future__ import annotations
 
+import json
+import logging
+from dataclasses import dataclass
+
+from app.perception.assignment import iou
 from app.schemas.analysis import (
     AmbiguityPrediction,
     AnalysisDocument,
     DependencyPrediction,
+    Evidence,
     ObservationPrediction,
     RelationshipPrediction,
     StatePrediction,
     TransitionPrediction,
     WorkflowStepPrediction,
 )
+from app.schemas.enums import AmbiguityKind, EvidenceClass, Provenance, Visibility
+
+logger = logging.getLogger(__name__)
+
+# Two boxes that cover mostly the same pixels are the same localization.
+# This matches the shared-frame overlap already used to treat boxes as one part.
+# It is not a detection-sensitivity setting.
+AGREEMENT_IOU = 0.5
+
+_EVIDENCE_RANK = {
+    EvidenceClass.DIRECTLY_OBSERVED: 2,
+    EvidenceClass.INFERRED: 1,
+    EvidenceClass.UNKNOWN: 0,
+}
 
 
 def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDocument]) -> AnalysisDocument:
     if len(partials) < 2:
         return merged
     maps = [_object_id_map(partial, merged) for partial in partials]
-    observations = _union_observations(partials, maps, merged)
+    observations, conflicts = _union_observations(partials, maps, merged)
     states = list(merged.states) or _states(partials, maps)
     transitions = list(merged.transitions) or _transitions(partials, maps)
     relationships = list(merged.relationships) or _relationships(partials, maps)
@@ -33,6 +53,8 @@ def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDoc
     else:
         steps, dependencies = _workflow(partials, maps)
     ambiguities = list(merged.ambiguities) or _ambiguities(partials, maps)
+    if conflicts:
+        ambiguities = [*ambiguities, *conflicts]
     unchanged = (
         observations == list(merged.observations)
         and states == list(merged.states)
@@ -57,41 +79,241 @@ def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDoc
     )
 
 
+@dataclass(frozen=True)
+class _Candidate:
+    item: ObservationPrediction
+    window_index: int
+    position: int
+    uncertain: bool
+
+
 def _union_observations(
     partials: list[AnalysisDocument],
     maps: list[dict[str, str]],
     merged: AnalysisDocument,
-) -> list[ObservationPrediction]:
-    """Keep a box a window actually saw when the text-only merge leaves that frame out.
+) -> tuple[list[ObservationPrediction], list[AmbiguityPrediction]]:
+    """Choose one observation per object and timestamp.
 
-    The merge's own box wins when both describe the same part at the same time.
-    A window id that was not aligned to a merged part is left out: copying it
-    through would put that part's box on a different object.
+    A box from a window that saw the frame outranks a box from the text-only
+    merge, whatever evidence class the merge assigns itself. Image-bearing
+    windows that disagree are ranked, not averaged. A window id that was not
+    aligned to a merged part is left out: copying it through would put that
+    part's box on a different object.
     """
-    chosen: dict[tuple, ObservationPrediction] = {}
+    groups: dict[tuple, list[_Candidate]] = {}
     order: list[tuple] = []
+    position = 0
+    for window_index, (partial, mapping) in enumerate(zip(partials, maps, strict=True)):
+        uncertain_ids = {obj.local_id: obj.uncertain_identity for obj in partial.objects}
+        for item in partial.observations:
+            if item.object_local_id not in mapping:
+                continue
+            copy = item.model_copy(update={"object_local_id": mapping[item.object_local_id]})
+            key = _key(copy)
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(
+                _Candidate(
+                    item=copy,
+                    window_index=window_index,
+                    position=position,
+                    uncertain=bool(uncertain_ids.get(item.object_local_id)) or _identity_uncertain(item),
+                )
+            )
+            position += 1
 
-    def consider(item: ObservationPrediction, replace: bool) -> None:
-        key = (item.object_local_id, round(float(item.timestamp), 3))
+    used_ids = {item.local_id for item in merged.ambiguities}
+    for partial in partials:
+        used_ids.update(item.local_id for item in partial.ambiguities)
+    chosen: dict[tuple, ObservationPrediction] = {}
+    protected: set[tuple] = set()
+    conflicts: list[AmbiguityPrediction] = []
+    for key in order:
+        selected, conflict = _resolve_image_candidates(key, groups[key], used_ids)
+        chosen[key] = selected
+        if _substantive(selected):
+            protected.add(key)
+        if conflict is not None:
+            conflicts.append(conflict)
+            used_ids.add(conflict.local_id)
+
+    for item in merged.observations:
+        key = _key(item)
         current = chosen.get(key)
         if current is None:
             chosen[key] = item
             order.append(key)
-            return
-        if replace and item.bbox is not None:
+            continue
+        # An image-backed box or an explicit absence stays. A text-only merge
+        # still supplies the last box when no window localized that moment.
+        if key in protected:
+            if _disagrees(current, item):
+                logger.info(
+                    "text-only merge box ignored object=%s timestamp=%s kept=%s rejected=%s",
+                    key[0],
+                    key[1],
+                    _box_list(current),
+                    _box_list(item),
+                )
+            continue
+        if item.bbox is not None:
             chosen[key] = item
-            return
-        if current.bbox is None and item.bbox is not None:
-            chosen[key] = item
+    return [chosen[key] for key in order], conflicts
 
-    for partial, mapping in zip(partials, maps, strict=True):
-        for item in partial.observations:
-            if item.object_local_id not in mapping:
-                continue
-            consider(item.model_copy(update={"object_local_id": mapping[item.object_local_id]}), replace=False)
-    for item in merged.observations:
-        consider(item, replace=True)
-    return [chosen[key] for key in order]
+
+def _resolve_image_candidates(
+    key: tuple,
+    candidates: list[_Candidate],
+    used_ids: set[str],
+) -> tuple[ObservationPrediction, AmbiguityPrediction | None]:
+    substantive = [candidate for candidate in candidates if _substantive(candidate.item)]
+    if not substantive:
+        return candidates[0].item, None
+    best = max(_rank(candidate) for candidate in substantive)
+    top = sorted((candidate for candidate in substantive if _rank(candidate) == best), key=_stable)
+    chosen = top[0]
+    rivals = [
+        candidate
+        for candidate in substantive
+        if candidate is not chosen and not _same_place(candidate.item, chosen.item)
+    ]
+    if not rivals:
+        return chosen.item, None
+    unresolved = any(not _same_place(candidate.item, chosen.item) for candidate in top[1:])
+    reason = _selection_reason(chosen, rivals, unresolved)
+    return chosen.item, _conflict_record(key, substantive, chosen, reason, unresolved, used_ids)
+
+
+def _rank(candidate: _Candidate) -> tuple[int, int]:
+    return (_EVIDENCE_RANK.get(candidate.item.evidence.classification, 0), 0 if candidate.uncertain else 1)
+
+
+def _stable(candidate: _Candidate) -> tuple[int, int]:
+    return (candidate.window_index, candidate.position)
+
+
+def _selection_reason(chosen: _Candidate, rivals: list[_Candidate], unresolved: bool) -> str:
+    if unresolved:
+        return (
+            "Equally supported image-bearing observations disagree, so the earliest one "
+            "is kept and the conflict stays unresolved."
+        )
+    rival_classes = {candidate.item.evidence.classification for candidate in rivals}
+    if (
+        chosen.item.evidence.classification == EvidenceClass.DIRECTLY_OBSERVED
+        and EvidenceClass.INFERRED in rival_classes
+    ):
+        note = ""
+        if any(candidate.uncertain for candidate in rivals):
+            note = " The rejected candidate also marks identity as uncertain."
+        return "A directly observed image-bearing box is kept over an inferred one." + note
+    if any(candidate.uncertain for candidate in rivals) and not chosen.uncertain:
+        return "The identity-uncertain observation was not selected."
+    if _explicit_absence(chosen.item):
+        return "A directly observed absence is kept over a weaker contradictory box."
+    return "The stronger image-bearing observation was kept."
+
+
+def _conflict_record(
+    key: tuple,
+    candidates: list[_Candidate],
+    chosen: _Candidate,
+    reason: str,
+    unresolved: bool,
+    used_ids: set[str],
+) -> AmbiguityPrediction:
+    object_id, timestamp = key
+    payload = {
+        "object_local_id": object_id,
+        "timestamp": timestamp,
+        "candidate_count": len(candidates),
+        "candidates": [_candidate_payload(candidate) for candidate in candidates],
+        "selected": _candidate_payload(chosen),
+        "reason": reason,
+        "unresolved": unresolved,
+    }
+    listed = "; ".join(
+        f"window {candidate.window_index} {candidate.item.evidence.classification.value} "
+        f"bbox={_box_list(candidate.item)} uncertain={candidate.uncertain}"
+        for candidate in candidates
+    )
+    return AmbiguityPrediction(
+        local_id=_fresh("Ambiguity", used_ids),
+        kind=AmbiguityKind.CONFLICTING_EVIDENCE,
+        description=(
+            f"{object_id} at {timestamp:.3f}s has {len(candidates)} image-bearing observations that "
+            f"do not agree. Selected window {chosen.window_index} "
+            f"({chosen.item.evidence.classification.value}). {reason} Candidates: {listed}"
+        ),
+        time_start=timestamp,
+        time_end=timestamp,
+        object_local_ids=[object_id],
+        alternative=reason,
+        evidence=Evidence(
+            classification=EvidenceClass.UNKNOWN,
+            provenance=Provenance.DETERMINISTIC,
+            note=json.dumps(payload, sort_keys=True),
+            frame_timestamps=[timestamp],
+        ),
+    )
+
+
+def _candidate_payload(candidate: _Candidate) -> dict:
+    return {
+        "window_index": candidate.window_index,
+        "bbox": _box_list(candidate.item),
+        "evidence": candidate.item.evidence.classification.value,
+        "visibility": candidate.item.visibility.value,
+        "identity_uncertain": candidate.uncertain,
+    }
+
+
+def _key(item: ObservationPrediction) -> tuple:
+    return (item.object_local_id, round(float(item.timestamp), 3))
+
+
+def _explicit_absence(item: ObservationPrediction) -> bool:
+    return item.visibility == Visibility.ABSENT
+
+
+def _substantive(item: ObservationPrediction) -> bool:
+    return item.bbox is not None or _explicit_absence(item)
+
+
+def _identity_uncertain(item: ObservationPrediction) -> bool:
+    note = item.evidence.note.casefold()
+    return "identity" in note and "uncertain" in note
+
+
+def _same_place(left: ObservationPrediction, right: ObservationPrediction) -> bool:
+    if _explicit_absence(left) and _explicit_absence(right):
+        return True
+    if _explicit_absence(left) or _explicit_absence(right):
+        return False
+    if left.bbox is None or right.bbox is None:
+        return False
+    return iou(_tuple(left), _tuple(right)) >= AGREEMENT_IOU
+
+
+def _disagrees(kept: ObservationPrediction, incoming: ObservationPrediction) -> bool:
+    if incoming.bbox is None:
+        return False
+    if _explicit_absence(kept) or kept.bbox is None:
+        return True
+    return iou(_tuple(kept), _tuple(incoming)) < AGREEMENT_IOU
+
+
+def _tuple(item: ObservationPrediction) -> tuple[float, float, float, float]:
+    box = item.bbox
+    assert box is not None
+    return (box.x, box.y, box.w, box.h)
+
+
+def _box_list(item: ObservationPrediction) -> list[float] | None:
+    if item.bbox is None or _explicit_absence(item):
+        return None
+    return [item.bbox.x, item.bbox.y, item.bbox.w, item.bbox.h]
 
 
 def _object_id_map(partial: AnalysisDocument, merged: AnalysisDocument) -> dict[str, str]:
