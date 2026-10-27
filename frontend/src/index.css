@@ -130,6 +130,29 @@ select.field.stretch {
 .tag.unknown { color: var(--rose); border-color: #6a3036; }
 .tag.fixture { color: var(--amber); border-color: #6a5424; }
 
+/* Confidence on an object still. Sits inside the image, top right, over any background. */
+.shot-frame {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  line-height: 0;
+}
+.shot-score {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  z-index: 1;
+  padding: 0.12rem 0.35rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, #090b10 78%, transparent);
+  color: #fff;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.2;
+  pointer-events: none;
+}
+
 /* Asset upload, from automated-content-builder's drop zone, on this lab's dark surfaces. */
 .drop-zone {
   border: 1.5px dashed color-mix(in srgb, var(--text) 22%, transparent);

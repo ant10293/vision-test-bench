@@ -9,6 +9,7 @@ import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
 import { WorkflowGraph } from "../components/WorkflowGraph";
 import { api, evidenceClass, formatTime, formatUsd, formatWhen } from "../lib/api";
+import { formatConfidence } from "../lib/confidence";
 import { formatLogText } from "../lib/formatLog";
 import { humanize, humanizeText, labeledId } from "../lib/humanize";
 import { objectScene } from "../lib/sceneSlice";
@@ -46,18 +47,20 @@ function isGalleryImage(kind: string) {
 
 const NAMED_STILLS = ["unobstructed", "initial", "final", "alternate"] as const;
 
-type ObjectShot = { id: string; url: string; caption: string };
+type ObjectShot = { id: string; url: string; caption: string; confidence: number | null };
 
 /** Every boxed observation, as a zoomed crop. Named stills keep their labels when the time matches. */
 function objectShots(object: Bundle["objects"][number], observations: Observation[]): ObjectShot[] {
-  const boxed = observations
-    .filter((item) => item.object_local_id === object.local_id && item.bbox && item.frame_id)
+  const owned = observations.filter((item) => item.object_local_id === object.local_id);
+  const boxed = owned
+    .filter((item) => item.bbox && item.frame_id)
     .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
   if (boxed.length) {
     return boxed.map((item) => ({
       id: item.id,
       url: `/api/media/observations/${item.id}/crop`,
       caption: observationCaption(item, object.images),
+      confidence: item.confidence,
     }));
   }
   return object.images
@@ -66,7 +69,14 @@ function objectShots(object: Bundle["objects"][number], observations: Observatio
       id: image.id,
       url: image.url,
       caption: `${humanize(image.kind)} · ${image.timestamp.toFixed(2)}s`,
+      confidence: owned.find((item) => Math.abs(item.timestamp - image.timestamp) < 0.001)?.confidence ?? null,
     }));
+}
+
+function shotLabel(shot: ObjectShot): string {
+  const view = `View ${shot.caption}`;
+  if (shot.confidence == null) return view;
+  return `${view}, ${formatConfidence(shot.confidence)} confidence`;
 }
 
 function observationCaption(observation: Observation, images: Bundle["objects"][number]["images"]): string {
@@ -560,10 +570,15 @@ export function ObjectsPage() {
                 key={image.id}
                 type="button"
                 className="block w-fit max-w-full border-0 bg-transparent p-0 text-left"
-                aria-label={`View ${image.caption}`}
+                aria-label={shotLabel(image)}
                 onClick={() => setPreview(index)}
               >
-                <img src={image.url} alt={image.caption} className="h-64 w-auto max-w-full rounded bg-black object-contain" />
+                <span className="shot-frame">
+                  <img src={image.url} alt="" className="h-64 w-auto max-w-full rounded bg-black object-contain" />
+                  {image.confidence != null && (
+                    <span className="shot-score">{formatConfidence(image.confidence)}</span>
+                  )}
+                </span>
                 <div className="mt-1 text-[10px] text-[var(--muted)]">{image.caption}</div>
               </button>
             ))}
