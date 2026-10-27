@@ -10,17 +10,28 @@ angle, not a new object.
 
 from __future__ import annotations
 
-from app.perception.assignment import iou
+import numpy as np
+
+from app.perception.assignment import iou, linear_assignment
 from app.schemas.analysis import AnalysisDocument, BBox, ObservationPrediction
 
 # A shared frame decides identity when the two boxes cover mostly the same pixels.
 MATCH_IOU = 0.5
 # A later box this close to a known part is another view of that part.
 TOUCH_GAP = 0.04
+# Pairs below MATCH_IOU stay out of the assignment, so a weak overlap cannot
+# trade places with a real one.
+_UNMATCHED = 1e3
 
 
 def align_to_roster(roster: AnalysisDocument, later: AnalysisDocument) -> AnalysisDocument:
-    """Rewrite a later window onto the first window's ids."""
+    """Rewrite a later window onto the previous window's ids.
+
+    The previous window already carries the global ids. Only frames the two
+    windows both observed are evidence. A part that does not overlap a known
+    part there keeps its own id, or receives a new one when that id is already
+    a different part.
+    """
     if not roster.objects or not later.observations:
         return later
     mapping = _mapping(roster, later)
@@ -58,42 +69,95 @@ def _mapping(roster: AnalysisDocument, later: AnalysisDocument) -> dict[str, str
     shared = _times(roster) & _times(later)
     roster_boxes = _boxes(roster)
     later_boxes = _boxes(later)
-    matched: dict[str, str] = {}
-    for later_id in later_ids:
-        best_id = ""
-        best = 0.0
-        for roster_id in roster_ids:
-            peak = 0.0
-            for timestamp in shared:
-                left = later_boxes.get((later_id, timestamp))
-                right = roster_boxes.get((roster_id, timestamp))
-                if left is None or right is None:
-                    continue
-                peak = max(peak, iou(_tuple(left), _tuple(right)))
-            if peak > best:
-                best = peak
-                best_id = roster_id
-        if best_id and best >= MATCH_IOU:
-            matched[later_id] = best_id
+    scores = _pair_scores(roster_ids, later_ids, shared, roster_boxes, later_boxes)
+    matched = _assign(later_ids, roster_ids, scores)
     roster_set = set(roster_ids)
-    matched.update(
-        _touch_map(
+    # A box that is already on a shared frame was compared directly. Touching a
+    # neighbor there is not another copy of that neighbor. With no shared frame
+    # at all, touch has nothing to attach to.
+    if shared:
+        present = {
+            item.object_local_id
+            for item in later.observations
+            if round(float(item.timestamp), 3) in shared
+        }
+        for later_id, target in _touch_map(
             later,
             roster_set,
             matched,
             {obj.local_id: obj.label for obj in later.objects},
             {obj.local_id: obj.label for obj in roster.objects},
-        )
-    )
-    used = set(roster_set) | set(matched.values())
+        ).items():
+            if later_id in matched or later_id in present:
+                continue
+            matched[later_id] = target
+    used = set(roster_set) | set(later_ids) | set(matched.values())
+    claimed = set(matched.values())
     for later_id in later_ids:
         if later_id in matched or later_id not in roster_set:
             continue
-        # This window reused a roster id for a part that did not match it.
+        same = scores.get((later_id, later_id), 0.0)
+        others = max(
+            (scores.get((later_id, roster_id), 0.0) for roster_id in roster_ids if roster_id != later_id),
+            default=0.0,
+        )
+        # The same id is still the best explanation, and nobody else took it.
+        # A reused id with no overlap, or a worse overlap than another part, is
+        # not that part.
+        if later_id not in claimed and same > 0.0 and same > others:
+            continue
         fresh = _fresh_id(used)
         matched[later_id] = fresh
         used.add(fresh)
+        claimed.add(fresh)
     return {later_id: target for later_id, target in matched.items() if later_id != target}
+
+
+def _pair_scores(
+    roster_ids: list[str],
+    later_ids: list[str],
+    shared: set[float],
+    roster_boxes: dict[tuple[str, float], BBox],
+    later_boxes: dict[tuple[str, float], BBox],
+) -> dict[tuple[str, str], float]:
+    """Mean overlap on the frames where both windows boxed that pair.
+
+    One spiked frame does not outvote the rest of the boundary. Two parts that
+    cover each other on a single shared frame stay distinguishable when the
+    other shared frame puts each box back on its own part.
+    """
+    scores: dict[tuple[str, str], float] = {}
+    for later_id in later_ids:
+        for roster_id in roster_ids:
+            values: list[float] = []
+            for timestamp in shared:
+                left = later_boxes.get((later_id, timestamp))
+                right = roster_boxes.get((roster_id, timestamp))
+                if left is None or right is None:
+                    continue
+                values.append(iou(_tuple(left), _tuple(right)))
+            if values:
+                scores[(later_id, roster_id)] = sum(values) / len(values)
+    return scores
+
+
+def _assign(later_ids: list[str], roster_ids: list[str], scores: dict[tuple[str, str], float]) -> dict[str, str]:
+    """Give each later part at most one roster part, and each roster part once."""
+    if not later_ids or not roster_ids:
+        return {}
+    cost = np.full((len(later_ids), len(roster_ids)), _UNMATCHED, dtype=float)
+    for row, later_id in enumerate(later_ids):
+        for column, roster_id in enumerate(roster_ids):
+            score = scores.get((later_id, roster_id), 0.0)
+            if score >= MATCH_IOU:
+                cost[row, column] = 1.0 - score
+    matched: dict[str, str] = {}
+    for row, column in linear_assignment(cost):
+        later_id = later_ids[row]
+        roster_id = roster_ids[column]
+        if scores.get((later_id, roster_id), 0.0) >= MATCH_IOU:
+            matched[later_id] = roster_id
+    return matched
 
 
 def _touch_map(
@@ -113,8 +177,10 @@ def _touch_map(
     # shared-word count, target id, and whether another part tied that count.
     best: dict[str, tuple[int, str, bool]] = {}
     for (object_id, timestamp), box in boxes.items():
-        target = assigned.get(object_id, object_id)
-        if target not in roster_ids and object_id not in assigned:
+        # A matching local id is not evidence. Only a part already matched to
+        # the roster can lend that identity to a second view.
+        target = assigned.get(object_id)
+        if target is None or target not in roster_ids:
             continue
         for (other_id, other_time), other in boxes.items():
             if other_time != timestamp or other_id == object_id or other_id in assigned:

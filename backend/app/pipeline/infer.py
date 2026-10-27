@@ -179,7 +179,9 @@ async def produce_document(
             schema,
         )
         if partials:
-            text_doc = align_to_roster(partials[0], text_doc)
+            # The previous window is the one that shares this boundary.
+            # The first window often does not.
+            text_doc = align_to_roster(partials[-1], text_doc)
         partials.append(text_doc)
     if len(partials) == 1:
         return _with_perception(partials[0], spatial_document)
