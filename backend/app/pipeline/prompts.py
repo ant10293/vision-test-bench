@@ -31,6 +31,7 @@ For each object provide a stable local_id (Object_1, Object_2, ...), a cautious 
 visual characteristics, initial state, whether it is manipulated, and whether identity is uncertain.
 Avoid naming an object more precisely than the pictures support.
 Also list timestamped observations with normalized bounding boxes (x, y, w, h in 0..1, origin top-left).
+When an observation has a box, set confidence to your score from 0 to 1 that the box is this object and only this object. Leave confidence null when there is no box. The score is your judgment, not a measured probability.
 On every supplied frame, include one observation for each object that is even partly visible, with its own
 tight box around that object alone. A box around a larger object does not count for a smaller part that
 can still be distinguished, including a part resting on it, around it, or partly covered by a hand.
@@ -120,7 +121,8 @@ The part may be rotated, partly covered by fingers, or seen at a changed angle. 
 
 If the part is fully hidden or not in that frame, set bbox to null and visibility to absent. Do not invent a box, and do not substitute a different part.
 
-Return JSON only: {"observations": [{"timestamp": number, "visibility": "visible" | "partial" | "absent", "bbox": {"x": number, "y": number, "w": number, "h": number} | null}]}
+Return JSON only: {"observations": [{"timestamp": number, "visibility": "visible" | "partial" | "absent", "bbox": {"x": number, "y": number, "w": number, "h": number} | null, "confidence": number | null}]}
+When the box is present, confidence is your score from 0 to 1 that it is this part and only this part. Use null when there is no box. The score is your judgment, not a measured probability.
 x, y, w, and h are fractions of the full frame, each from 0 to 1, with the origin at the top left.
 Do not return an observation for the reference crop.
 """.strip()

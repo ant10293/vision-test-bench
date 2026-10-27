@@ -97,6 +97,8 @@ class ObservationPrediction(BaseModel):
     evidence: Evidence
     sharpness: float | None = None
     occlusion: float | None = None
+    # The model's own score that this box is this object. Not a measured probability.
+    confidence: float | None = None
     continuity: Continuity = Continuity.CONTINUOUS
     coordinate_frame: Literal["image", "scene_relative_image", "world"] = "image"
     camera_compensated: bool = False

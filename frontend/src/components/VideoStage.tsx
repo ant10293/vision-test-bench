@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type Pointer
 import { api } from "../lib/api";
 import type { Bundle, TrackPointSample } from "../lib/types";
 import { observationsAt, tracksAt } from "../lib/analysis";
+import { formatConfidence, likelyObjectForCandidate } from "../lib/likely";
 import { humanize, labeledId } from "../lib/humanize";
 import { panStage, stageZoomByWheel, clampStageView, type StageView } from "../lib/stageZoom";
 import { labelSpan, wrapLines } from "../lib/wrapText";
@@ -110,7 +111,13 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
     };
   }, []);
 
-  const visible = overlay ? observationsAt(bundle, time) : [];
+  const atPlayhead = overlay ? observationsAt(bundle, time) : [];
+  const visible = atPlayhead.filter((item) => item.continuity !== "uncertain");
+  const candidates = atPlayhead.flatMap((item) => {
+    if (item.continuity !== "uncertain" || !item.bbox) return [];
+    const match = likelyObjectForCandidate(bundle.observations, item);
+    return match ? [{ key: item.id, bbox: item.bbox, match }] : [];
+  });
   const trackHits = tracksAt(bundle.tracks?.points ?? [], time);
   const showTracks = layers.tracks || layers.trajectory || layers.uncertain;
   const src = bundle.video ? bundle.video.playback_url : "";
@@ -274,6 +281,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
               const lines = label ? wrapLines(label, span.width, labelWidth) : [];
               const anchor = Math.max(LABEL_SIZE, y - 4);
               const firstBaseline = Math.max(LABEL_SIZE, anchor - Math.max(0, lines.length - 1) * LABEL_LINE);
+              const score = layers.confidence && obs.confidence != null ? `  ${formatConfidence(obs.confidence)}` : "";
               return (
                 <g key={`${obs.id}-${fontReady ? "font" : "fallback"}`}>
                   <rect
@@ -293,6 +301,25 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
                       ))}
                     </text>
                   )}
+                  {score && (
+                    <text x={x} y={y + 14} fill={color} fontSize={11} fontFamily="IBM Plex Sans, sans-serif">{score.trim()}</text>
+                  )}
+                </g>
+              );
+            })}
+            {candidates.map((item) => {
+              const object = bundle.objects.find((entry) => entry.local_id === item.match.objectId);
+              const name = object ? labeledId(object.local_id, object.label) : item.match.objectId;
+              const x = item.bbox.x * content.vw;
+              const y = item.bbox.y * content.vh;
+              const w = item.bbox.w * content.vw;
+              const h = item.bbox.h * content.vh;
+              return (
+                <g key={item.key}>
+                  <rect x={x} y={y} width={w} height={h} fill="none" stroke="#E6A23C" strokeWidth={2} strokeDasharray="6 4" />
+                  <text x={x} y={Math.max(12, y - 6)} fill="#E6A23C" fontSize={12} fontFamily="IBM Plex Sans, sans-serif">
+                    {`◇ ${name}  ${formatConfidence(item.match.score)}`}
+                  </text>
                 </g>
               );
             })}
@@ -321,6 +348,9 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
           </select>
         </label>
         <button className="btn" onClick={() => useInspector.getState().setOverlay(!overlay)}>{overlay ? "Hide boxes" : "Show boxes"}</button>
+        <button className="btn" aria-pressed={layers.confidence} onClick={() => useInspector.getState().setLayer("confidence", !layers.confidence)}>
+          {layers.confidence ? "Hide confidence" : "Show confidence"}
+        </button>
         <button className="btn" aria-pressed={layers.tracks} onClick={() => useInspector.getState().setLayer("tracks", !layers.tracks)}>
           {layers.tracks ? "Hide tracks" : "Show tracks"}
         </button>

@@ -7,6 +7,7 @@ __pycache__/
 .venv/
 venv/
 backend/.venv/
+backend/.venv-qwen/
 data/
 *.db
 .env
