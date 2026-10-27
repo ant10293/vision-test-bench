@@ -145,6 +145,21 @@ def _account_from(text: str) -> str:
     return mask_account(match.group(0))
 
 
+def _subscription_tier(stdout: str) -> str:
+    """Read the plan name from `agent about --format json`."""
+    try:
+        payload = json.loads(stdout or "")
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        return str(payload.get("subscriptionTier") or "").strip()
+    for line in (stdout or "").splitlines():
+        if line.lower().startswith("subscription tier"):
+            _, _, value = line.partition("Tier")
+            return value.strip()
+    return ""
+
+
 def _signed_out(text: str) -> bool:
     lowered = text.lower()
     return any(phrase in lowered for phrase in _SIGNED_OUT)
@@ -185,6 +200,14 @@ def probe_sync(secret: str = "") -> dict:
         error = "Cursor CLI is installed and not signed in."
         if transport == "api_key":
             error = "Cursor CLI rejected the API key."
+    subscription = ""
+    if logged_in:
+        try:
+            about = _run_text([resolved, "about", "--format", "json"], env, 20)
+        except (OSError, subprocess.TimeoutExpired):
+            about = None
+        if about is not None and about.returncode == 0:
+            subscription = _subscription_tier(about.stdout or "")
     return {
         "binary": binary,
         "transport": transport,
@@ -192,7 +215,7 @@ def probe_sync(secret: str = "") -> dict:
         "version": version_line,
         "logged_in": logged_in,
         "auth_method": transport if logged_in else "",
-        "subscription": "",
+        "subscription": subscription,
         "account": _account_from(text) if logged_in else "",
         "error": error,
         "login_started": False,

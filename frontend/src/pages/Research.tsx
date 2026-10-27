@@ -45,7 +45,6 @@ function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
       {linked && (
         <p className="text-sm">
           {status.data?.subscription ? humanize(status.data.subscription) : "Signed in"}
-          {status.data?.auth_method ? ` · ${status.data.auth_method}` : ""}
           {status.data?.account ? ` · ${status.data.account}` : ""}
         </p>
       )}
@@ -154,6 +153,10 @@ function CursorCliPanel({ settings }: { settings: CursorCliSettings }) {
   }, [awaiting, status.data?.logged_in]);
   const linked = status.data?.logged_in ?? false;
   const dirty = binary !== settings.binary || transport !== settings.transport;
+  const identity = [
+    status.data?.subscription ? humanize(status.data.subscription) : "",
+    status.data?.account ?? "",
+  ].filter(Boolean).join(" · ");
   return (
     <div className="space-y-2 rounded-lg border border-[var(--line)] p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -165,12 +168,7 @@ function CursorCliPanel({ settings }: { settings: CursorCliSettings }) {
       <p className="text-xs text-[var(--muted)]">
         Analysis runs call the agent executable in ask mode. The agent can read the frames and is not given permission to edit files. A linked account uses the Cursor plan. The API key above is used only when runs are set to API key.
       </p>
-      {linked && (
-        <p className="text-sm">
-          {status.data?.account ? `Signed in · ${status.data.account}` : "Signed in"}
-          {status.data?.auth_method ? ` · ${status.data.auth_method}` : ""}
-        </p>
-      )}
+      {linked && identity && <p className="text-sm">{identity}</p>}
       {status.data?.error && !awaiting && <p className="text-sm text-[var(--rose)]">{status.data.error}</p>}
       <div className="grid gap-2 md:grid-cols-2">
         <label className="field-label">

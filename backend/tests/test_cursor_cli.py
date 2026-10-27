@@ -30,6 +30,13 @@ if args[:1] == ["status"]:
         raise SystemExit(0)
     print("Not authenticated. Run agent login.")
     raise SystemExit(1)
+if args[:1] == ["about"]:
+    key = os.environ.get("CURSOR_API_KEY", "")
+    mode = os.environ.get("CURSOR_FAKE", "out")
+    if mode == "in" or key:
+        print(json.dumps({"subscriptionTier": "Pro+", "userEmail": "key@example.com" if key else "ada@example.com"}))
+        raise SystemExit(0)
+    raise SystemExit(1)
 if args[:1] == ["logout"]:
     raise SystemExit(0)
 if args[:1] == ["login"]:
@@ -137,6 +144,7 @@ def test_provider_page_saves_the_cursor_cli(client: TestClient, tmp_path: Path, 
     body = client.get("/api/providers/cursor/cli").json()
     assert body["logged_in"] is True
     assert body["account"] == "a…@example.com"
+    assert body["subscription"] == "Pro+"
     assert body["auth_method"] == "login"
     assert "ada@example.com" not in json.dumps(body)
 
@@ -187,6 +195,7 @@ def test_api_key_transport_uses_the_stored_key_and_refuses_linking(client: TestC
     body = client.get("/api/providers/cursor/cli").json()
     assert body["logged_in"] is True
     assert body["auth_method"] == "api_key"
+    assert body["subscription"] == "Pro+"
     assert body["account"] == "k…@example.com"
     dumped = json.dumps(body)
     assert "cursor_test_secret" not in dumped
