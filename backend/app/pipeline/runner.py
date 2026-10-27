@@ -274,7 +274,7 @@ async def _audio_context(session, run, video, stage) -> None:
         visual_events,
     )
     from app.models.audio import TranscriptSegment
-    from app.providers.registry import get_provider
+    from app.providers.registry import get_provider, needs_secret, run_transport
     from app.providers.types import FrameInput, GenerationRequest
     from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
     from app.services.credentials import load_secret
@@ -290,11 +290,18 @@ async def _audio_context(session, run, video, stage) -> None:
         stage.checkpoint_json = result
         return
     request_body = context_request(run, segments, visual_events(session, run, video.id))
-    secret, _source = load_secret(session, run.provider_id)
-    if not secret or request_body is None:
+    if request_body is None:
         result["note"] = "No provider key is saved. Local classification was kept and the transcript was not sent."
         stage.checkpoint_json = result
         return
+    transport = run_transport(run.provider_id, config)
+    secret = ""
+    if needs_secret(run.provider_id, transport):
+        secret, _source = load_secret(session, run.provider_id)
+        if not secret:
+            result["note"] = "No provider key is saved. Local classification was kept and the transcript was not sent."
+            stage.checkpoint_json = result
+            return
     frames = session.scalars(
         select(FrameAsset).where(FrameAsset.run_id == run.id).order_by(FrameAsset.timestamp)
     ).all()[:4]
@@ -312,6 +319,7 @@ async def _audio_context(session, run, video, stage) -> None:
         temperature=config.get("temperature"),
         timeout_s=float(config.get("timeout_s") or 180),
         image_detail=config.get("image_detail") or "low",
+        metadata={"transport": transport} if run.provider_id == "cursor" else {},
     )
     call = open_provider_call(
         session,

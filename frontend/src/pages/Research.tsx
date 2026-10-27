@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { humanize, humanizeText } from "../lib/humanize";
-import type { ClaudeCodeSettings, RunSummary } from "../lib/types";
+import type { ClaudeCodeSettings, CursorCliSettings, RunSummary } from "../lib/types";
 
 function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
   const client = useQueryClient();
@@ -127,6 +127,107 @@ function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
   );
 }
 
+function CursorCliPanel({ settings }: { settings: CursorCliSettings }) {
+  const client = useQueryClient();
+  const [binary, setBinary] = useState(settings.binary);
+  const [transport, setTransport] = useState(settings.transport);
+  const [awaiting, setAwaiting] = useState(false);
+  const [loginUrl, setLoginUrl] = useState("");
+  const [note, setNote] = useState("");
+  const status = useQuery({
+    queryKey: ["cursor-cli"],
+    queryFn: api.cursorCli,
+    refetchInterval: awaiting ? 3000 : false,
+  });
+  useEffect(() => {
+    setBinary(settings.binary);
+    setTransport(settings.transport);
+  }, [settings.binary, settings.transport]);
+  useEffect(() => {
+    if (awaiting && status.data?.logged_in) {
+      setAwaiting(false);
+      setLoginUrl("");
+      setNote("Cursor is linked.");
+    }
+  }, [awaiting, status.data?.logged_in]);
+  const linked = status.data?.logged_in ?? false;
+  const dirty = binary !== settings.binary || transport !== settings.transport;
+  return (
+    <div className="space-y-2 rounded-lg border border-[var(--line)] p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-medium">Cursor CLI</h3>
+        <span className={`tag ${linked ? "observed" : "unknown"}`}>{linked ? "linked" : "not linked"}</span>
+        <span className="tag">{settings.transport === "login" ? "runs use the Cursor account" : "runs use the API key"}</span>
+        {status.data?.version && <span className="tag">{status.data.version}</span>}
+      </div>
+      <p className="text-xs text-[var(--muted)]">
+        Analysis runs call the agent executable in ask mode. The agent can read the frames and is not given permission to edit files. A linked account uses the Cursor plan. The API key above is used only when runs are set to API key.
+      </p>
+      {linked && (
+        <p className="text-sm">
+          {status.data?.account ? `Signed in · ${status.data.account}` : "Signed in"}
+          {status.data?.auth_method ? ` · ${status.data.auth_method}` : ""}
+        </p>
+      )}
+      {status.data?.error && !awaiting && <p className="text-sm text-[var(--rose)]">{status.data.error}</p>}
+      <div className="grid gap-2 md:grid-cols-2">
+        <label className="field-label">
+          Executable
+          <input className="field" value={binary} spellCheck={false} onChange={(event) => setBinary(event.target.value)} />
+        </label>
+        <label className="field-label">
+          Cursor runs
+          <select className="field stretch" value={transport} onChange={(event) => setTransport(event.target.value as CursorCliSettings["transport"])}>
+            <option value="login">Cursor account</option>
+            <option value="api_key">API key</option>
+          </select>
+        </label>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn" disabled={!dirty} onClick={async () => {
+          try {
+            await api.saveCursorCli(binary, transport);
+            setNote("Cursor settings saved.");
+            await client.invalidateQueries({ queryKey: ["providers"] });
+            await client.invalidateQueries({ queryKey: ["cursor-cli"] });
+          } catch (error) {
+            setNote(error instanceof Error ? error.message : "save failed");
+          }
+        }}>Save</button>
+        {transport === "login" && (
+          <button className="btn" onClick={async () => {
+            try {
+              const result = await api.linkCursorCli(false);
+              setLoginUrl(result.login_url || "");
+              setAwaiting(Boolean(result.login_started) && !result.logged_in);
+              setNote(result.logged_in ? "Cursor is linked." : "Open the sign-in page and finish with the Cursor account. This page checks until it is linked.");
+              await client.invalidateQueries({ queryKey: ["cursor-cli"] });
+            } catch (error) {
+              setAwaiting(false);
+              setNote(error instanceof Error ? error.message : "link failed");
+            }
+          }}>{linked ? "Refresh link" : "Link Cursor"}</button>
+        )}
+        {transport === "login" && linked && (
+          <button className="btn" onClick={async () => {
+            try {
+              const result = await api.linkCursorCli(true);
+              setLoginUrl(result.login_url || "");
+              setAwaiting(Boolean(result.login_started));
+              setNote("Finish the new sign-in in the browser to replace the linked account.");
+            } catch (error) {
+              setAwaiting(false);
+              setNote(error instanceof Error ? error.message : "sign-in failed");
+            }
+          }}>Sign in again</button>
+        )}
+      </div>
+      {loginUrl && <a className="text-sm text-[var(--blue)]" href={loginUrl} target="_blank" rel="noreferrer">Open the Cursor sign-in page</a>}
+      {note && <p className="text-sm">{note}</p>}
+    </div>
+  );
+}
+
 export function ProvidersPage() {
   const client = useQueryClient();
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
@@ -163,10 +264,15 @@ export function ProvidersPage() {
             {provider.id === "anthropic" && (
               <p className="text-sm text-[var(--muted)]">API key. Analysis runs use it when Anthropic runs is set to API key.</p>
             )}
+            {provider.id === "cursor" && (
+              <p className="text-sm text-[var(--muted)]">API key. Analysis runs use it when Cursor runs is set to API key.</p>
+            )}
             {!["deterministic", "fixture", "manual_json"].includes(provider.id) && (
               <div className="flex flex-wrap items-center gap-2">
                 <input className="field" type="password" autoComplete="off" placeholder="API key" value={keys[provider.id] ?? ""} onChange={(event) => setKeys({ ...keys, [provider.id]: event.target.value })} />
-                <input className="field" placeholder={provider.id === "openai_compatible" ? "Base URL" : "Optional base URL"} value={bases[provider.id] ?? provider.base_url} onChange={(event) => setBases({ ...bases, [provider.id]: event.target.value })} />
+                {provider.id !== "cursor" && (
+                  <input className="field" placeholder={provider.id === "openai_compatible" ? "Base URL" : "Optional base URL"} value={bases[provider.id] ?? provider.base_url} onChange={(event) => setBases({ ...bases, [provider.id]: event.target.value })} />
+                )}
                 <button className="btn" onClick={() => save.mutate(provider.id)}>Save key</button>
                 <button className="btn" onClick={async () => {
                   try {
@@ -180,6 +286,7 @@ export function ProvidersPage() {
               </div>
             )}
             {provider.id === "anthropic" && provider.claude_code && <ClaudeCodePanel settings={provider.claude_code} />}
+            {provider.id === "cursor" && provider.cursor_cli && <CursorCliPanel settings={provider.cursor_cli} />}
             {["deterministic", "fixture", "manual_json"].includes(provider.id) && (
               <button className="btn" onClick={async () => { await api.validateProvider(provider.id); await client.invalidateQueries({ queryKey: ["providers"] }); }}>Mark local provider ready</button>
             )}

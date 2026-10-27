@@ -17,6 +17,7 @@ from app.perception.presets import preset
 from app.pipeline.prompts import TEMPLATES, compose
 from app.providers.catalog import lookup
 from app.providers.claude_code import load_claude_code
+from app.providers.cursor_cli import load_cursor_cli
 from app.providers.types import UnsupportedMode
 from app.schemas.enums import PIPELINE_STAGES, ResearchMode
 
@@ -113,6 +114,8 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
     }
     if provider_id == "anthropic":
         config["anthropic_transport"] = anthropic_transport
+    if provider_id == "cursor":
+        config["cursor_transport"] = load_cursor_cli()["transport"]
     run = AnalysisRun(
         id=new_id(),
         project_id=video.project_id,

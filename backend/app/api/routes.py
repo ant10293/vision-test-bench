@@ -64,6 +64,9 @@ from app.providers.claude_code import (
     save_claude_code,
     submit_login_code,
 )
+from app.providers.cursor_cli import begin_login as begin_cursor_login
+from app.providers.cursor_cli import load_cursor_cli, save_cursor_cli
+from app.providers.cursor_cli import probe as probe_cursor
 from app.providers.registry import get_provider, provider_ids
 from app.providers.types import ProviderError, UnsupportedMode
 from app.schemas.analysis import AnalysisDocument
@@ -631,6 +634,7 @@ def list_providers(session: Session = Depends(db)) -> list[dict]:
                 "base_url": status.extra_base_url if status else "",
                 "models": [caps.as_dict() for caps in models_for(provider_id)],
                 **({"claude_code": load_claude_code()} if provider_id == "anthropic" else {}),
+                **({"cursor_cli": load_cursor_cli()} if provider_id == "cursor" else {}),
             }
         )
     return payload
@@ -666,6 +670,29 @@ async def claude_code_login_code(payload: dict | None = Body(default=None)) -> d
         raise HTTPException(400, str(exc)) from exc
 
 
+@router.get("/providers/cursor/cli")
+async def cursor_cli_status(session: Session = Depends(db)) -> dict:
+    secret, _source = load_secret(session, "cursor")
+    return await probe_cursor(secret)
+
+
+@router.put("/providers/cursor/cli")
+def put_cursor_cli(payload: dict) -> dict:
+    try:
+        return save_cursor_cli(payload.get("binary") or "agent", payload.get("transport") or "login")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/providers/cursor/cli/link")
+async def link_cursor_cli(payload: dict | None = Body(default=None)) -> dict:
+    force = bool((payload or {}).get("force"))
+    try:
+        return await begin_cursor_login(force=force)
+    except ProviderError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.post("/providers/{provider_id}/credentials")
 def put_credentials(provider_id: str, payload: dict, session: Session = Depends(db)) -> dict:
     if provider_id in {"deterministic", "fixture", "manual_json"}:
@@ -694,7 +721,10 @@ async def validate_provider(provider_id: str, session: Session = Depends(db)) ->
         record_validation(session, provider_id, True, "")
         return {"ok": True, "provider_id": provider_id, "detail": "local provider"}
     secret, source = load_secret(session, provider_id)
-    if not secret:
+    cursor_login = provider_id == "cursor" and load_cursor_cli()["transport"] == "login"
+    if cursor_login:
+        secret, source = "", "cli"
+    elif not secret:
         record_validation(session, provider_id, False, "no credentials configured")
         raise HTTPException(400, "no credentials configured")
     try:
@@ -715,7 +745,8 @@ async def discover_models(provider_id: str, session: Session = Depends(db)) -> d
     discovered: list[str] = []
     error = ""
     secret, _source = load_secret(session, provider_id)
-    if secret and provider_id not in {"deterministic", "fixture", "manual_json"}:
+    cursor_login = provider_id == "cursor" and load_cursor_cli()["transport"] == "login"
+    if (secret or cursor_login) and provider_id not in {"deterministic", "fixture", "manual_json"}:
         try:
             discovered = await get_provider(provider_id, session).list_models(secret)
         except Exception as exc:

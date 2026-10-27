@@ -18,6 +18,10 @@ Responses API, timestamped `input_image` frames, structured output via `json_sch
 
 Image blocks only. Native video is refused. Structured output is a forced `record_analysis` tool. Sequences longer than the image cap are windowed and then merged with a text call. Validation is `models.list`. Live calls were not run here.
 
+## Cursor
+
+The local `agent` CLI, in ask mode, with the workspace limited to the frames for that call. `--force` is not passed. Native video is refused. Temperature is rejected if set. A linked Cursor account is the default transport and is recorded as unpriced plan usage. The API key transport uses `CURSOR_API_KEY` or the key stored on the Providers page, and the key is placed in the child environment rather than on the command line. Validation is `agent status`. Model discovery is `agent --list-models`. Live calls were not run here.
+
 ## Gemini
 
 `google-genai`. Sampled frames are inline image parts. Native video uploads through the Files API and polls until the file is `ACTIVE`. Both paths are recorded on the run so a native submission is not described as a frame sample. Validation is `models.list`. Live calls were not run here.
@@ -38,6 +42,6 @@ Same frame client as OpenAI, with native video forced off and the base URL taken
 
 ## Credentials
 
-Environment variables: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`, `MODEL_API_KEY` or `META_MODEL_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`. The Providers page can store a key in the encrypted local table instead. Responses, logs, and exports contain a hint at most (last four characters), never the key.
+Environment variables: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`, `MODEL_API_KEY` or `META_MODEL_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`, `CURSOR_API_KEY`. The Providers page can store a key in the encrypted local table instead. Responses, logs, and exports contain a hint at most (last four characters), never the key. Cursor account linking does not store a key; `agent login` keeps the session in the CLI.
 
 `LEARNLOOP_LIVE_PROVIDERS=1` is the switch for future opt-in tests. The default suite does not call a paid API.

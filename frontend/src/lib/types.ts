@@ -384,6 +384,23 @@ export interface ClaudeCodeStatus extends ClaudeCodeSettings {
   login_url: string;
 }
 
+export interface CursorCliSettings {
+  binary: string;
+  transport: "login" | "api_key";
+}
+
+export interface CursorCliStatus extends CursorCliSettings {
+  installed: boolean;
+  version: string;
+  logged_in: boolean;
+  auth_method: string;
+  subscription: string;
+  account: string;
+  error: string;
+  login_started: boolean;
+  login_url: string;
+}
+
 export interface ProviderInfo {
   id: string;
   configured: boolean;
@@ -394,6 +411,7 @@ export interface ProviderInfo {
   base_url: string;
   models: Capability[];
   claude_code?: ClaudeCodeSettings;
+  cursor_cli?: CursorCliSettings;
 }
 
 export interface Capability {

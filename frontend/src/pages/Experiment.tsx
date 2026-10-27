@@ -119,6 +119,12 @@ export function ExperimentPage() {
           {providerId === "anthropic" && providers.data?.find((item) => item.id === "anthropic")?.claude_code?.transport === "claude_code" && (
             <div>This run uses the linked Claude Code subscription. Spend counts against the plan, and the lab records the call as unpriced.</div>
           )}
+          {providerId === "cursor" && providers.data?.find((item) => item.id === "cursor")?.cursor_cli?.transport === "login" && (
+            <div>This run uses the linked Cursor account through the CLI in ask mode. Spend counts against the plan, and the lab records the call as unpriced.</div>
+          )}
+          {providerId === "cursor" && providers.data?.find((item) => item.id === "cursor")?.cursor_cli?.transport === "api_key" && (
+            <div>This run uses the Cursor API key through the CLI in ask mode. The lab records the call as unpriced.</div>
+          )}
         </div>
       )}
       <Field label="Perception">

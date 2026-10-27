@@ -25,6 +25,11 @@ _ANTHROPIC_NOTE = (
     "A Claude Code subscription run is recorded as unpriced plan usage. "
     "An API key run uses the catalog list rate when one is set."
 )
+_CURSOR_NOTE = (
+    "Cursor CLI ask mode. The agent reads frame files and is not given permission to edit them. "
+    "The CLI does not enforce the JSON schema; the lab validates the document after the call. "
+    "Native video is refused. Linked-account usage is recorded as unpriced plan usage."
+)
 
 # Messages API output_config.effort. xhigh is the "extra high" level.
 # Opus 4.6 and Sonnet 4.6 accept max but not xhigh. Opus 4.5 accepts the original three.
@@ -236,6 +241,18 @@ for _model_id, _context, _temperature, _input_price, _output_price, _extra in _A
     )
 
 
+for _cursor_model in ("composer-2.5", "auto"):
+    CATALOG[("cursor", _cursor_model)] = _caps(
+        model_id=_cursor_model,
+        provider_id="cursor",
+        image=True,
+        structured_output=True,
+        max_images=16,
+        supports_temperature=False,
+        notes=_CURSOR_NOTE,
+    )
+
+
 def lookup(provider_id: str, model_id: str) -> ModelCapabilities:
     known = CATALOG.get((provider_id, model_id))
     if known:
@@ -245,7 +262,16 @@ def lookup(provider_id: str, model_id: str) -> ModelCapabilities:
 
 def _default_manual(provider_id: str, model_id: str) -> ModelCapabilities:
     native = provider_id in {"gemini", "meta"} and not model_id.startswith("sam")
-    temperature = provider_id not in {"meta"}
+    temperature = provider_id not in {"meta", "cursor"}
+    note = (
+        "Manually added Cursor model. The CLI runs in ask mode and the call is recorded as "
+        "unpriced plan usage. Native video and temperature are not enabled."
+        if provider_id == "cursor"
+        else (
+            "Manually added model id. Capabilities are a conservative default, not a live "
+            "provider capability record. Native video is not enabled for OpenAI or Anthropic defaults."
+        )
+    )
     return ModelCapabilities(
         model_id=model_id,
         provider_id=provider_id,
@@ -254,10 +280,7 @@ def _default_manual(provider_id: str, model_id: str) -> ModelCapabilities:
         structured_output=provider_id != "meta" or not model_id.startswith("sam"),
         max_images=16 if provider_id != "anthropic" else 20,
         supports_temperature=temperature,
-        notes=(
-            "Manually added model id. Capabilities are a conservative default, not a live "
-            "provider capability record. Native video is not enabled for OpenAI or Anthropic defaults."
-        ),
+        notes=note,
     )
 
 

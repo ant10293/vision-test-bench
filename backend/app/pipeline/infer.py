@@ -16,7 +16,7 @@ from app.perception.roster import align_to_roster, drop_split_objects
 from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
-from app.providers.registry import get_provider
+from app.providers.registry import get_provider, needs_secret, run_transport
 from app.providers.types import FrameInput, GenerationRequest, UnsupportedMode, rough_input_tokens
 from app.schemas.analysis import AnalysisDocument, Coverage
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
@@ -210,15 +210,11 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
     sent = session.query(ModelRequestRow).filter(ModelRequestRow.run_id == run.id).count()
     if sent >= int(config.get("max_requests") or 12):
         raise BudgetExceeded("request budget reached; no further model calls were made")
-    transport = "api"
-    if run.provider_id == "anthropic":
-        transport = str(config.get("anthropic_transport") or "api")
-        if transport not in {"api", "claude_code"}:
-            transport = "api"
+    transport = run_transport(run.provider_id, config)
     secret = ""
-    if transport != "claude_code":
+    if needs_secret(run.provider_id, transport):
         secret, _source = load_secret(session, run.provider_id)
-        if run.provider_id not in {"deterministic", "fixture"} and not secret:
+        if not secret:
             raise UnsupportedMode(
                 f"No API key is configured for {run.provider_id}. "
                 "Add one on the provider page or export the documented environment variable."
@@ -238,7 +234,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
         reasoning_effort=config.get("reasoning_effort"),
         image_detail=config.get("image_detail") or "high",
         timeout_s=float(config.get("timeout_s") or 180),
-        metadata={"transport": transport} if run.provider_id == "anthropic" else {},
+        metadata={"transport": transport} if run.provider_id in {"anthropic", "cursor"} else {},
     )
     estimate = rough_input_tokens(request)
     ceiling = config.get("cost_ceiling_usd")
@@ -261,6 +257,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
             "estimated_input_tokens": estimate,
             "sdk_note": "recorded on the response",
             **({"anthropic_transport": transport} if run.provider_id == "anthropic" else {}),
+            **({"cursor_transport": transport} if run.provider_id == "cursor" else {}),
         },
         frame_timestamps=[frame.timestamp for frame in frames],
     )

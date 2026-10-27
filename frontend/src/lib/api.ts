@@ -1,4 +1,4 @@
-import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
+import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, CursorCliSettings, CursorCliStatus, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
 import type { VerificationView, WorkflowTemplate } from "./verification";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -220,6 +220,17 @@ export const api = {
     request<ClaudeCodeStatus>("/api/providers/anthropic/claude-code/link/code", {
       method: "POST",
       body: JSON.stringify({ code }),
+    }),
+  cursorCli: () => request<CursorCliStatus>("/api/providers/cursor/cli"),
+  saveCursorCli: (binary: string, transport: CursorCliSettings["transport"]) =>
+    request<CursorCliSettings>("/api/providers/cursor/cli", {
+      method: "PUT",
+      body: JSON.stringify({ binary, transport }),
+    }),
+  linkCursorCli: (force = false) =>
+    request<CursorCliStatus>("/api/providers/cursor/cli/link", {
+      method: "POST",
+      body: JSON.stringify({ force }),
     }),
   prompts: () =>
     request<{ id: string; key: string; name: string; version: number; body: string }[]>("/api/prompts"),
