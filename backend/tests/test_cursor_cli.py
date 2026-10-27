@@ -113,9 +113,10 @@ def test_provider_page_saves_the_cursor_cli(client: TestClient, tmp_path: Path, 
     assert listed.status_code == 200
     cursor = next(item for item in listed.json() if item["id"] == "cursor")
     assert cursor["cursor_cli"] == {"binary": "agent", "transport": "login"}
-    assert [model["model_id"] for model in cursor["models"]] == ["composer-2.5", "auto"]
-    assert cursor["models"][0]["supports_temperature"] is False
-    assert cursor["models"][0]["native_video"] is False
+    ids = [model["model_id"] for model in cursor["models"]]
+    assert "composer-2.5" in ids
+    assert all(model["supports_temperature"] is False for model in cursor["models"])
+    assert all(model["native_video"] is False for model in cursor["models"])
 
     rejected = client.put(
         "/api/providers/cursor/cli",
@@ -265,6 +266,14 @@ def test_new_run_records_the_cursor_transport(client: TestClient, tmp_path: Path
             enqueue=False,
         )
     session.close()
+
+
+def test_labeled_cli_model_list_keeps_the_id():
+    from app.providers.cursor_cli import parse_model_list, parse_model_records
+
+    text = "Available models\n\nauto - Auto (default)\ncomposer-2.5 - Composer 2.5\ngrok-4.7-low - Grok 4.7  Low\n"
+    assert parse_model_list(text) == ["auto", "composer-2.5", "grok-4.7-low"]
+    assert parse_model_records(text)[2] == ("grok-4.7-low", "Grok 4.7 Low")
 
 
 def test_manual_cursor_model_rejects_temperature():

@@ -64,8 +64,8 @@ from app.providers.claude_code import (
     save_claude_code,
     submit_login_code,
 )
+from app.providers.cursor_cli import account_model_options, load_cursor_cli, save_cursor_cli
 from app.providers.cursor_cli import begin_login as begin_cursor_login
-from app.providers.cursor_cli import load_cursor_cli, save_cursor_cli
 from app.providers.cursor_cli import probe as probe_cursor
 from app.providers.registry import get_provider, provider_ids
 from app.providers.types import ProviderError, UnsupportedMode
@@ -622,6 +622,10 @@ def list_providers(session: Session = Depends(db)) -> list[dict]:
     for provider_id in provider_ids():
         configured, source, hint = secret_hint(session, provider_id) if provider_id not in {"deterministic", "fixture", "manual_json"} else (True, "local", "")
         status = provider_status(session, provider_id)
+        models = [caps.as_dict() for caps in models_for(provider_id)]
+        if provider_id == "cursor":
+            secret, _source = load_secret(session, provider_id)
+            models = account_model_options(models, secret)
         payload.append(
             {
                 "id": provider_id,
@@ -632,7 +636,7 @@ def list_providers(session: Session = Depends(db)) -> list[dict]:
                 "last_error": "" if not status else status.last_error,
                 "last_validated_at": status.last_validated_at.isoformat() if status and status.last_validated_at else None,
                 "base_url": status.extra_base_url if status else "",
-                "models": [caps.as_dict() for caps in models_for(provider_id)],
+                "models": models,
                 **({"claude_code": load_claude_code()} if provider_id == "anthropic" else {}),
                 **({"cursor_cli": load_cursor_cli()} if provider_id == "cursor" else {}),
             }

@@ -426,6 +426,7 @@ export interface Capability {
   reasoning_efforts: string[];
   price_known: boolean;
   notes: string;
+  label?: string;
 }
 
 export interface Dashboard {

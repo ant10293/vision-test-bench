@@ -107,7 +107,7 @@ export function ExperimentPage() {
         </Field>
         <Field label="Model">
           <select className="field stretch" value={modelId} onChange={(event) => setModelId(event.target.value)}>
-            {models.map((model) => <option key={model.model_id} value={model.model_id}>{humanize(model.model_id)}</option>)}
+            {models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label || humanize(model.model_id)}</option>)}
           </select>
         </Field>
       </div>

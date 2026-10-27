@@ -304,7 +304,7 @@ export function ProvidersPage() {
             </div>
             <ul className="grid gap-1 text-xs text-[var(--muted)] md:grid-cols-2">
               {provider.models.map((model) => (
-                <li key={model.model_id}>{humanize(model.model_id)} · video {model.native_video ? "yes" : "no"} · images {model.max_images} · {model.notes}</li>
+                <li key={model.model_id}>{model.label || humanize(model.model_id)} · video {model.native_video ? "yes" : "no"} · images {model.max_images} · {model.notes}</li>
               ))}
             </ul>
           </section>

@@ -40,7 +40,12 @@ _SIGNED_OUT = (
     "run `agent login`",
 )
 _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,80}$")
+_MODEL_LINE = re.compile(
+    r"^(?P<id>[A-Za-z0-9][A-Za-z0-9._:-]{0,80})(?:\s+-\s+(?P<label>.+))?$"
+)
 _MODEL_HEADER = {"model", "models", "id", "available"}
+_MODEL_CACHE_S = 60.0
+_model_cache: dict[str, tuple[float, list[tuple[str, str]]]] = {}
 # Image analysis with tool reads often outlasts the shared 180s request timeout.
 HARD_TIMEOUT_S = 600
 _PROMPT = (
@@ -199,7 +204,16 @@ async def probe(secret: str = "") -> dict:
     return await asyncio.to_thread(probe_sync, secret)
 
 
-def parse_model_list(stdout: str) -> list[str]:
+def _clean_label(label: str) -> str:
+    return re.sub(r"\s+", " ", label).strip()
+
+
+def parse_model_records(stdout: str) -> list[tuple[str, str]]:
+    """Read `agent --list-models` output.
+
+    Current builds print ``id - Display name``. A bare id, or a JSON list, is
+    accepted as well. The header line is not a model.
+    """
     text = stdout.strip()
     if not text:
         return []
@@ -209,44 +223,62 @@ def parse_model_list(stdout: str) -> list[str]:
         except json.JSONDecodeError:
             payload = None
         if isinstance(payload, list):
-            return _model_ids(payload)
+            return _records_from_json(payload)
         if isinstance(payload, dict):
             raw = payload.get("models") or payload.get("data") or []
-            return _model_ids(raw if isinstance(raw, list) else [])
-    found: list[str] = []
+            if isinstance(raw, list):
+                return _records_from_json(raw)
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
+        match = _MODEL_LINE.match(line.strip())
+        if not match:
             continue
-        token = stripped.strip(",").strip('"')
-        if token.lower() in _MODEL_HEADER or not _MODEL_ID.match(token):
+        token = match.group("id")
+        label = _clean_label(match.group("label") or "")
+        if not label and token.lower() in _MODEL_HEADER:
             continue
-        if token not in found:
-            found.append(token)
+        if token in seen:
+            continue
+        seen.add(token)
+        found.append((token, label))
     return found
 
 
-def _model_ids(raw: list) -> list[str]:
-    found: list[str] = []
+def parse_model_list(stdout: str) -> list[str]:
+    return [model_id for model_id, _label in parse_model_records(stdout)]
+
+
+def _records_from_json(raw: list) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for item in raw:
+        label = ""
         if isinstance(item, str):
             token = item.strip()
         elif isinstance(item, dict):
             token = str(item.get("id") or item.get("model") or "").strip()
+            label = str(item.get("label") or item.get("name") or item.get("display_name") or "")
         else:
             continue
-        if token and _MODEL_ID.match(token) and token not in found:
-            found.append(token)
+        if token and _MODEL_ID.match(token) and token not in seen:
+            seen.add(token)
+            found.append((token, _clean_label(label)))
     return found
 
 
-def list_models_sync(secret: str = "") -> list[str]:
+def _fetch_model_records(secret: str = "") -> list[tuple[str, str]]:
     settings = load_cursor_cli()
     resolved = resolve_binary(settings["binary"])
     if resolved is None:
         raise ProviderError(f"Cursor CLI executable not found: {settings['binary']}")
     if settings["transport"] == "api_key" and not secret:
         raise AuthenticationError("No API key is configured for Cursor.")
+    cache_key = f"{resolved}|{settings['transport']}|{secret[-4:] if secret else ''}"
+    cached = _model_cache.get(cache_key)
+    now = time.monotonic()
+    if cached is not None and cached[0] > now:
+        return cached[1]
     try:
         completed = _run_text(
             [resolved, "--list-models"],
@@ -260,7 +292,36 @@ def list_models_sync(secret: str = "") -> list[str]:
         if _signed_out(detail):
             raise AuthenticationError(detail[:500])
         raise ProviderError(detail[:500])
-    return parse_model_list(completed.stdout)
+    records = parse_model_records(completed.stdout)
+    _model_cache[cache_key] = (now + _MODEL_CACHE_S, records)
+    return records
+
+
+def list_models_sync(secret: str = "") -> list[str]:
+    return [model_id for model_id, _label in _fetch_model_records(secret)]
+
+
+def account_model_options(catalog: list[dict], secret: str = "") -> list[dict]:
+    """Replace the static catalog with the models this Cursor account can run.
+
+    The catalog stays in place when the CLI is missing or not signed in.
+    """
+    from app.providers.catalog import lookup
+
+    try:
+        records = _fetch_model_records(secret)
+    except (ProviderError, OSError):
+        return catalog
+    if not records:
+        return catalog
+    by_id = {str(item.get("model_id")): item for item in catalog}
+    options: list[dict] = []
+    for model_id, label in records:
+        base = dict(by_id.get(model_id) or lookup("cursor", model_id).as_dict())
+        if label:
+            base["label"] = label
+        options.append(base)
+    return options
 
 
 async def stop_login() -> None:
