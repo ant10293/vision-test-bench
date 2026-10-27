@@ -1,3 +1,9 @@
+import type {
+  SimulationEvaluation,
+  SimulationState,
+  SimulationSummary,
+  SimulationTruth,
+} from "./simulation";
 import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
 import type { VerificationView, WorkflowTemplate } from "./verification";
 
@@ -145,7 +151,10 @@ export const api = {
   },
   run: (id: string) => request<Bundle>(`/api/runs/${id}`),
   createRun: (payload: Record<string, unknown>) =>
-    request<RunSummary>("/api/runs", { method: "POST", body: JSON.stringify(payload) }),
+    request<RunSummary>("/api/runs", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   duplicateRun: (id: string) => request<RunSummary>(`/api/runs/${id}/duplicate`, { method: "POST", body: "{}" }),
   cancelRun: (id: string) => request<RunSummary>(`/api/runs/${id}/cancel`, { method: "POST" }),
   deleteRun: (id: string) => request(`/api/runs/${id}`, { method: "DELETE" }),
@@ -339,6 +348,30 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ step_id: stepId }),
     }),
+  simulations: () => request<SimulationSummary[]>("/api/simulations"),
+  simulation: (id: string) => request<SimulationSummary>(`/api/simulations/${id}`),
+  cancelSimulation: (jobId: string) =>
+    request<{ id: string; status: string }>(`/api/simulations/jobs/${jobId}/cancel`, { method: "POST" }),
+  retrySimulation: (id: string) => request<SimulationSummary>(`/api/simulations/${id}/generate`, { method: "POST" }),
+  deleteSimulation: (id: string) => request(`/api/simulations/${id}`, { method: "DELETE" }),
+  simulationTruth: (id: string) => request<SimulationTruth>(`/api/simulations/${id}/ground-truth`),
+  simulationState: (id: string, timestamp: number) =>
+    request<SimulationState>(`/api/simulations/${id}/state?timestamp=${timestamp}`),
+  analyzeSimulation: (id: string, perceptionPreset: string) =>
+    request<RunSummary>(`/api/simulations/${id}/analyze`, {
+      method: "POST",
+      body: JSON.stringify({
+        perception_preset: perceptionPreset,
+        provider_id: "deterministic",
+        model_id: "motion-baseline",
+      }),
+    }),
+  evaluateSimulation: (id: string, runId: string) =>
+    request<SimulationEvaluation>(`/api/simulations/${id}/evaluate`, {
+      method: "POST",
+      body: JSON.stringify({ run_id: runId }),
+    }),
+  simulationEvaluations: (id: string) => request<SimulationEvaluation[]>(`/api/simulations/${id}/evaluations`),
 };
 
 export interface TaskBundle {

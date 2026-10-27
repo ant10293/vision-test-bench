@@ -20,6 +20,18 @@ from app.providers.claude_code import load_claude_code
 from app.providers.types import UnsupportedMode
 from app.schemas.enums import PIPELINE_STAGES, ResearchMode
 
+
+def scene_flag(payload: dict) -> dict:
+    """The only scene fact stored on an analysis run: whether to render one.
+
+    Absent means skip, so older runs do not gain a render. A variant name is not stored.
+    """
+    scene = payload.get("scene")
+    if not isinstance(scene, dict):
+        return {"skip": True}
+    return {"skip": bool(scene.get("skip", False))}
+
+
 MODE_AXES = {
     "fixed_camera": ("fixed", "constrained"),
     "constrained_head_mounted": ("head_mounted", "constrained"),
@@ -29,7 +41,10 @@ MODE_AXES = {
 
 
 def create_run(session: Session, payload: dict, enqueue: bool = True) -> AnalysisRun:
-    video = session.get(VideoAsset, payload["video_id"])
+    video_id = payload.get("video_id")
+    if not video_id:
+        raise ValueError("video not found")
+    video = session.get(VideoAsset, video_id)
     if video is None:
         raise ValueError("video not found")
     mode = payload.get("research_mode") or ResearchMode.FIXED_CAMERA.value
@@ -110,6 +125,7 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "app_version": __version__,
         "git_revision": _git(),
         "perception": perception,
+        "scene": scene_flag(payload),
     }
     if provider_id == "anthropic":
         config["anthropic_transport"] = anthropic_transport

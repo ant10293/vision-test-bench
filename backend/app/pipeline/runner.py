@@ -188,6 +188,11 @@ def _stage(session, run_id: str, name: str) -> PipelineStageRun:
 
 async def _dispatch(session, run: AnalysisRun, video: VideoAsset, stage: PipelineStageRun) -> None:
     name = stage.stage
+    if name == "blender_scene":
+        from app.pipeline.scene_stage import render_blender_scene
+
+        render_blender_scene(session, run, stage)
+        return
     if name == "metadata":
         stage.checkpoint_json = {
             "duration_sec": video.duration_sec,

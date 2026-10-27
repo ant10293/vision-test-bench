@@ -6,10 +6,29 @@ from app.schemas.analysis import AnalysisDocument, ValidationIssue
 from app.schemas.enums import RECOGNIZED_ACTIONS
 
 
+def _anchor_direct(evidence, *times: float) -> None:
+    """A direct claim's own time is the frame reference when the evidence block omitted it."""
+    if evidence.classification.value != "DIRECTLY_OBSERVED":
+        return
+    finite = [float(item) for item in times]
+    if not finite:
+        return
+    if not evidence.frame_timestamps:
+        evidence.frame_timestamps = finite
+    if evidence.time_start is None:
+        evidence.time_start = finite[0]
+    if evidence.time_end is None and len(finite) > 1:
+        evidence.time_end = finite[-1]
+
+
 def validate_document(document: AnalysisDocument, duration: float) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     from app.perception.verify import audit_claims
 
+    for obs in document.observations:
+        _anchor_direct(obs.evidence, obs.timestamp)
+    for action in document.actions:
+        _anchor_direct(action.evidence, action.start, action.end)
     issues.extend(audit_claims(document))
     objects = {item.local_id for item in document.objects}
     actions = {item.local_id for item in document.actions}

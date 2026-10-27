@@ -707,7 +707,9 @@ export function PipelinePage() {
           <div>{humanize(stage.stage)}</div>
           <div>{humanize(stage.status)}</div>
           <div className="text-[var(--muted)]">
-            {stage.progress_current}/{stage.progress_total || 0}
+            {stage.stage === "blender_scene" && stage.status !== "skipped" && (stage.progress_total || 0) > 1
+              ? `frame ${stage.progress_current} of ${stage.progress_total}`
+              : `${stage.progress_current}/${stage.progress_total || 0}`}
             {stage.error ? ` · ${humanize(stage.error)}` : ""}
             {stage.checkpoint?.reason ? ` · ${humanize(String(stage.checkpoint.reason))}` : ""}
           </div>

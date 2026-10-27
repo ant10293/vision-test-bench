@@ -12,6 +12,7 @@ from app.config import settings
 from app.models.runs import AnalysisRun, Job, PipelineStageRun
 from app.models.util import utcnow
 from app.pipeline.runner import execute_job
+from app.simulation.service import claim_simulation, execute_simulation, recover_simulation_jobs
 
 log = logging.getLogger("learnloop.worker")
 
@@ -101,14 +102,19 @@ def run_claimed_job(job_id: str) -> None:
 async def worker_loop(stop: asyncio.Event) -> None:
     worker_id = uuid4().hex[:12]
     recovered = await asyncio.to_thread(recover_incomplete)
-    if recovered:
-        log.info("recovered %s interrupted jobs", recovered)
+    sim_recovered = await asyncio.to_thread(recover_simulation_jobs)
+    if recovered or sim_recovered:
+        log.info("recovered %s analysis jobs and %s simulation jobs", recovered, sim_recovered)
     while not stop.is_set():
         job_id = await asyncio.to_thread(claim_next, worker_id)
-        if job_id is None:
+        if job_id is not None:
+            await asyncio.to_thread(run_claimed_job, job_id)
+            continue
+        simulation_id = await asyncio.to_thread(claim_simulation, worker_id)
+        if simulation_id is None:
             try:
                 await asyncio.wait_for(stop.wait(), timeout=settings.worker_poll_seconds)
             except TimeoutError:
                 continue
             continue
-        await asyncio.to_thread(run_claimed_job, job_id)
+        await asyncio.to_thread(execute_simulation, simulation_id)

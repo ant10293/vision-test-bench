@@ -251,3 +251,36 @@ def test_attempted_outcome_is_distinct_in_fixture():
     outcomes = {action.local_id: action.outcome.value for action in document.actions}
     assert "attempted" in outcomes.values()
     assert "completed" in outcomes.values()
+
+
+def test_a_direct_claim_uses_the_time_already_on_the_record():
+    document = AnalysisDocument.model_validate(
+        {
+            "objects": [{"local_id": "Object_1", "label": "cup"}],
+            "observations": [
+                {
+                    "object_local_id": "Object_1",
+                    "timestamp": 1.5,
+                    "evidence": {"classification": "DIRECTLY_OBSERVED", "provenance": "AI_PREDICTION"},
+                }
+            ],
+            "actions": [
+                {
+                    "local_id": "Action_1",
+                    "action_type": "move",
+                    "start": 1.0,
+                    "end": 2.0,
+                    "object_local_ids": ["Object_1"],
+                    "evidence": {"classification": "DIRECTLY_OBSERVED", "provenance": "AI_PREDICTION"},
+                }
+            ],
+        }
+    )
+    issues = validate_document(document, 10)
+    codes = {issue.code for issue in issues}
+    assert "observation_without_evidence" not in codes
+    assert "claim_without_evidence" not in codes
+    assert document.observations[0].evidence.frame_timestamps == [1.5]
+    assert document.observations[0].evidence.time_start == 1.5
+    assert document.actions[0].evidence.time_start == 1.0
+    assert document.actions[0].evidence.time_end == 2.0
