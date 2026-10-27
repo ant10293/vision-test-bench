@@ -20,7 +20,7 @@ from app.models.runs import AnalysisRun, ModelRequestRow
 from app.perception.locate import apply_located, choose_locate_times, reference_time, same_surface
 from app.pipeline.parsing import ParseFailure, extract_json_object
 from app.pipeline.prompts import LOCATE_PART
-from app.providers.registry import get_provider
+from app.providers.registry import get_provider, needs_secret, run_transport
 from app.providers.types import FrameInput, GenerationRequest
 from app.schemas.analysis import AnalysisDocument, BBox
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
@@ -76,9 +76,9 @@ async def locate_missing(
     """Fill missing boxes for parts that already have a stable extent. Failures stay in the report."""
     if run.provider_id in {"fixture", "deterministic", "manual_json"} or not frames:
         return document, {"skipped": "no vision provider"}
-    transport = _transport(run)
+    transport = run_transport(run.provider_id, run.config_json)
     secret = ""
-    if transport != "claude_code":
+    if needs_secret(run.provider_id, transport):
         secret, _source = load_secret(session, run.provider_id)
         if not secret:
             return document, {"skipped": "no API key"}
@@ -120,13 +120,6 @@ def _targets(document: AnalysisDocument) -> list[tuple[str, list[float]]]:
         ranked.append((priority, object_id, chosen))
     ranked.sort(key=lambda item: item[0])
     return [(object_id, times) for _priority, object_id, times in ranked]
-
-
-def _transport(run: AnalysisRun) -> str:
-    if run.provider_id != "anthropic":
-        return "api"
-    transport = str((run.config_json or {}).get("anthropic_transport") or "api")
-    return transport if transport in {"api", "claude_code"} else "api"
 
 
 async def _one(session, run, document, frames, object_id, times, secret, transport: str) -> AnalysisDocument:
@@ -176,7 +169,7 @@ async def _one(session, run, document, frames, object_id, times, secret, transpo
         reasoning_effort=config.get("reasoning_effort"),
         image_detail=config.get("image_detail") or "high",
         timeout_s=float(config.get("timeout_s") or 180),
-        metadata={"transport": transport} if run.provider_id == "anthropic" else {},
+        metadata={"transport": transport} if run.provider_id in {"anthropic", "cursor"} else {},
     )
     row = open_provider_call(
         session,

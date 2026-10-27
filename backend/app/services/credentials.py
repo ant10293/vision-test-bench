@@ -19,6 +19,7 @@ ENV_KEYS = {
     "gemini": "GEMINI_API_KEY",
     "meta": "MODEL_API_KEY",
     "openai_compatible": "OPENAI_COMPATIBLE_API_KEY",
+    "cursor": "CURSOR_API_KEY",
 }
 
 ENV_FALLBACKS = {
