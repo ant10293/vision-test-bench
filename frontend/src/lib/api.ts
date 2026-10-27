@@ -201,7 +201,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/providers/${providerId}/validate`, { method: "POST" }),
   discoverModels: (providerId: string) =>
     request<{ catalog: ProviderInfo["models"]; discovered: string[]; error: string }>(
-      `/api/providers/${providerId}/models`,
+      `/api/providers/${providerId}/models?refresh=true`,
     ),
   addModel: (providerId: string, modelId: string) =>
     request(`/api/providers/${providerId}/models`, { method: "POST", body: JSON.stringify({ model_id: modelId }) }),

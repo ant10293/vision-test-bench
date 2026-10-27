@@ -156,6 +156,70 @@ def chatgpt_identity(path: Path | None = None) -> tuple[str, str]:
     return plan, mask_account(email)
 
 
+def parse_debug_models(stdout: str) -> list[dict]:
+    """Read `codex debug models`. Hidden rows are not offered in the picker."""
+    start = stdout.find("{")
+    if start < 0:
+        return []
+    try:
+        payload = json.loads(stdout[start:])
+    except json.JSONDecodeError:
+        return []
+    models = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
+        return []
+    records: list[dict] = []
+    seen: set[str] = set()
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("visibility") or "list") != "list":
+            continue
+        model_id = str(item.get("slug") or item.get("id") or "").strip()
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        modalities = item.get("input_modalities") or []
+        if not isinstance(modalities, list):
+            modalities = []
+        efforts: list[str] = []
+        for level in item.get("supported_reasoning_levels") or []:
+            if isinstance(level, dict) and level.get("effort"):
+                efforts.append(str(level["effort"]))
+            elif isinstance(level, str) and level:
+                efforts.append(level)
+        context = item.get("context_window")
+        records.append(
+            {
+                "model_id": model_id,
+                "label": str(item.get("display_name") or "").strip(),
+                "image": "image" in modalities,
+                "native_video": "video" in modalities,
+                "context_tokens": context if isinstance(context, int) else None,
+                "reasoning_efforts": efforts,
+                "supports_temperature": False,
+            }
+        )
+    return records
+
+
+def model_records_sync() -> list[dict]:
+    """Models the signed-in ChatGPT account can run. Empty when Codex is not the transport."""
+    settings = load_codex()
+    if settings["transport"] != "codex":
+        return []
+    resolved = resolve_binary(settings["binary"])
+    if resolved is None:
+        return []
+    try:
+        completed = _run_text([resolved, "debug", "models"], 30)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if completed.returncode != 0:
+        return []
+    return parse_debug_models(completed.stdout or "")
+
+
 def _run_text(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         argv,

@@ -407,6 +407,7 @@ export function ProvidersPage() {
               <button className="btn shrink-0" onClick={async () => { await api.addModel(provider.id, models[provider.id] ?? ""); await client.invalidateQueries({ queryKey: ["providers"] }); }}>Add model</button>
               <button className="btn shrink-0" onClick={async () => {
                 const found = await api.discoverModels(provider.id);
+                await client.invalidateQueries({ queryKey: ["providers"] });
                 setMessage(found.error ? found.error : `Discovered ${found.discovered.length} model ids.`);
               }}>Discover</button>
             </div>

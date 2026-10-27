@@ -15,10 +15,10 @@ from app.models.runs import AnalysisRun, Job, PipelineStageRun, PromptVersion
 from app.models.util import new_id
 from app.perception.presets import preset
 from app.pipeline.prompts import TEMPLATES, compose
-from app.providers.catalog import lookup
 from app.providers.claude_code import load_claude_code
 from app.providers.codex_cli import load_codex
 from app.providers.cursor_cli import load_cursor_cli
+from app.providers.model_list import capabilities_for, warm
 from app.providers.types import UnsupportedMode
 from app.schemas.enums import PIPELINE_STAGES, ResearchMode
 
@@ -40,7 +40,8 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
     provider_id = payload["provider_id"]
     model_id = payload["model_id"]
     modality = payload.get("modality") or "sampled_frames"
-    caps = lookup(provider_id, model_id)
+    _warm_account_models(session, provider_id)
+    caps = capabilities_for(provider_id, model_id)
     if modality == "native_video" and not caps.native_video:
         raise UnsupportedMode(
             f"{model_id} does not support native video. Choose sampled frames. "
@@ -247,6 +248,17 @@ def save_prompt(session: Session, key: str, name: str, body: str) -> PromptVersi
     session.commit()
     session.refresh(row)
     return row
+
+
+def _warm_account_models(session: Session, provider_id: str) -> None:
+    if provider_id in {"deterministic", "fixture", "manual_json"}:
+        return
+    from app.models.runs import ProviderStatus
+    from app.services.credentials import load_secret
+
+    secret, _source = load_secret(session, provider_id)
+    status = session.get(ProviderStatus, provider_id)
+    warm(provider_id, secret, status.extra_base_url if status else "")
 
 
 def _latest_prompt(session: Session, key: str) -> PromptVersion | None:

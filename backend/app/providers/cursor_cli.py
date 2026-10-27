@@ -314,9 +314,9 @@ def list_models_sync(secret: str = "") -> list[str]:
 def account_model_options(catalog: list[dict], secret: str = "") -> list[dict]:
     """Replace the static catalog with the models this Cursor account can run.
 
-    The catalog stays in place when the CLI is missing or not signed in.
+    The catalog object is returned unchanged when the CLI is missing or not signed in.
     """
-    from app.providers.catalog import lookup
+    from app.providers.model_list import overlay_options
 
     try:
         records = _fetch_model_records(secret)
@@ -324,14 +324,11 @@ def account_model_options(catalog: list[dict], secret: str = "") -> list[dict]:
         return catalog
     if not records:
         return catalog
-    by_id = {str(item.get("model_id")): item for item in catalog}
-    options: list[dict] = []
-    for model_id, label in records:
-        base = dict(by_id.get(model_id) or lookup("cursor", model_id).as_dict())
-        if label:
-            base["label"] = label
-        options.append(base)
-    return options
+    return overlay_options(
+        "cursor",
+        catalog,
+        [{"model_id": model_id, "label": label} for model_id, label in records],
+    )
 
 
 async def stop_login() -> None:

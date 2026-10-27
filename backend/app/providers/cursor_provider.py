@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
-from app.providers.catalog import lookup
 from app.providers.cursor_cli import complete, list_models_sync, probe_sync
+from app.providers.model_list import capabilities_for
 from app.providers.types import (
     AuthenticationError,
     GenerationRequest,
@@ -20,7 +20,7 @@ class CursorProvider:
     display_name = "Cursor"
 
     def capabilities(self, model_id: str) -> ModelCapabilities:
-        return lookup(self.id, model_id)
+        return capabilities_for(self.id, model_id)
 
     async def validate(self, secret: str) -> None:
         status = await _probe(secret)

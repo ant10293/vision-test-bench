@@ -9,8 +9,8 @@ import time
 from google import genai
 from google.genai import types
 
-from app.providers.catalog import lookup
 from app.providers.common import translate
+from app.providers.model_list import capabilities_for
 from app.providers.types import (
     GenerationRequest,
     ModelCapabilities,
@@ -27,7 +27,7 @@ class GeminiProvider:
     display_name = "Google Gemini"
 
     def capabilities(self, model_id: str) -> ModelCapabilities:
-        return lookup(self.id, model_id)
+        return capabilities_for(self.id, model_id)
 
     def _client(self, secret: str) -> genai.Client:
         return genai.Client(api_key=secret)

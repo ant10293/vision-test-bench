@@ -8,8 +8,8 @@ import time
 import httpx
 from openai import AsyncOpenAI
 
-from app.providers.catalog import lookup
 from app.providers.common import data_url, translate
+from app.providers.model_list import capabilities_for
 from app.providers.types import (
     GenerationRequest,
     ModelCapabilities,
@@ -28,7 +28,7 @@ class MetaProvider:
     display_name = "Meta"
 
     def capabilities(self, model_id: str) -> ModelCapabilities:
-        caps = lookup(self.id, model_id)
+        caps = capabilities_for(self.id, model_id)
         if model_id.startswith("sam"):
             raise UnsupportedMode("SAM is a segmentation model. Select it as the segmentation model, not the analysis model.")
         return caps

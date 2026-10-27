@@ -67,9 +67,10 @@ from app.providers.claude_code import (
 from app.providers.codex_cli import begin_login as begin_codex_login
 from app.providers.codex_cli import load_codex, save_codex
 from app.providers.codex_cli import probe as probe_codex
-from app.providers.cursor_cli import account_model_options, load_cursor_cli, save_cursor_cli
 from app.providers.cursor_cli import begin_login as begin_cursor_login
+from app.providers.cursor_cli import load_cursor_cli, save_cursor_cli
 from app.providers.cursor_cli import probe as probe_cursor
+from app.providers.model_list import options_for
 from app.providers.registry import get_provider, provider_ids
 from app.providers.types import ProviderError, UnsupportedMode
 from app.schemas.analysis import AnalysisDocument
@@ -631,20 +632,50 @@ def create_prompt(payload: dict, session: Session = Depends(db)) -> dict:
 
 @router.get("/providers")
 def list_providers(session: Session = Depends(db)) -> list[dict]:
-    payload = []
+    from concurrent.futures import ThreadPoolExecutor
+
+    manual = session.scalars(select(ManualModel)).all()
+    added: dict[str, list] = {}
+    for row in manual:
+        added.setdefault(row.provider_id, []).append(row.model_id)
+    prepared = []
     for provider_id in provider_ids():
-        configured, source, hint = secret_hint(session, provider_id) if provider_id not in {"deterministic", "fixture", "manual_json"} else (True, "local", "")
+        local = provider_id in {"deterministic", "fixture", "manual_json"}
+        configured, source, hint = (True, "local", "") if local else secret_hint(session, provider_id)
         status = provider_status(session, provider_id)
-        models = [caps.as_dict() for caps in models_for(provider_id)]
-        if provider_id == "cursor":
-            secret, _source = load_secret(session, provider_id)
-            models = account_model_options(models, secret)
-        payload.append(
+        secret = "" if local else load_secret(session, provider_id)[0]
+        prepared.append(
             {
                 "id": provider_id,
                 "configured": configured,
-                "secret_source": source,
+                "source": source,
                 "hint": hint,
+                "status": status,
+                "secret": secret,
+                "base_url": status.extra_base_url if status else "",
+                "catalog": [caps.as_dict() for caps in models_for(provider_id)],
+            }
+        )
+
+    def listed(item: dict) -> list[dict]:
+        return options_for(item["id"], item["catalog"], item["secret"], item["base_url"])
+
+    with ThreadPoolExecutor(max_workers=len(prepared) or 1) as pool:
+        model_lists = list(pool.map(listed, prepared))
+    payload = []
+    for item, models in zip(prepared, model_lists, strict=True):
+        provider_id = item["id"]
+        status = item["status"]
+        seen = {model["model_id"] for model in models}
+        for model_id in added.get(provider_id, []):
+            if model_id not in seen:
+                models.append(lookup(provider_id, model_id).as_dict())
+        payload.append(
+            {
+                "id": provider_id,
+                "configured": item["configured"],
+                "secret_source": item["source"],
+                "hint": item["hint"],
                 "validated": bool(status and status.last_ok),
                 "last_error": "" if not status else status.last_error,
                 "last_validated_at": status.last_validated_at.isoformat() if status and status.last_validated_at else None,
@@ -778,21 +809,24 @@ async def validate_provider(provider_id: str, session: Session = Depends(db)) ->
 
 
 @router.get("/providers/{provider_id}/models")
-async def discover_models(provider_id: str, session: Session = Depends(db)) -> dict:
+async def discover_models(provider_id: str, refresh: bool = False, session: Session = Depends(db)) -> dict:
     catalog = [caps.as_dict() for caps in models_for(provider_id)]
+    secret, _source = load_secret(session, provider_id)
+    status = provider_status(session, provider_id)
+    base_url = status.extra_base_url if status else ""
+    error = ""
+    try:
+        models = options_for(provider_id, catalog, secret, base_url, refresh=refresh)
+    except Exception as exc:
+        models = catalog
+        error = str(exc)
+    seen = {item["model_id"] for item in models}
     manual = session.scalars(select(ManualModel).where(ManualModel.provider_id == provider_id)).all()
     for row in manual:
-        catalog.append(lookup(provider_id, row.model_id).as_dict())
-    discovered: list[str] = []
-    error = ""
-    secret, _source = load_secret(session, provider_id)
-    cursor_login = provider_id == "cursor" and load_cursor_cli()["transport"] == "login"
-    if (secret or cursor_login) and provider_id not in {"deterministic", "fixture", "manual_json"}:
-        try:
-            discovered = await get_provider(provider_id, session).list_models(secret)
-        except Exception as exc:
-            error = str(exc)
-    return {"catalog": catalog, "discovered": discovered, "error": error}
+        if row.model_id not in seen:
+            models.append(lookup(provider_id, row.model_id).as_dict())
+    discovered = [item["model_id"] for item in models] if models is not catalog else []
+    return {"catalog": models, "discovered": discovered, "error": error}
 
 
 @router.post("/providers/{provider_id}/models")

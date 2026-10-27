@@ -10,9 +10,9 @@ import time
 
 import anthropic
 
-from app.providers.catalog import lookup
 from app.providers.claude_code import complete
 from app.providers.common import translate
+from app.providers.model_list import capabilities_for
 from app.providers.types import (
     GenerationRequest,
     ModelCapabilities,
@@ -28,7 +28,7 @@ class AnthropicProvider:
     display_name = "Anthropic"
 
     def capabilities(self, model_id: str) -> ModelCapabilities:
-        return lookup(self.id, model_id)
+        return capabilities_for(self.id, model_id)
 
     def _client(self, secret: str, timeout: float) -> anthropic.AsyncAnthropic:
         return anthropic.AsyncAnthropic(api_key=secret, timeout=timeout)

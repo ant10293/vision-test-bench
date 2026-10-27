@@ -7,9 +7,9 @@ import time
 
 from openai import AsyncOpenAI
 
-from app.providers.catalog import lookup
 from app.providers.codex_cli import complete, load_codex, probe
 from app.providers.common import data_url, translate
+from app.providers.model_list import capabilities_for
 from app.providers.types import (
     AuthenticationError,
     GenerationRequest,
@@ -26,7 +26,7 @@ class OpenAIProvider:
     display_name = "OpenAI"
 
     def capabilities(self, model_id: str) -> ModelCapabilities:
-        return lookup(self.id, model_id)
+        return capabilities_for(self.id, model_id)
 
     def _client(self, secret: str, timeout: float) -> AsyncOpenAI:
         return AsyncOpenAI(api_key=secret, timeout=timeout)

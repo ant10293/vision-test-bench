@@ -38,6 +38,19 @@ if args[:1] == ["logout"]:
 if args[:1] == ["login"]:
     print("Open https://auth.openai.com/oauth/authorize?code=local", flush=True)
     raise SystemExit(0)
+if args[:2] == ["debug", "models"]:
+    print(json.dumps({"models": [
+        {
+            "slug": "gpt-6.1-sol",
+            "display_name": "GPT-6.1-Sol",
+            "visibility": "list",
+            "input_modalities": ["text", "image"],
+            "context_window": 500000,
+            "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}],
+        },
+        {"slug": "gpt-reserve", "display_name": "GPT-Reserve", "visibility": "hide"},
+    ]}))
+    raise SystemExit(0)
 if args[:1] == ["exec"]:
     prompt = sys.stdin.read()
     images = []
@@ -302,6 +315,36 @@ def test_new_run_records_the_codex_transport(client: TestClient, tmp_path: Path)
             enqueue=False,
         )
     session.close()
+
+
+def test_codex_transport_lists_the_account_models(client: TestClient, tmp_path: Path, monkeypatch):
+    fake = tmp_path / "codex"
+    _fake(fake)
+    monkeypatch.setenv("CODEX_FAKE", "in")
+    assert (
+        client.put(
+            "/api/providers/openai/codex",
+            json={"binary": str(fake), "transport": "codex"},
+        ).status_code
+        == 200
+    )
+    openai = next(item for item in client.get("/api/providers").json() if item["id"] == "openai")
+    ids = [model["model_id"] for model in openai["models"]]
+    assert ids == ["gpt-6.1-sol"]
+    listed = openai["models"][0]
+    assert listed["label"] == "GPT-6.1-Sol"
+    assert listed["reasoning_efforts"] == ["low", "high"]
+    assert listed["context_tokens"] == 500000
+    assert listed["image"] is True
+    assert listed["native_video"] is False
+    assert listed["supports_temperature"] is False
+    assert listed["price_known"] is False
+    assert "gpt-4.1" not in ids
+    assert "gpt-reserve" not in ids
+
+    from app.providers.codex_cli import parse_debug_models
+
+    assert parse_debug_models("not json") == []
 
 
 def test_api_key_login_ignores_the_chatgpt_token(client: TestClient, tmp_path: Path, monkeypatch):
