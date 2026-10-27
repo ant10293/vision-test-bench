@@ -72,7 +72,7 @@ export function DashboardPage() {
 
 function RecentRunRow({ run }: { run: RunSummary | null }) {
   const thumb = run?.thumbnail_url ? (
-    <img src={run.thumbnail_url} alt="" className="aspect-video w-full rounded bg-black object-contain" />
+    <img src={run.thumbnail_url} alt="" className="aspect-video w-full rounded object-cover" />
   ) : (
     <div className="aspect-video w-full overflow-hidden rounded bg-[#0d1016]">
       {!run && <Bone className="bone-fill" />}
