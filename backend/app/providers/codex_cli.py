@@ -433,6 +433,72 @@ def build_argv(
     return argv
 
 
+_SCHEMA_STRIP = {
+    "title",
+    "default",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "examples",
+}
+
+
+def strict_output_schema(schema: dict) -> dict:
+    """Codex sends this schema as a strict response format.
+
+    Every object needs ``additionalProperties: false`` and every property listed
+    in ``required``. Numeric bounds and defaults are not accepted. A free-form
+    map cannot be expressed that way, so it becomes an empty object.
+    """
+    converted = _strict_node(schema)
+    return converted if isinstance(converted, dict) else {"type": "object", "additionalProperties": False}
+
+
+def _strict_node(node: object) -> object:
+    if isinstance(node, list):
+        return [_strict_node(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    if "$ref" in node:
+        return {"$ref": node["$ref"]}
+    cleaned: dict = {}
+    for key, value in node.items():
+        if key in _SCHEMA_STRIP:
+            continue
+        cleaned[key] = _strict_node(value)
+    is_object = cleaned.get("type") == "object" or "properties" in cleaned or "additionalProperties" in cleaned
+    if not is_object:
+        return cleaned
+    properties = cleaned.get("properties")
+    if not isinstance(properties, dict) or cleaned.get("additionalProperties") not in (None, False):
+        properties = {}
+    cleaned["type"] = "object"
+    cleaned["properties"] = properties
+    cleaned["required"] = list(properties)
+    cleaned["additionalProperties"] = False
+    return cleaned
+
+
+def failure_message(stdout: str, stderr: str) -> str:
+    """Prefer the JSON turn error over the CLI's stdin progress line."""
+    failure = _failure(parse_events(stdout))
+    if failure:
+        return failure[:2000]
+    detail = (stderr or "").strip()
+    if detail and not _status_line(detail):
+        return detail[:2000]
+    text = (stdout or "").strip()
+    if text and not text.startswith("{"):
+        return text[:2000]
+    return detail[:2000] or "Codex CLI failed"
+
+
+def _status_line(text: str) -> bool:
+    lowered = " ".join(text.lower().split())
+    return lowered.startswith("reading prompt from stdin")
+
+
 def build_prompt(request: GenerationRequest, frames: list[tuple[float, str]]) -> str:
     lines = [
         request.system_prompt.strip(),
@@ -638,7 +704,7 @@ async def complete(request: GenerationRequest) -> ProviderResponse:
             listed.append((frame.timestamp, name))
             images.append(target)
         schema_path = root / "schema.json"
-        schema_path.write_text(json.dumps(schema), encoding="utf-8")
+        schema_path.write_text(json.dumps(strict_output_schema(schema)), encoding="utf-8")
         last_path = root / "last.txt"
         argv = build_argv(
             resolved,
@@ -662,11 +728,13 @@ async def complete(request: GenerationRequest) -> ProviderResponse:
         last_message = last_path.read_text(encoding="utf-8") if last_path.is_file() else ""
     latency_ms = int((time.perf_counter() - started) * 1000)
     if code != 0:
-        detail = (err or out or "Codex CLI failed").strip()
+        detail = "\n".join(part for part in (err, out) if part)
         if _signed_out(detail):
-            raise AuthenticationError(detail[-800:])
+            raise AuthenticationError((err or out or detail).strip()[-800:])
         try:
             return response_from_exec(out, last_message, request, latency_ms, version)
-        except ProviderError:
-            raise ProviderError(detail[-800:] or "Codex CLI failed") from None
+        except ProviderError as exc:
+            if "empty analysis" not in str(exc):
+                raise
+            raise ProviderError(failure_message(out, err)) from exc
     return response_from_exec(out, last_message, request, latency_ms, version)

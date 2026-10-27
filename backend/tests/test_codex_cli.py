@@ -473,9 +473,56 @@ def test_completion_attaches_frames_in_read_only_mode_without_the_api_key(
     assert "Describe the clip." in recorded["prompt"]
     assert "1.500s" in recorded["prompt"]
     assert recorded["images"]
-    assert json.loads(recorded["schema"])["type"] == "object"
+    sent = json.loads(recorded["schema"])
+    assert sent["type"] == "object"
+    assert sent["additionalProperties"] is False
+    assert sent["required"] == ["ok"]
     assert Path(recorded["cwd"]).resolve() != Path.cwd().resolve()
     assert Path(recorded["images"][0]).resolve().is_relative_to(Path(recorded["cwd"]).resolve())
+
+
+def test_output_schema_is_strict_enough_for_codex():
+    from app.providers.codex_cli import strict_output_schema
+    from app.schemas.analysis import AnalysisDocument
+
+    schema = strict_output_schema(AnalysisDocument.model_json_schema())
+
+    def objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                yield node
+            for value in node.values():
+                yield from objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from objects(value)
+
+    found = list(objects(schema))
+    assert found
+    assert all(item.get("additionalProperties") is False for item in found)
+    assert all(item.get("required") == list(item.get("properties") or {}) for item in found)
+    dumped = json.dumps(schema)
+    assert "exclusiveMinimum" not in dumped
+    assert '"default"' not in dumped
+
+
+def test_a_turn_error_is_not_replaced_by_the_stdin_status_line():
+    from app.providers.codex_cli import failure_message
+
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps(
+                {
+                    "type": "turn.failed",
+                    "error": {"message": "Invalid schema for response_format"},
+                }
+            ),
+        ]
+    )
+    assert failure_message(stdout, "Reading prompt from stdin...") == (
+        "Invalid schema for response_format"
+    )
 
 
 def test_signed_out_completion_is_an_authentication_error(tmp_path: Path, monkeypatch):
