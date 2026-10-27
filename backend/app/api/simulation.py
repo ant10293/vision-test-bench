@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,6 +34,7 @@ from app.simulation.service import (
 )
 
 router = APIRouter(prefix="/api", tags=["simulation"])
+_TEXTURE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,120}$")
 
 
 class SimulationRequest(BaseModel):
@@ -183,14 +185,31 @@ def frame_image(dataset_id: str, index: int, kind: str = "rgb", session: Session
     return FileResponse(path)
 
 
+@router.get("/simulations/{dataset_id}/textures/{instance_id}")
+def object_texture(dataset_id: str, instance_id: str, session: Session = Depends(db)) -> FileResponse:
+    dataset = _dataset(session, dataset_id)
+    if dataset.status != "completed":
+        raise HTTPException(404, "textures are published when the render completes")
+    if _TEXTURE_ID.fullmatch(instance_id) is None:
+        raise HTTPException(404, "texture not found")
+    root = (dataset_dir(dataset.id) / "textures").resolve()
+    path = (root / f"{instance_id}.png").resolve()
+    if path.parent != root or not path.is_file():
+        raise HTTPException(404, "texture not found")
+    return FileResponse(path, media_type="image/png")
+
+
 @router.get("/simulations/{dataset_id}/ground-truth")
 def ground_truth(dataset_id: str, session: Session = Depends(db)) -> dict:
     dataset = _dataset(session, dataset_id)
     if dataset.status != "completed":
         raise HTTPException(404, "ground truth is published when the render completes")
     root = dataset_dir(dataset.id)
+    texture_dir = root / "textures"
+    textures = sorted(path.stem for path in texture_dir.glob("*.png")) if texture_dir.is_dir() else []
     return {
         "label": "simulation ground truth",
+        "textures": textures,
         "scene": json.loads((root / "scene.json").read_text()),
         "objects": json.loads((root / "annotations" / "objects.json").read_text()),
         "frames": json.loads((root / "annotations" / "frames.json").read_text()),

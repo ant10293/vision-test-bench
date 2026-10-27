@@ -140,3 +140,37 @@ def test_rendered_clip_is_scored_without_giving_the_run_the_scene(client: TestCl
     assert exported.status_code == 200, exported.text
     assert exported.content[:2] == b"PK"
     assert (tmp_path / "simulations" / rows["correct"]["id"] / "videos" / "execution.mp4").exists()
+
+
+def test_a_completed_scene_serves_the_object_photograph(client: TestClient):
+    from app.db import SessionLocal
+    from app.models.simulation import SimulationDataset
+    from app.simulation.service import dataset_dir
+
+    session = SessionLocal()
+    row = SimulationDataset(
+        name="objects",
+        variant="objects",
+        camera_mode="fixed",
+        research_mode="bench",
+        width=320,
+        height=240,
+        fps=8,
+        duration=1,
+        status="completed",
+    )
+    session.add(row)
+    session.commit()
+    dataset_id = row.id
+    session.close()
+    dest = dataset_dir(dataset_id) / "textures"
+    dest.mkdir(parents=True)
+    (dest / "Object_1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    picture = client.get(f"/api/simulations/{dataset_id}/textures/Object_1")
+    assert picture.status_code == 200, picture.text
+    assert picture.headers["content-type"].startswith("image/png")
+    assert picture.content.startswith(b"\x89PNG")
+    assert client.get(f"/api/simulations/{dataset_id}/textures/missing").status_code == 404
+    assert client.get(f"/api/simulations/{dataset_id}/textures/Object.1").status_code == 404
+    assert client.get(f"/api/simulations/{dataset_id}/textures/Object_1.png").status_code == 404

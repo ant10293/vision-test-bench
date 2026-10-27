@@ -237,7 +237,7 @@ export function SceneLabPage() {
               </div>
             </div>
             <p className="text-xs text-[var(--muted)]">
-              Poses are the evaluated scene at {current.timestamp.toFixed(3)}s. Viewer lighting is not the Blender render. Camera coordinates here are simulator truth and are not a claim about real footage.
+              Poses are the evaluated scene at {current.timestamp.toFixed(3)}s. Each object wears the same photograph mapped in the render, drawn without the viewer lights. Camera coordinates here are simulator truth and are not a claim about real footage.
             </p>
             {state.data && (
               <SceneViewer
@@ -245,6 +245,7 @@ export function SceneLabPage() {
                 poses={state.data.objects}
                 cameraMatrix={state.data.camera.matrix}
                 fovY={fovY}
+                textureUrls={Object.fromEntries((truth.data.textures ?? []).map((id) => [id, `/api/simulations/${selected.id}/textures/${encodeURIComponent(id)}`]))}
                 selected={activeObject}
                 view={view}
                 onSelect={setObjectId}

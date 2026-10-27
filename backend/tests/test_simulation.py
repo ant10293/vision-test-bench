@@ -269,6 +269,11 @@ def test_a_tracked_region_lands_on_its_box_in_the_video():
     center_at("region-1", 0.0, tracks[0]["bbox"])
     center_at("region-1", 1.0, tracks[1]["bbox"])
     center_at("region-2", 0.5, tracks[2]["bbox"])
+    by_id = {item.instance_id: item for item in scene.objects}
+    larger = by_id["region-1"]
+    smaller = by_id["region-2"]
+    assert larger.pieces[0].size[1] >= min(larger.pieces[0].size[0], larger.pieces[0].size[2]) * 0.5
+    assert larger.position[1] < smaller.position[1]
 
 
 def test_a_portrait_frame_stays_even_so_the_encoder_can_open_it():

@@ -109,23 +109,35 @@ def _material(name: str, color, roughness: float, metallic: float, emission: flo
     return material
 
 
-def _mesh(kind: str, size: list[float], name: str, face_camera: bool = False):
-    if face_camera and kind == "box":
-        # A card in the XZ plane, normal toward the camera on -Y. Default plane UVs
-        # put the top of the image at +Z.
-        bpy.ops.mesh.primitive_plane_add(size=1, location=(0, 0, 0))
-        obj = bpy.context.active_object
-        obj.scale = (size[0], size[2], 1.0)
-        bpy.ops.object.transform_apply(scale=True)
-        obj.rotation_euler = (math.radians(90), 0.0, 0.0)
-        bpy.ops.object.transform_apply(rotation=True)
-        obj.name = name
-        return obj
+def _project_uv(obj) -> None:
+    """Map the camera-facing extent onto the photo. +Z is the top of the image."""
+    mesh = obj.data
+    if not mesh.uv_layers:
+        mesh.uv_layers.new(name="UVMap")
+    layer = mesh.uv_layers.active
+    xs = [vertex.co.x for vertex in mesh.vertices]
+    zs = [vertex.co.z for vertex in mesh.vertices]
+    span_x = max(max(xs) - min(xs), 1e-6)
+    span_z = max(max(zs) - min(zs), 1e-6)
+    min_x = min(xs)
+    min_z = min(zs)
+    for poly in mesh.polygons:
+        for loop_index in poly.loop_indices:
+            co = mesh.vertices[mesh.loops[loop_index].vertex_index].co
+            layer.data[loop_index].uv = ((co.x - min_x) / span_x, (co.z - min_z) / span_z)
+
+
+def _mesh(kind: str, size: list[float], name: str, textured: bool = False):
     if kind == "box":
         bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, 0))
         obj = bpy.context.active_object
         obj.scale = (size[0], size[1], size[2])
-    elif kind == "cylinder":
+        bpy.ops.object.transform_apply(scale=True)
+        if textured:
+            _project_uv(obj)
+        obj.name = name
+        return obj
+    if kind == "cylinder":
         bpy.ops.mesh.primitive_cylinder_add(radius=size[0], depth=size[1], vertices=24, location=(0, 0, 0))
         obj = bpy.context.active_object
     else:
@@ -269,7 +281,7 @@ def main() -> None:
                 piece["kind"],
                 piece["size"],
                 f"{instance['instance_id']}_{piece['name']}",
-                face_camera=bool(instance.get("texture")),
+                textured=bool(instance.get("texture")),
             )
             mesh.parent = root
             mesh.matrix_parent_inverse = mathutils.Matrix.Identity(4)

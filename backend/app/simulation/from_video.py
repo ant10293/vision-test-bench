@@ -1,7 +1,8 @@
 """Build a kinematic scene from the regions tracked in one video.
 
-Each shape is placed on a plane in front of the camera so its center lands on
-the tracked box. The plane distance is chosen, not measured from the footage.
+Each shape is a solid in front of the camera. Its center stays on the ray
+through the tracked box. Distance is chosen so the solids are not coplanar.
+That distance is not a measurement from the footage.
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ from app.simulation.schema import (
 )
 
 PLANE_DEPTH_M = 2.0
+DEPTH_NEAR = 0.75
+DEPTH_FAR = 1.25
+THICKNESS = 0.5
 FOV_X_DEG = 48.0
 EYE = (0.0, -PLANE_DEPTH_M, 0.0)
 TARGET = (0.0, 0.0, 0.0)
@@ -82,11 +86,13 @@ def scene_from_tracks(
     if not grouped:
         raise ValueError("The analysis has no object boxes, so there is nothing to place in the Blender scene.")
     names = instance_ids_for(tracks, duration)
+    depths = _depths(grouped)
     objects = []
     operations = []
     for index, (track_ref, rows) in enumerate(grouped.items()):
         instance_id = names[track_ref]
-        poses = [_place(row["bbox"], frame[0], frame[1]) for row in rows]
+        depth = depths[track_ref]
+        poses = [_place(row["bbox"], frame[0], frame[1], depth) for row in rows]
         size = _median_size(poses)
         objects.append(
             SceneObject(
@@ -119,7 +125,7 @@ def scene_from_tracks(
         name=name or "Tracked video",
         description=(
             "Shapes follow the objects found in the selected video. "
-            "They sit on one plane in front of the camera. That distance is not a measurement."
+            "Each one is a solid. Larger boxes sit closer to the camera. That distance is not a measurement."
         ),
         seed=1,
         width=frame[0],
@@ -149,7 +155,12 @@ def scene_from_tracks(
     )
 
 
-def _place(bbox: dict, width: int, height: int) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+def _place(
+    bbox: dict,
+    width: int,
+    height: int,
+    depth: float,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     x = float(bbox["x"])
     y = float(bbox["y"])
     w = float(bbox["w"])
@@ -157,19 +168,43 @@ def _place(bbox: dict, width: int, height: int) -> tuple[tuple[float, float, flo
     camera = intrinsics(width, height, FOV_X_DEG)
     u = (x + w / 2.0) * width
     v = (y + h / 2.0) * height
-    depth = PLANE_DEPTH_M
     x_cam = (u - camera["cx"]) * depth / camera["fx"]
     y_cam = (camera["cy"] - v) * depth / camera["fy"]
     width_m = max(w * width * depth / camera["fx"], 0.02)
     height_m = max(h * height * depth / camera["fy"], 0.02)
-    return (x_cam, 0.0, y_cam), (width_m, 0.01, height_m)
+    # Camera sits on -Y and looks toward +Y. Optical depth is world Y plus that offset.
+    return (x_cam, depth - PLANE_DEPTH_M, y_cam), (width_m, _thickness(width_m, height_m), height_m)
+
+
+def _thickness(width_m: float, height_m: float) -> float:
+    return max(min(width_m, height_m) * THICKNESS, 0.02)
 
 
 def _median_size(poses: list[tuple[tuple[float, float, float], tuple[float, float, float]]]) -> tuple[float, float, float]:
     widths = sorted(item[1][0] for item in poses)
     heights = sorted(item[1][2] for item in poses)
     mid = len(poses) // 2
-    return (widths[mid], 0.01, heights[mid])
+    width_m = widths[mid]
+    height_m = heights[mid]
+    return (width_m, _thickness(width_m, height_m), height_m)
+
+
+def _depths(grouped: dict[str, list[dict]]) -> dict[str, float]:
+    """Larger boxes are closer. One object stays on the reference depth."""
+    areas = {ref: _median_area(rows) for ref, rows in grouped.items()}
+    ordered = sorted(areas, key=lambda ref: areas[ref], reverse=True)
+    if len(ordered) < 2:
+        return {ref: PLANE_DEPTH_M for ref in ordered}
+    span = DEPTH_FAR - DEPTH_NEAR
+    return {
+        ref: PLANE_DEPTH_M * (DEPTH_NEAR + span * (index / (len(ordered) - 1)))
+        for index, ref in enumerate(ordered)
+    }
+
+
+def _median_area(rows: list[dict]) -> float:
+    areas = sorted(float(row["bbox"]["w"]) * float(row["bbox"]["h"]) for row in rows)
+    return areas[len(areas) // 2]
 
 
 def _group(tracks: list[dict], span: float) -> dict[str, list[dict]]:

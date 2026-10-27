@@ -94,6 +94,7 @@ export interface SimCondition {
 
 export interface SimulationTruth {
   label: string;
+  textures: string[];
   scene: {
     objects: SimSceneObject[];
     width: number;
