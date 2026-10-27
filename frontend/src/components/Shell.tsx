@@ -9,6 +9,7 @@ const LINKS = [
   ["/compare", "Comparison lab", GitCompare],
   ["/providers", "Providers", Settings2],
   ["/prompts", "Prompts", ScrollText],
+  ["/runs", "Runs", Waypoints],
 ] as const;
 
 export function Shell() {
@@ -32,9 +33,6 @@ export function Shell() {
               {label}
             </NavLink>
           ))}
-          <NavLink to="/runs" className="flex items-center gap-2 px-2 py-1.5 text-sm text-[var(--muted)]">
-            <Waypoints size={15} /> Runs
-          </NavLink>
         </nav>
       </aside>
       <main className="min-w-0 p-4 md:p-6">
