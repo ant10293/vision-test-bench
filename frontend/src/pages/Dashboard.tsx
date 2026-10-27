@@ -49,13 +49,16 @@ export function DashboardPage() {
             ))}
           </section>
           <section className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-            <div className="panel p-4">
-              <h2 className="mb-3 text-sm font-medium">Recent experiments</h2>
-              <div className="space-y-2" aria-busy={loading || undefined}>
-                {(data ? data.recent_runs : Array.from({ length: RECENT_PLACEHOLDERS }, () => null)).map((run, index) => (
-                  <RecentRunRow key={run?.id ?? `pending-${index}`} run={run} />
-                ))}
-                {data && !data.recent_runs.length && <p className="text-sm text-[var(--muted)]">No experiments yet. Start one, or let the fixture laboratory finish seeding.</p>}
+            <div className="panel relative">
+              {/* Out of flow on large screens so the chart column sets the row height and this list scrolls inside it. */}
+              <div className="flex max-h-[32rem] flex-col p-4 lg:absolute lg:inset-0 lg:max-h-none">
+                <h2 className="mb-3 shrink-0 text-sm font-medium">Recent experiments</h2>
+                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto" aria-busy={loading || undefined}>
+                  {(data ? data.recent_runs : Array.from({ length: RECENT_PLACEHOLDERS }, () => null)).map((run, index) => (
+                    <RecentRunRow key={run?.id ?? `pending-${index}`} run={run} />
+                  ))}
+                  {data && !data.recent_runs.length && <p className="text-sm text-[var(--muted)]">No experiments yet. Start one, or let the fixture laboratory finish seeding.</p>}
+                </div>
               </div>
             </div>
             <SpendPanel data={data ?? null} />

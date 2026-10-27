@@ -322,30 +322,115 @@ function comparablePrompt(value: string): string {
     .trim();
 }
 
-export function PromptsPage() {
+type PromptRecord = {
+  id: string;
+  key: string;
+  name: string;
+  version: number;
+  body: string;
+};
+
+/** Seeded pipeline order. Any later key is appended after these. */
+const PROMPT_ORDER = [
+  "foundational",
+  "scene",
+  "actions",
+  "states",
+  "workflow",
+  "ambiguity",
+  "reinspect",
+  "comparison",
+];
+
+function latestPrompts(rows: PromptRecord[]): PromptRecord[] {
+  const latest = new Map<string, PromptRecord>();
+  for (const row of rows) {
+    const existing = latest.get(row.key);
+    if (!existing || row.version > existing.version) latest.set(row.key, row);
+  }
+  return [...latest.values()].sort((left, right) => {
+    const leftRank = PROMPT_ORDER.indexOf(left.key);
+    const rightRank = PROMPT_ORDER.indexOf(right.key);
+    const leftOrder = leftRank === -1 ? PROMPT_ORDER.length : leftRank;
+    const rightOrder = rightRank === -1 ? PROMPT_ORDER.length : rightRank;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    return left.key.localeCompare(right.key);
+  });
+}
+
+function PromptSection({ prompt }: { prompt: PromptRecord }) {
   const client = useQueryClient();
-  const prompts = useQuery({ queryKey: ["prompts"], queryFn: api.prompts });
-  const [key, setKey] = useState("scene");
-  const current = prompts.data?.find((item) => item.key === key);
-  const [body, setBody] = useState<string | null>(null);
-  const saved = current?.body ?? "";
-  const draft = body ?? saved;
-  const unchanged = !current || comparablePrompt(draft) === comparablePrompt(saved);
+  const [draft, setDraft] = useState(prompt.body);
+  const [savedBody, setSavedBody] = useState(prompt.body);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const title = humanize(prompt.key);
+  const detail = prompt.name && prompt.name !== title && prompt.name !== prompt.key ? prompt.name : "";
+  const unchanged = comparablePrompt(draft) === comparablePrompt(savedBody);
+  const rows = Math.min(24, Math.max(8, draft.split("\n").length));
   return (
-    <div className="space-y-3">
-      <h1 className="text-2xl font-medium">Prompt versions</h1>
-      <p className="text-sm text-[var(--muted)]">Saving creates a new version. Past experiments keep the snapshot they launched with.</p>
-      <select className="field max-w-sm" value={key} onChange={(event) => { setKey(event.target.value); setBody(null); }}>
-        {[...new Set(prompts.data?.map((item) => item.key) ?? [])].map((item) => <option key={item} value={item}>{humanize(item)}</option>)}
-      </select>
-      <textarea className="field min-h-80 font-mono text-xs" value={draft} onChange={(event) => setBody(event.target.value)} />
-      <button className="btn primary" disabled={unchanged} onClick={async () => {
-        if (unchanged) return;
-        await api.savePrompt(key, current?.name || key, draft);
-        setBody(null);
-        await client.invalidateQueries({ queryKey: ["prompts"] });
-      }}>Save new version</button>
-      {current && <p className="text-xs text-[var(--muted)]">v{current.version}</p>}
+    <section className="panel space-y-3 p-4" aria-labelledby={`prompt-${prompt.key}`}>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h2 id={`prompt-${prompt.key}`} className="text-sm font-medium">{title}</h2>
+          <span className="tag">v{prompt.version}</span>
+        </div>
+        <button
+          className="btn primary shrink-0"
+          disabled={unchanged || saving}
+          onClick={async () => {
+            if (unchanged || saving) return;
+            setSaving(true);
+            setError("");
+            try {
+              await api.savePrompt(prompt.key, prompt.name || prompt.key, draft);
+              setSavedBody(draft);
+              await client.invalidateQueries({ queryKey: ["prompts"] });
+            } catch (cause) {
+              setError(cause instanceof Error ? cause.message : "Save failed");
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {saving ? "Saving…" : "Save new version"}
+        </button>
+      </div>
+      {detail && <p className="text-xs text-[var(--muted)]">{detail}</p>}
+      <textarea
+        className="field resize-y font-mono text-xs leading-relaxed"
+        rows={rows}
+        aria-label={`${title} prompt`}
+        value={draft}
+        spellCheck={false}
+        onChange={(event) => setDraft(event.target.value)}
+      />
+      {error && <p className="text-xs text-[var(--rose)]">{error}</p>}
+    </section>
+  );
+}
+
+export function PromptsPage() {
+  const prompts = useQuery({ queryKey: ["prompts"], queryFn: api.prompts });
+  const sections = latestPrompts(prompts.data ?? []);
+  return (
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-2xl font-medium">Prompt versions</h1>
+        <p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">
+          Each prompt has its own editor. Saving creates a new version of that prompt. Past experiments keep the snapshot they launched with.
+        </p>
+      </div>
+      {prompts.isPending && <p className="text-sm text-[var(--muted)]">Loading prompts…</p>}
+      {prompts.isError && <p className="text-sm text-[var(--rose)]">Could not load prompts.</p>}
+      {!prompts.isPending && !prompts.isError && sections.length === 0 && (
+        <p className="text-sm text-[var(--muted)]">No prompts yet.</p>
+      )}
+      <div className="space-y-4">
+        {sections.map((item) => (
+          <PromptSection key={item.id} prompt={item} />
+        ))}
+      </div>
     </div>
   );
 }
