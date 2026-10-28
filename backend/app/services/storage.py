@@ -10,7 +10,7 @@ from app.config import settings
 
 def ensure_data_dirs() -> Path:
     root = settings.resolved_data_dir
-    for name in ("originals", "proxies", "frames", "thumbs", "sheets", "runs", "exports", "objects", "imports", "simulations"):
+    for name in ("originals", "proxies", "frames", "thumbs", "sheets", "runs", "exports", "objects", "imports"):
         (root / name).mkdir(parents=True, exist_ok=True)
     return root
 

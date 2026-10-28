@@ -19,20 +19,8 @@ from app.providers.claude_code import load_claude_code
 from app.providers.codex_cli import load_codex
 from app.providers.cursor_cli import load_cursor_cli
 from app.providers.model_list import capabilities_for, resolve_model_id, warm
-from app.providers.types import UnsupportedMode, provider_timeout
+from app.providers.types import UnsupportedMode
 from app.schemas.enums import PIPELINE_STAGES, ResearchMode
-
-
-def scene_flag(payload: dict) -> dict:
-    """The only scene fact stored on an analysis run: whether to render one.
-
-    Absent means skip, so older runs do not gain a render. A variant name is not stored.
-    """
-    scene = payload.get("scene")
-    if not isinstance(scene, dict):
-        return {"skip": True}
-    return {"skip": bool(scene.get("skip", False))}
-
 
 MODE_AXES = {
     "fixed_camera": ("fixed", "constrained"),
@@ -43,10 +31,7 @@ MODE_AXES = {
 
 
 def create_run(session: Session, payload: dict, enqueue: bool = True) -> AnalysisRun:
-    video_id = payload.get("video_id")
-    if not video_id:
-        raise ValueError("video not found")
-    video = session.get(VideoAsset, video_id)
+    video = session.get(VideoAsset, payload["video_id"])
     if video is None:
         raise ValueError("video not found")
     mode = payload.get("research_mode") or ResearchMode.FIXED_CAMERA.value
@@ -115,7 +100,7 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "temperature": temperature,
         "reasoning_effort": reasoning,
         "image_detail": payload.get("image_detail") or "high",
-        "timeout_s": provider_timeout(payload.get("timeout_s")),
+        "timeout_s": payload.get("timeout_s") or 180,
         "max_requests": payload.get("max_requests") or 12,
         "max_frames": payload.get("max_frames") or 48,
         "max_retries": payload.get("max_retries") or 2,
@@ -137,7 +122,6 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "app_version": __version__,
         "git_revision": _git(),
         "perception": perception,
-        "scene": scene_flag(payload),
     }
     if provider_id == "openai":
         config["openai_transport"] = openai_transport

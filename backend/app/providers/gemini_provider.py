@@ -19,7 +19,6 @@ from app.providers.types import (
     UnsupportedMode,
     Usage,
     estimate_cost,
-    provider_timeout,
 )
 
 
@@ -30,11 +29,8 @@ class GeminiProvider:
     def capabilities(self, model_id: str) -> ModelCapabilities:
         return capabilities_for(self.id, model_id)
 
-    def _client(self, secret: str, timeout_s: float | None = None) -> genai.Client:
-        options = None
-        if timeout_s is not None:
-            options = types.HttpOptions(timeout=int(timeout_s * 1000))
-        return genai.Client(api_key=secret, http_options=options)
+    def _client(self, secret: str) -> genai.Client:
+        return genai.Client(api_key=secret)
 
     async def validate(self, secret: str) -> None:
         try:
@@ -96,10 +92,9 @@ class GeminiProvider:
         return self._call(secret, request, caps, parts)
 
     def _generate_video(self, secret: str, request: GenerationRequest, caps: ModelCapabilities) -> ProviderResponse:
-        deadline_s = provider_timeout(request.timeout_s)
-        client = self._client(secret, deadline_s)
+        client = self._client(secret)
         uploaded = client.files.upload(file=str(request.video_path))
-        deadline = time.time() + deadline_s
+        deadline = time.time() + request.timeout_s
         while True:
             state = getattr(getattr(uploaded, "state", None), "name", None) or str(getattr(uploaded, "state", ""))
             if state == "ACTIVE":
@@ -120,7 +115,7 @@ class GeminiProvider:
         return self._call(secret, request, caps, [uploaded, note], client=client)
 
     def _call(self, secret, request, caps, contents, client=None) -> ProviderResponse:
-        client = client or self._client(secret, provider_timeout(request.timeout_s))
+        client = client or self._client(secret)
         started = time.perf_counter()
         try:
             response = client.models.generate_content(

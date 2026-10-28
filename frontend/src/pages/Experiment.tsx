@@ -38,7 +38,6 @@ export function ExperimentPage() {
   const [words, setWords] = useState(false);
   const [windowSec, setWindowSec] = useState("4");
   const [perceptionPreset, setPerceptionPreset] = useState("B_temporal");
-  const [skipScene, setSkipScene] = useState(false);
   const [error, setError] = useState("");
   const whisper = useQuery({ queryKey: ["audio-models"], queryFn: api.audioModels });
   const models = useMemo(() => {
@@ -74,7 +73,6 @@ export function ExperimentPage() {
         word_timestamps: words,
         align_window_sec: Number(windowSec) || 4,
         perception_preset: perceptionPreset,
-        scene: { skip: skipScene },
       }),
     onSuccess: (run) => navigate(`/runs/${run.id}/pipeline`),
     onError: (err: Error) => setError(err.message),
@@ -245,12 +243,8 @@ export function ExperimentPage() {
           Off by default. Visual analysis does not wait on speech, and a recording without an audio track still runs.
         </p>
       </SettingsFieldset>
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={skipScene} onChange={(event) => setSkipScene(event.target.checked)} />
-        Skip Blender scene creation
-      </label>
       {error && <p className="text-sm text-[var(--rose)]">{error}</p>}
-      <button className="btn primary" disabled={!videoId || create.isPending} onClick={() => { setError(""); create.mutate(); }}>
+      <button className="btn primary" disabled={!videoId || create.isPending} onClick={() => create.mutate()}>
         {create.isPending ? "Starting…" : "Start analysis"}
       </button>
     </div>

@@ -18,13 +18,7 @@ from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
 from app.providers.model_list import resolve_model_id
 from app.providers.registry import get_provider, needs_secret, run_transport
-from app.providers.types import (
-    FrameInput,
-    GenerationRequest,
-    UnsupportedMode,
-    provider_timeout,
-    rough_input_tokens,
-)
+from app.providers.types import FrameInput, GenerationRequest, UnsupportedMode, rough_input_tokens
 from app.schemas.analysis import AnalysisDocument, Coverage
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
 from app.services.credentials import load_secret
@@ -260,7 +254,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
         temperature=config.get("temperature"),
         reasoning_effort=config.get("reasoning_effort"),
         image_detail=config.get("image_detail") or "high",
-        timeout_s=provider_timeout(config.get("timeout_s")),
+        timeout_s=float(config.get("timeout_s") or 180),
         metadata={"transport": transport} if run.provider_id in {"openai", "anthropic", "cursor"} else {},
     )
     estimate = rough_input_tokens(request)

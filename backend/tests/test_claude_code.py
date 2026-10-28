@@ -382,13 +382,12 @@ def test_new_run_records_the_claude_code_transport(client: TestClient, tmp_path:
     session.close()
 
 
-def test_claude_code_uses_the_global_provider_timeout():
-    from app.providers.types import PROVIDER_TIMEOUT_S, provider_timeout
+def test_claude_code_hard_ceiling_is_at_least_ten_minutes():
+    from app.providers.claude_code import HARD_TIMEOUT_S, hard_timeout
 
-    assert PROVIDER_TIMEOUT_S == 30 * 60
-    assert provider_timeout(180) == 1800
-    assert provider_timeout(600) == 1800
-    assert provider_timeout(2400) == 2400
+    assert HARD_TIMEOUT_S == 600
+    assert hard_timeout(180) == 600
+    assert hard_timeout(900) == 900
 
 
 def _child(path: Path, body: str) -> list[str]:

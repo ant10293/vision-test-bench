@@ -28,7 +28,6 @@ from app.providers.types import (
     ProviderResponse,
     UnsupportedMode,
     Usage,
-    provider_timeout,
 )
 from app.services.storage import data_path, ensure_data_dirs
 
@@ -48,6 +47,7 @@ _SIGNED_OUT = (
     "authentication",
 )
 _EFFORT = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+HARD_TIMEOUT_S = 600
 _login_proc: asyncio.subprocess.Process | None = None
 _login_task: asyncio.Task[None] | None = None
 _login_url = ""
@@ -94,6 +94,10 @@ def resolve_binary(binary: str) -> str | None:
     if candidate.is_file() and os.access(candidate, os.X_OK):
         return str(candidate.resolve())
     return shutil.which(binary)
+
+
+def hard_timeout(requested: float) -> float:
+    return max(float(requested), HARD_TIMEOUT_S)
 
 
 def child_env() -> dict[str, str]:
@@ -717,7 +721,7 @@ async def complete(request: GenerationRequest) -> ProviderResponse:
                 env,
                 directory,
                 build_prompt(request, listed).encode(),
-                provider_timeout(request.timeout_s),
+                hard_timeout(request.timeout_s),
             )
         except OSError as exc:
             raise ProviderError(str(exc)) from exc

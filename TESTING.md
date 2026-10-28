@@ -28,8 +28,6 @@ Covered without network:
 
 `tests/verification_fixtures.py` is the only place those assembly names appear. `app/verification` is scanned so the engine does not name a specific part. No paid provider is called. Reinspection status in these tests is `not_sent`.
 
-Scene tests that do not need Blender cover the schema, insertion constraints, counterfactual pairs, visibility verdicts, dataset integrity, and the image-space scene graph. `test_simulation_render.py` and `test_simulation_api.py` render with the installed Blender and skip, with a reason, when `find_blender()` is `None`. They are not replaced with a mock. The API test ingests the clip, runs the deterministic tracker, and checks that the run config does not contain the scene.
-
 Paid provider tests are not in this suite. Do not describe a live integration as tested until a validation or generation call has succeeded with a real key.
 
 ## Frontend
@@ -38,7 +36,7 @@ Paid provider tests are not in this suite. Do not describe a live integration as
 cd frontend && npx tsc --noEmit && npx vitest run
 ```
 
-Unit tests cover observation selection at the playhead, refusal to hold a box across a long gap, nearest-frame lookup, one track sample nearest the playhead, verification verdict colors that keep pass, fail, uncertain, and corrected distinct, and the Blender-to-three.js display conversion.
+Unit tests cover observation selection at the playhead, refusal to hold a box across a long gap, nearest-frame lookup, one track sample nearest the playhead, and verification verdict colors that keep pass, fail, uncertain, and corrected distinct.
 
 ## Browser
 

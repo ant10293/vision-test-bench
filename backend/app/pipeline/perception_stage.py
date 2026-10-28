@@ -13,7 +13,6 @@ from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRun, PipelineStageRun
 from app.perception.frames import extract_tracking_frames
 from app.perception.presets import config_from_mapping
-from app.perception.scene_graph import graph_from_tracks
 from app.pipeline.deterministic_doc import document_from_spatial
 from app.schemas.analysis import Coverage
 from app.services.storage import data_path, resolve_stored
@@ -89,8 +88,6 @@ def run_spatial_stage(session: Session, run: AnalysisRun, video: VideoAsset, sta
     spatial_path = data_path("runs", run.id, "spatial.json")
     spatial_path.parent.mkdir(parents=True, exist_ok=True)
     spatial_path.write_text(document.model_dump_json())
-    graph = graph_from_tracks(report.tracks, report.chunks, report.compensation_model)
-    data_path("runs", run.id, "scene_graph.json").write_text(json.dumps(graph, indent=2))
     diagnostics = dict(report.perception.diagnostics) if report.perception else {}
     diagnostics["frame_source"] = frame_source
     if limitation:
@@ -101,8 +98,6 @@ def run_spatial_stage(session: Session, run: AnalysisRun, video: VideoAsset, sta
         "global_motion": report.global_motion,
         "scene_changes": report.scene_change_count,
         "world_coordinates_supported": False,
-        "metric_scale_known": False,
-        "scene_graph": "scene_graph.json",
         "compensation_model": report.compensation_model,
         "notes": report.notes,
         "strategy": config.strategy,

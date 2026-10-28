@@ -20,7 +20,6 @@ from app.providers.types import (
     UnsupportedMode,
     Usage,
     estimate_cost,
-    provider_timeout,
 )
 
 
@@ -100,7 +99,7 @@ class AnthropicProvider:
         kwargs["tool_choice"] = {"type": "tool", "name": "record_analysis"}
         started = time.perf_counter()
         try:
-            response = await self._client(secret, provider_timeout(request.timeout_s)).messages.create(**kwargs)
+            response = await self._client(secret, request.timeout_s).messages.create(**kwargs)
         except Exception as exc:
             raise translate(exc) from exc
         text = ""

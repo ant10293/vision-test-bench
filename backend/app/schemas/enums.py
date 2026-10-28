@@ -211,7 +211,6 @@ PIPELINE_STAGES = [
     "sample_frames",
     "spatial_tracking",
     "scene_analysis",
-    "blender_scene",
     "object_extraction",
     "action_analysis",
     "state_tracking",

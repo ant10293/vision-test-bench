@@ -6,8 +6,6 @@ The question is whether a model that was not trained on the task can recover the
 
 The default prompts forbid inventing events, equating an attempt with success, treating proximity as attachment, assuming the demonstrated order is necessary, and claiming world coordinates. They do not name a hardware task. A test locks that: the template text does not contain bolt, washer, nut, or hexagonal. The fixture analyses do use those names, because they are the authored answer for the synthetic clip, and the interface badges them as fixtures.
 
-A Blender scene is a different kind of reference. Its physical state is known because the evaluator produced it. That state is not copied into the analysis request. A later score compares the run's document with the dataset. Knowing the washer was omitted is not a detection. An occluded condition's evidence-grounded label is `CANNOT_VERIFY`, and a guess is not counted as accuracy. Camera matrices from the simulator are not a reason to mark a real-video run as having world coordinates.
-
 ## What a run must record
 
 Checksum, model id, provider, modality, sampling preset, the timestamps that were extracted and the ones that were submitted, prompt version and the snapshot text, parameters, provider request ids when the API returns them, start and finish times, SDK version, application version, git revision, raw response, validation issues, token counts, and an estimated cost. Sparse frames are never described as a full viewing. The coverage note says how many frames were used and that the rest of the video was not sent.

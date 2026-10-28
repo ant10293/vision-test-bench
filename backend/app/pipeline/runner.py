@@ -112,7 +112,7 @@ async def execute_job(session: Session, job: Job) -> None:
                 stage.status = "failed"
                 stage.error = _error_text(exc)
                 stage.finished_at = utcnow()
-                if name in {"segmentation", "reinspection", "transcription", "audio_context", "blender_scene"}:
+                if name in {"segmentation", "reinspection", "transcription", "audio_context"}:
                     session.commit()
                     continue
                 raise
@@ -190,11 +190,6 @@ def _stage(session, run_id: str, name: str) -> PipelineStageRun:
 
 async def _dispatch(session, run: AnalysisRun, video: VideoAsset, stage: PipelineStageRun) -> None:
     name = stage.stage
-    if name == "blender_scene":
-        from app.pipeline.scene_stage import render_blender_scene
-
-        render_blender_scene(session, run, stage)
-        return
     if name == "metadata":
         stage.checkpoint_json = {
             "duration_sec": video.duration_sec,
@@ -282,7 +277,7 @@ async def _audio_context(session, run, video, stage) -> None:
     )
     from app.models.audio import TranscriptSegment
     from app.providers.registry import get_provider, needs_secret, run_transport
-    from app.providers.types import FrameInput, GenerationRequest, provider_timeout
+    from app.providers.types import FrameInput, GenerationRequest
     from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
     from app.services.credentials import load_secret
 
@@ -325,7 +320,7 @@ async def _audio_context(session, run, video, stage) -> None:
         frames=frame_inputs,
         modality="sampled_frames",
         temperature=config.get("temperature"),
-        timeout_s=provider_timeout(config.get("timeout_s")),
+        timeout_s=float(config.get("timeout_s") or 180),
         image_detail=config.get("image_detail") or "low",
         metadata={"transport": transport} if run.provider_id in {"openai", "cursor"} else {},
     )
@@ -613,13 +608,13 @@ async def _run_sam(session, run, stage) -> None:
     from app.models.domain import DetectedObject, ObjectImage, ObjectObservation
     from app.providers.catalog import lookup
     from app.providers.sam import SamAdapter, sam_capabilities
-    from app.providers.types import ProviderResponse, Usage, estimate_cost, provider_timeout
+    from app.providers.types import ProviderResponse, Usage, estimate_cost
     from app.schemas.analysis import BBox
     from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
     from app.services.credentials import load_secret
 
     secret, _source = load_secret(session, "meta")
-    adapter = SamAdapter(secret, timeout_s=provider_timeout((run.config_json or {}).get("timeout_s")))
+    adapter = SamAdapter(secret, timeout_s=float((run.config_json or {}).get("timeout_s") or 180))
     objects = list(
         session.scalars(select(DetectedObject).where(DetectedObject.revision_id == run.active_revision_id))
     )

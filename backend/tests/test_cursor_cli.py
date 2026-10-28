@@ -499,13 +499,12 @@ def test_stream_result_is_taken_from_the_final_event():
     assert payload["request_id"] == "req-1"
 
 
-def test_cursor_cli_uses_the_global_provider_timeout():
-    from app.providers.types import PROVIDER_TIMEOUT_S, provider_timeout
+def test_cursor_cli_hard_ceiling_covers_a_long_merge():
+    from app.providers.cursor_cli import HARD_TIMEOUT_S, hard_timeout
 
-    assert PROVIDER_TIMEOUT_S == 30 * 60
-    assert provider_timeout(180) == 1800
-    assert provider_timeout(600) == 1800
-    assert provider_timeout(2400) == 2400
+    assert HARD_TIMEOUT_S == 1800
+    assert hard_timeout(180) == 1800
+    assert hard_timeout(2400) == 2400
 
 
 def _child(path: Path, body: str) -> list[str]:

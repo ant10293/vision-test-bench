@@ -22,14 +22,6 @@ class RateLimitError(ProviderError):
     pass
 
 
-# Wall-clock deadline for every provider call. A longer configured timeout still applies.
-PROVIDER_TIMEOUT_S = 30 * 60
-
-
-def provider_timeout(requested: float | None = None) -> float:
-    return max(float(requested or 0), PROVIDER_TIMEOUT_S)
-
-
 @dataclass
 class FrameInput:
     timestamp: float
@@ -106,7 +98,7 @@ class GenerationRequest:
     temperature: float | None = None
     reasoning_effort: str | None = None
     image_detail: str = "high"
-    timeout_s: float = PROVIDER_TIMEOUT_S
+    timeout_s: float = 180
     metadata: dict = field(default_factory=dict)
 
 

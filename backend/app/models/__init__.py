@@ -44,7 +44,6 @@ from app.models.sessions import (
     ProjectRevision,
     RecordingSession,
 )
-from app.models.simulation import SimulationDataset, SimulationEvaluation, SimulationJob
 from app.models.verification import (
     LearnedWorkflowTemplate,
     StepVerification,
@@ -91,9 +90,6 @@ __all__ = [
     "ProviderStatus",
     "RecordingSession",
     "SceneChunk",
-    "SimulationDataset",
-    "SimulationEvaluation",
-    "SimulationJob",
     "SegmentationMask",
     "SpatialTrackPoint",
     "TranscriptSegment",

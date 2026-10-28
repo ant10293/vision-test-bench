@@ -18,7 +18,6 @@ from app.providers.types import (
     UnsupportedMode,
     Usage,
     estimate_cost,
-    provider_timeout,
 )
 
 
@@ -109,7 +108,7 @@ class OpenAIProvider:
             }
         started = time.perf_counter()
         try:
-            response = await self._client(secret, provider_timeout(request.timeout_s)).responses.create(**kwargs)
+            response = await self._client(secret, request.timeout_s).responses.create(**kwargs)
         except Exception as exc:
             raise translate(exc) from exc
         usage = getattr(response, "usage", None)
