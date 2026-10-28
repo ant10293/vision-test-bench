@@ -48,18 +48,20 @@ export function PerceptionPanel({ bundle }: { bundle: Bundle }) {
       </div>
       <ul className="space-y-2">
         {instances.map((item) => (
-          <li key={item.instance_id} className="rounded border border-[var(--line)] p-2">
-            <button className="font-medium" onClick={() => setTime(item.first_seen)}>{humanize(item.instance_id)}</button>
-            <span className="ml-2 text-xs text-[var(--muted)]">
-              {item.status} · {formatTime(item.first_seen)}–{formatTime(item.last_seen)} · {item.observation_count} observations
-              {item.uncertain ? " · uncertain" : ""}
-              {item.semantic_label ? ` · ${item.semantic_label}` : " · no semantic class"}
-            </span>
-            <div className="text-xs text-[var(--muted)]">
-              Trusted references {item.trusted_references} · candidate references {item.candidate_references}
-              {item.human_initialized ? " · seeded by a person" : ""}
+          <li key={item.instance_id} className="flex items-center gap-3 rounded border border-[var(--line)] p-2">
+            <div className="min-w-0 flex-1">
+              <button className="font-medium" onClick={() => setTime(item.first_seen)}>{humanize(item.instance_id)}</button>
+              <span className="ml-2 text-xs text-[var(--muted)]">
+                {item.status} · {formatTime(item.first_seen)}–{formatTime(item.last_seen)} · {item.observation_count} observations
+                {item.uncertain ? " · uncertain" : ""}
+                {item.semantic_label ? ` · ${item.semantic_label}` : " · no semantic class"}
+              </span>
+              <div className="text-xs text-[var(--muted)]">
+                Trusted references {item.trusted_references} · candidate references {item.candidate_references}
+                {item.human_initialized ? " · seeded by a person" : ""}
+              </div>
             </div>
-            <button className="btn mt-1" onClick={() => refresh(api.splitInstance(bundle.run.id, item.instance_id, [time]))}>Split at playhead</button>
+            <button className="btn shrink-0 whitespace-nowrap" onClick={() => refresh(api.splitInstance(bundle.run.id, item.instance_id, [time]))}>Split at playhead</button>
           </li>
         ))}
       </ul>
@@ -102,21 +104,24 @@ function HypothesisRow({
   onSeek: (time: number) => void;
   onDecide: (decision: "confirmed" | "rejected") => void;
 }) {
+  const pending = item.decision !== "confirmed" && item.decision !== "rejected";
   return (
-    <div className="rounded border border-[var(--line)] p-2">
-      <button className="text-xs" onClick={() => onSeek(item.timestamp)}>{formatTime(item.timestamp)} · {item.decision}</button>
-      <div className="text-xs text-[var(--muted)]">
-        {humanize(item.subject_instance_id)} → {humanize(item.candidate_instance_id)}
-        {item.runner_up_instance_id ? ` · runner-up ${humanize(item.runner_up_instance_id)}` : ""}
+    <div className="flex items-center gap-3 rounded border border-[var(--line)] p-2">
+      <div className="min-w-0 flex-1">
+        <button className="text-xs" onClick={() => onSeek(item.timestamp)}>{formatTime(item.timestamp)} · {item.decision}</button>
+        <div className="text-xs text-[var(--muted)]">
+          {humanize(item.subject_instance_id)} → {humanize(item.candidate_instance_id)}
+          {item.runner_up_instance_id ? ` · runner-up ${humanize(item.runner_up_instance_id)}` : ""}
+        </div>
+        <div className="text-xs text-[var(--muted)]">
+          Appearance {score(item.appearance_cosine)} · motion {score(item.motion_agreement)} · association {score(item.association_score)} · margin {score(item.margin)}
+        </div>
+        <p className="text-xs">{item.note}</p>
       </div>
-      <div className="text-xs text-[var(--muted)]">
-        Appearance {score(item.appearance_cosine)} · motion {score(item.motion_agreement)} · association {score(item.association_score)} · margin {score(item.margin)}
-      </div>
-      <p className="text-xs">{item.note}</p>
-      {item.decision !== "confirmed" && item.decision !== "rejected" && (
-        <div className="mt-1 flex gap-2">
-          <button className="btn" onClick={() => onDecide("confirmed")}>Confirm</button>
-          <button className="btn" onClick={() => onDecide("rejected")}>Reject</button>
+      {pending && (
+        <div className="flex shrink-0 gap-2">
+          <button className="btn whitespace-nowrap" onClick={() => onDecide("confirmed")}>Confirm</button>
+          <button className="btn whitespace-nowrap" onClick={() => onDecide("rejected")}>Reject</button>
         </div>
       )}
     </div>
