@@ -17,6 +17,7 @@ from app.models.runs import AnalysisRevision, AnalysisRun, Job, PipelineStageRun
 from app.models.util import utcnow
 from app.perception.assembly import apply_assembly
 from app.perception.continuity import reconcile_identity
+from app.perception.roster import drop_contained_objects
 from app.perception.ground import apply_perception
 from app.perception.types import TrackingCancelled
 from app.pipeline.infer import (
@@ -481,6 +482,9 @@ async def _model_stage(session, run, video, stage) -> None:
     config["max_images_per_call"] = caps_window
     run.config_json = config
     document = await produce_document(session, run, video, frames, stage.stage, coverage, spatial)
+    # Sampling already counted the frames. The text-only merge must not replace that
+    # record with a note about how it combined the windows.
+    document = document.model_copy(update={"coverage": coverage})
     document, locate_info = await _ground(session, run, stage, document, frames)
     if document.perception is None and spatial is not None and spatial.perception is not None:
         document = apply_perception(document, spatial)
@@ -490,7 +494,7 @@ async def _model_stage(session, run, video, stage) -> None:
     if document.camera and run.research_mode == "auto":
         run.viewpoint = document.camera.viewpoint
         run.task_constraint = document.camera.task_constraint
-    run.coverage_json = (document.coverage or coverage).model_dump(mode="json")
+    run.coverage_json = coverage.model_dump(mode="json")
     save_working(run.id, document)
     _remember(session, run, document, stage.stage)
     stage.checkpoint_json = {
@@ -524,9 +528,11 @@ async def _ground(session, run, stage, document: AnalysisDocument, frames: list[
     locate_info = None
     if document.observations:
         document = reconcile_identity(document)
+        document = drop_contained_objects(document)
         if stage.stage == "scene_analysis":
             document, locate_info = await locate_missing(session, run, document, frames)
             document = reconcile_identity(document)
+            document = drop_contained_objects(document)
         document = apply_assembly(document)
     return document, locate_info
 

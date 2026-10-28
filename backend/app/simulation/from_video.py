@@ -41,15 +41,15 @@ _COLORS = (
 
 
 def records_from_document(document) -> list[dict]:
-    """Boxes for the analysis objects. Motion-track ids are not objects."""
-    labels = {
-        obj.local_id: (obj.label or obj.local_id)
-        for obj in document.objects
-        if getattr(obj, "accepted", True)
-    }
+    """Boxes for the analysis objects. Motion-track ids are not objects.
+
+    ``accepted`` is not a filter. The model sets it false on predictions the
+    overlay still draws, and those are the boxes this scene places.
+    """
+    labels = {obj.local_id: (obj.label or obj.local_id) for obj in document.objects}
     rows = []
     for obs in document.observations:
-        if not getattr(obs, "accepted", True) or obs.object_local_id not in labels or obs.bbox is None:
+        if obs.object_local_id not in labels or obs.bbox is None:
             continue
         visibility = getattr(obs.visibility, "value", obs.visibility)
         if str(visibility) == "absent":

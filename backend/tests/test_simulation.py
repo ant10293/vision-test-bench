@@ -425,7 +425,7 @@ def test_the_scene_uses_analysis_objects_and_ignores_motion_tracks():
         duration=2,
         scene_id="objects",
     )
-    assert [(item.instance_id, item.label) for item in scene.objects] == [("Object_1", "cup")]
+    assert [(item.instance_id, item.label) for item in scene.objects] == [("Object_1", "cup"), ("Object_2", "spoon")]
     assert "track_" not in scene.model_dump_json()
 
 

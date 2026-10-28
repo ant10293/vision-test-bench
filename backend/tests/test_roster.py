@@ -1,6 +1,6 @@
 """Object ids follow the previous window, through the frames those windows share."""
 
-from app.perception.roster import align_to_roster
+from app.perception.roster import align_to_roster, drop_contained_objects
 from app.schemas.analysis import (
     ActionPrediction,
     AmbiguityPrediction,
@@ -427,3 +427,39 @@ def test_a_shifted_box_is_not_absorbed_by_the_part_it_touches():
     assert _box(aligned, "Object_1", 1) == shifted
     assert _box(aligned, "Object_2", 1) == frame
     assert _ids(aligned) == {"Object_1", "Object_2"}
+
+
+def test_a_box_that_never_leaves_another_object_is_not_shown_separately():
+    tire = (0.50, 0.29, 0.08, 0.05)
+    spoke = (0.52, 0.30, 0.05, 0.03)
+    document = _window(
+        [("Object_3", "black tire"), ("Object_4", "spoked wheel center")],
+        [
+            _obs("Object_3", 0, *tire),
+            _obs("Object_4", 0, *spoke),
+            _obs("Object_3", 1, *tire),
+            _obs("Object_4", 1, *spoke),
+        ],
+    )
+    kept = drop_contained_objects(document)
+    assert _ids(kept) == {"Object_3"}
+    assert _box(kept, "Object_3", 0) == tire
+    assert all(item.object_local_id != "Object_4" for item in kept.observations)
+    assert any("never seen apart" in item.description for item in kept.ambiguities)
+
+
+def test_a_part_seen_apart_before_it_is_inside_stays_its_own_object():
+    body = (0.40, 0.40, 0.30, 0.20)
+    apart = (0.10, 0.10, 0.04, 0.04)
+    inside = (0.50, 0.48, 0.04, 0.04)
+    document = _window(
+        [("Object_1", "gray body"), ("Object_7", "clear stud")],
+        [
+            _obs("Object_1", 0, *body),
+            _obs("Object_7", 0, *apart),
+            _obs("Object_1", 1, *body),
+            _obs("Object_7", 1, *inside),
+        ],
+    )
+    kept = drop_contained_objects(document)
+    assert _ids(kept) == {"Object_1", "Object_7"}

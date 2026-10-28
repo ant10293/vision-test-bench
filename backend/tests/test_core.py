@@ -177,6 +177,7 @@ def test_window_note_names_the_shared_timestamps():
     assert "keep the earlier ids" in merge
     assert "Do not duplicate actions" in merge
     assert "Keep every observation" in merge
+    assert "one box per object" in merge
 
 
 def test_unknown_action_is_in_the_vocabulary_and_approach_is_offered():

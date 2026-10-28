@@ -13,10 +13,23 @@ from __future__ import annotations
 import numpy as np
 
 from app.perception.assignment import iou, linear_assignment
-from app.schemas.analysis import AnalysisDocument, BBox, ObservationPrediction
+from app.schemas.analysis import (
+    AmbiguityPrediction,
+    AnalysisDocument,
+    BBox,
+    Evidence,
+    ObservationPrediction,
+)
+from app.schemas.enums import AmbiguityKind, EvidenceClass, Provenance
 
 # A shared frame decides identity when the two boxes cover mostly the same pixels.
 MATCH_IOU = 0.5
+# Usual overlap of the smaller box with the larger one. One loose frame can be lower.
+CONTAINED = 0.9
+# Below this, the smaller box is mostly outside and the two were seen apart.
+APART = 0.5
+# The inner object has to be clearly the smaller one. Similar boxes are not a part inside a part.
+CONTAINED_AREA = 0.75
 # A later box this close to a known part is another view of that part.
 TOUCH_GAP = 0.04
 # Pairs below MATCH_IOU stay out of the assignment, so a weak overlap cannot
@@ -360,3 +373,151 @@ def _union(a: BBox, b: BBox) -> BBox:
     x2 = min(1.0, max(a.x + a.w, b.x + b.w))
     y2 = min(1.0, max(a.y + a.h, b.y + b.h))
     return BBox(x=x1, y=y1, w=max(x2 - x1, 1e-4), h=max(y2 - y1, 1e-4))
+
+
+def drop_contained_objects(document: AnalysisDocument) -> AnalysisDocument:
+    """Drop an object whose box never leaves the inside of another object.
+
+    A smaller box that stays inside a larger one is the same object seen twice.
+    It remains its own object when any shared frame shows the two apart.
+    """
+    mapping = _contained_hosts(document)
+    if not mapping:
+        return document
+    observations = [item for item in document.observations if item.object_local_id not in mapping]
+    objects = [obj for obj in document.objects if obj.local_id not in mapping]
+    ambiguities = list(document.ambiguities)
+    used = {item.local_id for item in ambiguities}
+    for inner, outer in sorted(mapping.items()):
+        marker = f"Ambiguity_contained_{inner}"
+        if marker in used:
+            continue
+        used.add(marker)
+        inner_label = _label_of(document, inner)
+        outer_label = _label_of(document, outer)
+        ambiguities.append(
+            AmbiguityPrediction(
+                local_id=marker,
+                kind=AmbiguityKind.UNCERTAIN_IDENTITY,
+                description=(
+                    f"{inner} ({inner_label}) was not kept as its own object. Its box stayed inside "
+                    f"{outer} ({outer_label}) on every frame where both were visible, and the two were "
+                    "never seen apart."
+                ),
+                object_local_ids=[outer],
+                evidence=Evidence(
+                    classification=EvidenceClass.INFERRED,
+                    provenance=Provenance.DETERMINISTIC,
+                    note="Compared the two boxes on the frames where both were present.",
+                ),
+            )
+        )
+    return document.model_copy(
+        update={
+            "objects": objects,
+            "observations": observations,
+            "states": [
+                item.model_copy(update={"object_local_id": mapping.get(item.object_local_id, item.object_local_id)})
+                for item in document.states
+            ],
+            "transitions": [
+                item.model_copy(update={"object_local_id": mapping.get(item.object_local_id, item.object_local_id)})
+                for item in document.transitions
+            ],
+            "relationships": [
+                item.model_copy(
+                    update={
+                        "subject_local_id": mapping.get(item.subject_local_id, item.subject_local_id),
+                        "other_local_id": mapping.get(item.other_local_id, item.other_local_id)
+                        if item.other_local_id
+                        else None,
+                    }
+                )
+                for item in document.relationships
+            ],
+            "actions": [
+                item.model_copy(update={"object_local_ids": _ids(item.object_local_ids, mapping)})
+                for item in document.actions
+            ],
+            "workflow_steps": [
+                item.model_copy(update={"required_objects": _ids(item.required_objects, mapping)})
+                for item in document.workflow_steps
+            ],
+            "ambiguities": [
+                *[
+                    item.model_copy(update={"object_local_ids": _ids(item.object_local_ids, mapping)})
+                    for item in ambiguities
+                    if item.local_id not in {f"Ambiguity_contained_{inner}" for inner in mapping}
+                ],
+                *[item for item in ambiguities if item.local_id.startswith("Ambiguity_contained_")],
+            ],
+        }
+    )
+
+
+def _contained_hosts(document: AnalysisDocument) -> dict[str, str]:
+    boxes = _boxes(document)
+    areas = _median_area(boxes)
+    hosts: dict[str, tuple[float, str]] = {}
+    for inner, inner_area in areas.items():
+        best: tuple[float, str] | None = None
+        for outer, outer_area in areas.items():
+            if inner == outer or inner_area > outer_area * CONTAINED_AREA:
+                continue
+            shared = sorted(
+                time for (object_id, time) in boxes if object_id == inner and (outer, time) in boxes
+            )
+            if not shared:
+                continue
+            covered = [_overlap(boxes[(inner, time)], boxes[(outer, time)]) for time in shared]
+            ordered = sorted(covered)
+            usual = ordered[len(ordered) // 2]
+            if usual < CONTAINED or any(amount < APART for amount in covered):
+                continue
+            if best is None or outer_area < best[0]:
+                best = (outer_area, outer)
+        if best is not None:
+            hosts[inner] = best
+    return _resolve_hosts({inner: outer for inner, (_area, outer) in hosts.items()})
+
+
+def _resolve_hosts(hosts: dict[str, str]) -> dict[str, str]:
+    resolved: dict[str, str] = {}
+    for inner in hosts:
+        seen: set[str] = set()
+        current = inner
+        while current in hosts and current not in seen:
+            seen.add(current)
+            current = hosts[current]
+        if current != inner and current not in hosts:
+            resolved[inner] = current
+    return resolved
+
+
+def _median_area(boxes: dict[tuple[str, float], BBox]) -> dict[str, float]:
+    grouped: dict[str, list[float]] = {}
+    for (object_id, _time), box in boxes.items():
+        grouped.setdefault(object_id, []).append(box.w * box.h)
+    areas: dict[str, float] = {}
+    for object_id, values in grouped.items():
+        ordered = sorted(values)
+        areas[object_id] = ordered[len(ordered) // 2]
+    return areas
+
+
+def _overlap(inner: BBox, outer: BBox) -> float:
+    """Share of the inner box that lies inside the outer box."""
+    ix1, iy1 = inner.x, inner.y
+    ix2, iy2 = inner.x + inner.w, inner.y + inner.h
+    ox1, oy1 = outer.x, outer.y
+    ox2, oy2 = outer.x + outer.w, outer.y + outer.h
+    overlap_w = max(0.0, min(ix2, ox2) - max(ix1, ox1))
+    overlap_h = max(0.0, min(iy2, oy2) - max(iy1, oy1))
+    return (overlap_w * overlap_h) / max(inner.w * inner.h, 1e-9)
+
+
+def _label_of(document: AnalysisDocument, object_id: str) -> str:
+    for obj in document.objects:
+        if obj.local_id == object_id:
+            return obj.label or object_id
+    return object_id
