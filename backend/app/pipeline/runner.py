@@ -23,6 +23,7 @@ from app.pipeline.infer import (
     BudgetExceeded,
     StageSkipped,
     load_working,
+    model_for_call,
     produce_document,
     save_working,
 )
@@ -310,8 +311,9 @@ async def _audio_context(session, run, video, stage) -> None:
         for frame in frames
         if data_path(*Path(frame.path).parts).exists()
     ]
+    model_id, requested = model_for_call(session, run)
     generation = GenerationRequest(
-        model_id=run.model_id,
+        model_id=model_id,
         system_prompt=request_body["system_prompt"],
         user_prompt=request_body["user_prompt"],
         frames=frame_inputs,
@@ -326,13 +328,14 @@ async def _audio_context(session, run, video, stage) -> None:
         run,
         stage="audio_context",
         provider_id=run.provider_id,
-        model_id=run.model_id,
+        model_id=model_id,
         modality="sampled_frames",
         prompt_version_id=run.prompt_version_id,
         parameters={
             "temperature": generation.temperature,
             "image_detail": generation.image_detail,
             "purpose": "transcript_context",
+            **({"requested_model_id": requested} if requested != model_id else {}),
         },
         frame_timestamps=[frame.timestamp for frame in frame_inputs],
     )

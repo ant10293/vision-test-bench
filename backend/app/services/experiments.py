@@ -18,7 +18,7 @@ from app.pipeline.prompts import TEMPLATES, compose
 from app.providers.claude_code import load_claude_code
 from app.providers.codex_cli import load_codex
 from app.providers.cursor_cli import load_cursor_cli
-from app.providers.model_list import capabilities_for, warm
+from app.providers.model_list import capabilities_for, resolve_model_id, warm
 from app.providers.types import UnsupportedMode
 from app.schemas.enums import PIPELINE_STAGES, ResearchMode
 
@@ -41,6 +41,7 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
     model_id = payload["model_id"]
     modality = payload.get("modality") or "sampled_frames"
     _warm_account_models(session, provider_id)
+    model_id = resolve_model_id(session, provider_id, model_id, modality)
     caps = capabilities_for(provider_id, model_id)
     if modality == "native_video" and not caps.native_video:
         raise UnsupportedMode(

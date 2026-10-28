@@ -5,10 +5,15 @@ A known catalog row still supplies price and the limits the live list does
 not. An id the catalog has never seen stays unpriced. Local providers are not
 accounts, so their single catalog row stays put. The same rows are what a run
 validates against.
+
+A generation request whose model is not on that live list uses the account's
+marked default, or the first listed model that can take the run's modality.
+The static catalog is not a substitute model.
 """
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 
@@ -93,6 +98,94 @@ def capabilities_for(provider_id: str, model_id: str) -> ModelCapabilities:
         output_price_per_mtok=saved.get("output_price_per_mtok"),
         notes=str(saved.get("notes") or ""),
     )
+
+
+def live_options(
+    provider_id: str,
+    secret: str = "",
+    base_url: str = "",
+    *,
+    refresh: bool = False,
+) -> list[dict] | None:
+    """The account's models, or None when that list cannot be read.
+
+    The static catalog is not returned here. A failed account lookup must not
+    be treated as the set of models the account can run.
+    """
+    if provider_id in _LOCAL:
+        return None
+    catalog = [caps.as_dict() for caps in models_for(provider_id)]
+    options = options_for(provider_id, catalog, secret, base_url, refresh=refresh)
+    if options is catalog:
+        return None
+    return options
+
+
+def choose_fallback(
+    options: list[dict],
+    *,
+    image: bool = False,
+    native_video: bool = False,
+) -> str:
+    """Pick from the account list. A row the account marks as default wins."""
+    eligible = [item for item in options if _serves(item, image, native_video)] or list(options)
+    for item in eligible:
+        if _marked_default(item):
+            return str(item["model_id"])
+    if not eligible:
+        return ""
+    return str(eligible[0]["model_id"])
+
+
+def resolve_model_id(session, provider_id: str, model_id: str, modality: str) -> str:
+    """Keep model_id when the account lists it. Otherwise use a live-list fallback.
+
+    When the account list cannot be read, model_id is unchanged.
+    """
+    if provider_id in _LOCAL:
+        return model_id
+    secret, base_url = _account(session, provider_id)
+    image = modality == "sampled_frames"
+    native_video = modality == "native_video"
+    options = live_options(provider_id, secret, base_url)
+    if options is None:
+        return model_id
+    if _listed(options, model_id):
+        return model_id
+    refreshed = live_options(provider_id, secret, base_url, refresh=True)
+    if refreshed is not None:
+        options = refreshed
+    if _listed(options, model_id):
+        return model_id
+    chosen = choose_fallback(options, image=image, native_video=native_video)
+    return chosen or model_id
+
+
+def _listed(options: list[dict], model_id: str) -> bool:
+    return any(str(item.get("model_id")) == model_id for item in options)
+
+
+def _marked_default(item: dict) -> bool:
+    if item.get("default") is True:
+        return True
+    return bool(re.search(r"\bdefault\b", str(item.get("label") or ""), re.IGNORECASE))
+
+
+def _serves(item: dict, image: bool, native_video: bool) -> bool:
+    if native_video and not item.get("native_video"):
+        return False
+    if image and item.get("image") is False:
+        return False
+    return True
+
+
+def _account(session, provider_id: str) -> tuple[str, str]:
+    from app.models.runs import ProviderStatus
+    from app.services.credentials import load_secret
+
+    secret, _source = load_secret(session, provider_id)
+    status = session.get(ProviderStatus, provider_id)
+    return secret, status.extra_base_url if status else ""
 
 
 def warm(provider_id: str, secret: str = "", base_url: str = "") -> None:

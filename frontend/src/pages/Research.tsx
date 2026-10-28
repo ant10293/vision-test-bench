@@ -276,7 +276,7 @@ function CursorCliPanel({ settings }: { settings: CursorCliSettings }) {
         {status.data?.version && <span className="tag">{status.data.version}</span>}
       </div>
       <p className="text-xs text-[var(--muted)]">
-        Analysis runs call the agent executable in ask mode. The agent can read the frames and is not given permission to edit files. A linked account uses the Cursor plan. The API key above is used only when runs are set to API key.
+        Analysis runs call the agent executable in ask mode. The agent can read the frames and is not given permission to edit them. If the answer is not one JSON object, a follow-up call edits that file until it parses. A linked account uses the Cursor plan. The API key above is used only when runs are set to API key.
       </p>
       <AccountIdentity status={status.data} />
       {status.data?.error && !awaiting && <p className="text-sm text-[var(--rose)]">{status.data.error}</p>}

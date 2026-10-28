@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,7 @@ if args[:1] == ["--list-models"]:
 if "--print" in args:
     instructions = Path("instructions.md").read_text() if Path("instructions.md").is_file() else ""
     frames = sorted(path.name for path in Path("frames").glob("*")) if Path("frames").is_dir() else []
+    prompt = args[-1] if args else ""
     if log:
         Path(log).write_text(json.dumps({
             "args": args,
@@ -55,12 +57,20 @@ if "--print" in args:
             "key": os.environ.get("CURSOR_API_KEY", ""),
             "instructions": instructions,
             "frames": frames,
+            "prompt": prompt,
         }))
+    if prompt.startswith("answer.json"):
+        shot = next(Path("frames").glob("*"), None) if Path("frames").is_dir() else None
+        if shot is not None:
+            shot.write_bytes(b"edited")
+        Path("scratch.txt").write_text("nope")
+        Path("answer.json").write_text('{"ok": true}')
+    result = '{"a": 1}{"b": 2}' if os.environ.get("CURSOR_FAKE_BROKEN") and not prompt.startswith("answer.json") else '{"ok": true}'
     print(json.dumps({
         "type": "result",
         "subtype": "success",
         "is_error": False,
-        "result": "{\\"ok\\": true}",
+        "result": result,
         "session_id": "sess-1",
         "request_id": "req-1",
         "duration_ms": 12,
@@ -332,6 +342,8 @@ def test_login_completion_reads_frames_in_ask_mode_without_the_api_key(tmp_path:
     recorded = json.loads(log.read_text())
     args = recorded["args"]
     assert args[args.index("--mode") + 1] == "ask"
+    assert args[args.index("--output-format") + 1] == "stream-json"
+    assert "--stream-partial-output" in args
     assert args[args.index("--sandbox") + 1] == "enabled"
     assert "--force" not in args
     assert "--yolo" not in args
@@ -378,3 +390,180 @@ def test_api_key_completion_puts_the_key_in_the_environment_only(tmp_path: Path,
     assert recorded["key"] == "cursor_test_secret"
     assert "cursor_test_secret" not in json.dumps(recorded["args"])
     assert "This call has no frames." in recorded["instructions"]
+
+
+def test_truncated_result_line_keeps_the_assistant_deltas():
+    from app.providers.cursor_cli import stream_answer
+
+    stdout = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": '{"ok": '}]},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "true}"}]},
+                }
+            ),
+            '{"type":"result","result":"{\\"ok\\": true',
+        ]
+    )
+    assert stream_answer(stdout) == '{"ok": true}'
+
+
+def test_repair_leaves_frames_and_other_files_unchanged(tmp_path: Path):
+    from app.providers.cursor_cli import _restore_workspace, _snapshot_workspace
+
+    frame = tmp_path / "frames" / "000.jpg"
+    frame.parent.mkdir()
+    frame.write_bytes(b"jpg")
+    (tmp_path / "instructions.md").write_text("schema")
+    saved = _snapshot_workspace(tmp_path)
+    frame.write_bytes(b"edited")
+    (tmp_path / "scratch.txt").write_text("nope")
+    (tmp_path / "answer.json").write_text('{"ok": true}')
+    _restore_workspace(tmp_path, saved)
+    assert frame.read_bytes() == b"jpg"
+    assert not (tmp_path / "scratch.txt").exists()
+    assert (tmp_path / "answer.json").read_text() == '{"ok": true}'
+
+
+def test_broken_json_is_repaired_by_editing_answer_json(tmp_path: Path, monkeypatch):
+    from app.providers.cursor_cli import complete, save_cursor_cli
+    from app.providers.types import FrameInput, GenerationRequest
+
+    fake = tmp_path / "agent"
+    _fake(fake)
+    log = tmp_path / "log.json"
+    monkeypatch.setenv("CURSOR_FAKE_BROKEN", "1")
+    monkeypatch.setenv("CURSOR_FAKE_LOG", str(log))
+    monkeypatch.setenv("LEARNLOOP_DATA_DIR", str(tmp_path / "data"))
+    from app.config import settings
+
+    settings.data_dir = tmp_path / "data"
+    save_cursor_cli(str(fake), "login")
+    frame = tmp_path / "shot.jpg"
+    frame.write_bytes(b"\xff\xd8\xff\xd9")
+    import asyncio
+
+    response = asyncio.run(
+        complete(
+            GenerationRequest(
+                model_id="grok-4.7-high-fast",
+                system_prompt="Describe the clip.",
+                user_prompt="Where is the bolt?",
+                frames=[FrameInput(1.5, frame)],
+                json_schema={"type": "object"},
+                metadata={"transport": "login"},
+            )
+        )
+    )
+    assert response.text == '{"ok": true}'
+    recorded = json.loads(log.read_text())
+    assert recorded["prompt"].startswith("answer.json")
+    assert "--mode" not in recorded["args"]
+    assert frame.read_bytes() == b"\xff\xd8\xff\xd9"
+
+
+def test_stream_result_is_taken_from_the_final_event():
+    from app.providers.cursor_cli import parse_result
+
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thinking", "subtype": "delta", "text": "looking"}),
+            json.dumps({"type": "tool_call", "subtype": "completed", "call_id": "read-1"}),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": '{"ok": true}'}]},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "result": '{"ok": true}',
+                    "session_id": "sess-1",
+                    "request_id": "req-1",
+                }
+            ),
+        ]
+    )
+    payload = parse_result(stdout)
+    assert payload["result"] == '{"ok": true}'
+    assert payload["request_id"] == "req-1"
+
+
+def test_cursor_cli_hard_ceiling_covers_a_long_merge():
+    from app.providers.cursor_cli import HARD_TIMEOUT_S, hard_timeout
+
+    assert HARD_TIMEOUT_S == 1800
+    assert hard_timeout(180) == 1800
+    assert hard_timeout(2400) == 2400
+
+
+def _child(path: Path, body: str) -> list[str]:
+    path.write_text("import sys, time\n" + body)
+    return [sys.executable, str(path)]
+
+
+async def test_cursor_cli_stays_alive_while_output_continues(tmp_path: Path):
+    from app.providers.cursor_cli import _execute
+
+    argv = _child(
+        tmp_path / "stream.py",
+        """
+sys.stdout.write("thinking\\n")
+sys.stdout.flush()
+time.sleep(0.5)
+sys.stderr.write("tool\\n")
+sys.stderr.flush()
+time.sleep(0.5)
+sys.stdout.write("{\\"type\\": \\"result\\", \\"result\\": \\"{}\\"}\\n")
+sys.stdout.flush()
+""",
+    )
+    code, out, err = await _execute(argv, os.environ.copy(), str(tmp_path), 8, idle_timeout=0.8)
+    assert code == 0
+    assert "thinking" in out
+    assert '"result"' in out
+    assert "tool" in err
+
+
+async def test_cursor_cli_kills_a_quiet_process(tmp_path: Path):
+    from app.providers.cursor_cli import _execute
+    from app.providers.types import ProviderError
+
+    argv = _child(
+        tmp_path / "quiet.py",
+        """
+sys.stdout.write("started\\n")
+sys.stdout.flush()
+time.sleep(6)
+""",
+    )
+    with pytest.raises(ProviderError, match="no output for 1s"):
+        await _execute(argv, os.environ.copy(), str(tmp_path), 8, idle_timeout=1)
+
+
+async def test_cursor_cli_kills_a_slow_trickle_at_the_hard_ceiling(tmp_path: Path):
+    from app.providers.cursor_cli import _execute
+    from app.providers.types import ProviderError
+
+    argv = _child(
+        tmp_path / "trickle.py",
+        """
+deadline = time.monotonic() + 8
+while time.monotonic() < deadline:
+    sys.stdout.write("x\\n")
+    sys.stdout.flush()
+    time.sleep(0.05)
+""",
+    )
+    with pytest.raises(ProviderError, match="timed out after 1s"):
+        await _execute(argv, os.environ.copy(), str(tmp_path), 1, idle_timeout=5)

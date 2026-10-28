@@ -16,6 +16,7 @@ from app.perception.roster import align_to_roster, drop_split_objects
 from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
+from app.providers.model_list import resolve_model_id
 from app.providers.registry import get_provider, needs_secret, run_transport
 from app.providers.types import FrameInput, GenerationRequest, UnsupportedMode, rough_input_tokens
 from app.schemas.analysis import AnalysisDocument, Coverage
@@ -33,6 +34,23 @@ class StageSkipped(Exception):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
+
+
+def model_for_call(session: Session, run: AnalysisRun) -> tuple[str, str]:
+    """Return the model to send and the id the run asked for.
+
+    An id the account does not list is replaced from that account's live list.
+    The run keeps the replacement so later calls do not send the missing id again.
+    """
+    requested = run.model_id
+    chosen = resolve_model_id(session, run.provider_id, requested, run.modality)
+    if chosen != requested:
+        run.model_id = chosen
+        config = dict(run.config_json or {})
+        config["model_id"] = chosen
+        config["requested_model_id"] = requested
+        run.config_json = config
+    return chosen, requested
 
 
 def load_working(run_id: str) -> AnalysisDocument:
@@ -222,8 +240,9 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
                 "Add one on the provider page or export the documented environment variable."
             )
     provider = get_provider(run.provider_id, session)
+    model_id, requested = model_for_call(session, run)
     request = GenerationRequest(
-        model_id=run.model_id,
+        model_id=model_id,
         system_prompt=system,
         user_prompt=user,
         frames=[FrameInput(frame.timestamp, data_path(*Path(frame.path).parts)) for frame in frames],
@@ -249,7 +268,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
         run,
         stage=stage,
         provider_id=run.provider_id,
-        model_id=run.model_id,
+        model_id=model_id,
         modality=run.modality,
         prompt_version_id=run.prompt_version_id,
         parameters={
@@ -258,6 +277,7 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
             "image_detail": request.image_detail,
             "estimated_input_tokens": estimate,
             "sdk_note": "recorded on the response",
+            **({"requested_model_id": requested} if requested != model_id else {}),
             **({"openai_transport": transport} if run.provider_id == "openai" else {}),
             **({"anthropic_transport": transport} if run.provider_id == "anthropic" else {}),
             **({"cursor_transport": transport} if run.provider_id == "cursor" else {}),

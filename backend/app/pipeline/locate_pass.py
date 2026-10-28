@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.models.media import FrameAsset
 from app.models.runs import AnalysisRun, ModelRequestRow
 from app.perception.locate import apply_located, choose_locate_times, reference_time, same_surface
+from app.pipeline.infer import model_for_call
 from app.pipeline.parsing import ParseFailure, extract_json_object
 from app.pipeline.prompts import LOCATE_PART
 from app.providers.registry import get_provider, needs_secret, run_transport
@@ -160,8 +161,9 @@ async def _one(session, run, document, frames, object_id, times, secret, transpo
     )
     provider = get_provider(run.provider_id, session)
     config = run.config_json or {}
+    model_id, requested = model_for_call(session, run)
     request = GenerationRequest(
-        model_id=run.model_id,
+        model_id=model_id,
         system_prompt=LOCATE_PART,
         user_prompt=user,
         frames=selected,
@@ -178,10 +180,14 @@ async def _one(session, run, document, frames, object_id, times, secret, transpo
         run,
         stage="locate",
         provider_id=run.provider_id,
-        model_id=run.model_id,
+        model_id=model_id,
         modality="sampled_frames",
         prompt_version_id=run.prompt_version_id,
-        parameters={"object_id": object_id, "reference_timestamp": reference.timestamp},
+        parameters={
+            "object_id": object_id,
+            "reference_timestamp": reference.timestamp,
+            **({"requested_model_id": requested} if requested != model_id else {}),
+        },
         frame_timestamps=search_times,
     )
     session.commit()

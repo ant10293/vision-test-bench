@@ -29,8 +29,10 @@ _ANTHROPIC_NOTE = (
 )
 _CURSOR_NOTE = (
     "Cursor CLI ask mode. The agent reads frame files and is not given permission to edit them. "
-    "The CLI does not enforce the JSON schema; the lab validates the document after the call. "
-    "Native video is refused. Linked-account usage is recorded as unpriced plan usage."
+    "When the answer is not one JSON object, a follow-up call edits answer.json in a temporary "
+    "workspace until it parses. The CLI does not enforce the JSON schema; the lab validates the "
+    "document after the call. Native video is refused. Linked-account usage is recorded as unpriced "
+    "plan usage."
 )
 
 # Messages API output_config.effort. xhigh is the "extra high" level.
