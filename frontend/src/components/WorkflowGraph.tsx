@@ -11,7 +11,7 @@ import {
   type Node,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { humanize } from "../lib/humanize";
+import { humanize, nameObjects, objectLabels } from "../lib/humanize";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
 
@@ -136,6 +136,7 @@ function DependencyEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition
 export function WorkflowGraph({ bundle }: { bundle: Bundle }) {
   const selectStep = useInspector((state) => state.selectStep);
   const setTime = useInspector((state) => state.setTime);
+  const labels = objectLabels(bundle.objects);
   const nodes: Node[] = bundle.steps.map((step, index) => ({
     id: step.local_id,
     position: { x: (index % 3) * COLUMN_PITCH, y: Math.floor(index / 3) * ROW_PITCH },
@@ -143,8 +144,8 @@ export function WorkflowGraph({ bundle }: { bundle: Bundle }) {
       label: (
         <div className="text-left text-xs">
           <div className="mono text-[10px] text-[var(--muted)]">{step.number}. {humanize(step.evidence_class)}</div>
-          <div className="font-medium">{step.name}</div>
-          <div className="text-[var(--muted)]">{step.completion_condition}</div>
+          <div className="font-medium">{nameObjects(step.name, labels)}</div>
+          <div className="text-[var(--muted)]">{nameObjects(step.completion_condition, labels)}</div>
         </div>
       ),
     },

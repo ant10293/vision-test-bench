@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { humanize, humanizeText, labeledId } from "../lib/humanize";
+import { humanize, humanizeText, labeledId, nameObjects } from "../lib/humanize";
 
 describe("humanize", () => {
   it("splits snake_case into a sentence-style label", () => {
@@ -39,6 +39,9 @@ describe("humanize", () => {
   it("formats identifier tokens inside a title and leaves prose hyphenation", () => {
     expect(humanizeText("fixed_camera · claude-sonnet-4-5")).toBe("Fixed camera · Claude sonnet 4-5");
     expect(humanizeText("Unconstrained head-mounted — two places")).toBe("Unconstrained head-mounted — two places");
+    expect(humanizeText("Step 4 precedes Step_5, but physical necessity is not established.")).toBe(
+      "Step 4 precedes Step 5, but physical necessity is not established.",
+    );
   });
 
   it("capitalizes a single word that needs no other splitting", () => {
@@ -48,6 +51,33 @@ describe("humanize", () => {
     expect(humanize("inferred")).toBe("Inferred");
     expect(humanize("openai")).toBe("OpenAI");
     expect(humanize("Completed")).toBe("Completed");
+  });
+
+  it("names objects inside a step sentence", () => {
+    const labels = {
+      Object_6: "lower light spoked disk",
+      Object_7: "lower dark toothed ring",
+      Object_4: "light irregular structural piece",
+    };
+    expect(nameObjects("Insert Object_6 into Object_7.", labels)).toBe(
+      "Insert the lower light spoked disk into the lower dark toothed ring.",
+    );
+    expect(
+      nameObjects("Object_6's separate visible extent decreases and its spoked face is centered within Object_7.", labels),
+    ).toBe(
+      "The lower light spoked disk's separate visible extent decreases and its spoked face is centered within the lower dark toothed ring.",
+    );
+    expect(nameObjects("Object_6 is visibly seated inside Object_7 by 13 seconds.", labels)).toBe(
+      "The lower light spoked disk is visibly seated inside the lower dark toothed ring by 13 seconds.",
+    );
+    expect(nameObjects("Attach the Object_6/Object_7 combination to the structure", labels)).toBe(
+      "Attach the lower light spoked disk and lower dark toothed ring combination to the structure",
+    );
+    expect(nameObjects("The rod's separate visible extent ends at Object_4.", labels)).toBe(
+      "The rod's separate visible extent ends at the light irregular structural piece.",
+    );
+    expect(nameObjects("Pick up Object_3.", labels)).toBe("Pick up Object 3.");
+    expect(nameObjects("Both pieces are held.", labels)).toBe("Both pieces are held.");
   });
 
   it("leaves prose, JSON, and uuids alone", () => {

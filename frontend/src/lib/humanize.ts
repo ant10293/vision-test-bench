@@ -38,12 +38,54 @@ export function labeledId(localId: string, name?: string): string {
   return `${id}: ${label}`;
 }
 
+const TOKEN_EDGE = /[ "'`{}[\]()@/\\,;:!?]/;
+
 /** Format identifier tokens inside a label, and leave ordinary words in place. */
 export function humanizeText(value: string): string {
   return value
     .split(/(\s+)/)
-    .map((part) => (/^\s+$/.test(part) || !shouldRewriteToken(part) ? part : humanize(part)))
+    .map((part) => (/^\s+$/.test(part) ? part : rewriteToken(part)))
     .join("");
+}
+
+function rewriteToken(part: string): string {
+  let start = 0;
+  let end = part.length;
+  while (start < end && TOKEN_EDGE.test(part[start])) start += 1;
+  while (end > start && TOKEN_EDGE.test(part[end - 1])) end -= 1;
+  const core = part.slice(start, end);
+  if (!core || !shouldRewriteToken(core)) return part;
+  return part.slice(0, start) + humanize(core) + part.slice(end);
+}
+
+const OBJECT_REF = /(?<![A-Za-z0-9_])Object_\d+(?:\/Object_\d+)*(?:'s)?(?![A-Za-z0-9_])/g;
+
+export function objectLabels(objects: readonly { local_id: string; label: string }[]): Map<string, string> {
+  return new Map(objects.map((object) => [object.local_id, object.label]));
+}
+
+/** Replace Object_6 in a sentence with that part's name. A bare id stays "Object 6". */
+export function nameObjects(value: string, labels: ReadonlyMap<string, string> | Record<string, string>): string {
+  if (!value || !value.includes("Object_")) return value;
+  const lookup = labels instanceof Map ? labels : new Map(Object.entries(labels));
+  return value.replace(OBJECT_REF, (token, offset: number) => {
+    const possessive = token.endsWith("'s");
+    const stem = possessive ? token.slice(0, -2) : token;
+    const before = value.slice(0, offset);
+    const hasArticle = /(?:^|\s)(?:the|a|an)\s+$/i.test(before);
+    const ids = stem.split("/");
+    const pieces = ids.map((id) => {
+      const label = lookup.get(id)?.trim();
+      return label ? { text: label, named: true } : { text: humanize(id), named: false };
+    });
+    let phrase: string;
+    if (hasArticle) phrase = pieces.map((piece) => piece.text).join(" and ");
+    else if (pieces.length === 1) phrase = pieces[0].named ? `the ${pieces[0].text}` : pieces[0].text;
+    else phrase = pieces.map((piece) => (piece.named ? `the ${piece.text}` : piece.text)).join(" and ");
+    if (possessive) phrase += "'s";
+    if (/^\s*$/.test(before) || /[.!?]\s*$/.test(before)) phrase = phrase.charAt(0).toUpperCase() + phrase.slice(1);
+    return phrase;
+  });
 }
 
 function shouldRewriteToken(part: string): boolean {

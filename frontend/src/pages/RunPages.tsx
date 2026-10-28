@@ -11,7 +11,7 @@ import { WorkflowGraph } from "../components/WorkflowGraph";
 import { api, evidenceClass, formatTime, formatUsd, formatWhen } from "../lib/api";
 import { formatConfidence } from "../lib/confidence";
 import { formatLogText } from "../lib/formatLog";
-import { humanize, humanizeText, labeledId } from "../lib/humanize";
+import { humanize, humanizeText, labeledId, nameObjects, objectLabels } from "../lib/humanize";
 import { objectScene } from "../lib/sceneSlice";
 import { BundleContext, useBundle } from "../lib/bundleContext";
 import type { Bundle, Observation } from "../lib/types";
@@ -658,6 +658,7 @@ export function WorkflowPage() {
   const client = useQueryClient();
   const stepId = useInspector((state) => state.selectedStep);
   const step = bundle.steps.find((item) => item.local_id === stepId);
+  const labels = objectLabels(bundle.objects);
   return (
     <div className="space-y-3">
       <WorkflowGraph bundle={bundle} />
@@ -671,16 +672,16 @@ export function WorkflowPage() {
       </div>
       {step && (
         <div className="panel p-3 text-sm">
-          <div className="font-medium">{step.name}</div>
-          <p>Completion: {step.completion_condition}</p>
-          <p>Observed: {step.observed_result}</p>
+          <div className="font-medium">{nameObjects(step.name, labels)}</div>
+          <p>Completion: {nameObjects(step.completion_condition, labels)}</p>
+          <p>Observed: {nameObjects(step.observed_result, labels)}</p>
           <p className="text-[var(--muted)]">Objects: {step.required_objects.map(humanize).join(", ") || "none"}</p>
         </div>
       )}
       <ul className="space-y-1 text-sm">
         {bundle.dependencies.map((dep) => (
           <li key={dep.id} className="flex items-center justify-between gap-2">
-            <span>{humanize(dep.from_step)} → {humanize(dep.to_step)} · {humanize(dep.category)} · {dep.rationale}</span>
+            <span>{humanize(dep.from_step)} → {humanize(dep.to_step)} · {humanize(dep.category)} · {humanizeText(nameObjects(dep.rationale, labels))}</span>
             <button className="btn" onClick={async () => { await api.removeDependency(bundle.run.id, dep.from_step, dep.to_step); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Remove</button>
           </li>
         ))}
@@ -694,6 +695,7 @@ export function StepsPage() {
   const openInspect = useOpenInspect();
   const [index, setIndex] = useState(0);
   const step = bundle.steps[index];
+  const labels = objectLabels(bundle.objects);
   if (!step) return <p className="text-[var(--muted)]">No workflow steps.</p>;
   const start = step.time_start ?? 0;
   const end = step.time_end ?? start;
@@ -704,10 +706,10 @@ export function StepsPage() {
         <button className="btn" onClick={() => setIndex((value) => Math.min(bundle.steps.length - 1, value + 1))}>Next</button>
         <span className="text-sm text-[var(--muted)]">{index + 1} / {bundle.steps.length}</span>
       </div>
-      <h2 className="text-xl">{step.number}. {step.name}</h2>
-      <p>{humanize(step.expected_action)}</p>
-      <p className="text-sm text-[var(--muted)]">Expected: {step.completion_condition}</p>
-      <p className="text-sm">Observed: {step.observed_result}</p>
+      <h2 className="text-xl">{step.number}. {nameObjects(step.name, labels)}</h2>
+      <p>{nameObjects(step.expected_action, labels)}</p>
+      <p className="text-sm text-[var(--muted)]">Expected: {nameObjects(step.completion_condition, labels)}</p>
+      <p className="text-sm">Observed: {nameObjects(step.observed_result, labels)}</p>
       <div className="grid gap-2 md:grid-cols-3">
         {[start, (start + end) / 2, end].map((stamp) => {
           const frame = bundle.frames.reduce((best, item) => Math.abs(item.timestamp - stamp) < Math.abs(best.timestamp - stamp) ? item : best, bundle.frames[0]);

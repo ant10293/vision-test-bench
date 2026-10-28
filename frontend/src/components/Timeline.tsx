@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { formatTime } from "../lib/api";
 import { Bone } from "./Skeleton";
-import { humanize } from "../lib/humanize";
+import { humanize, nameObjects, objectLabels } from "../lib/humanize";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
 
@@ -168,11 +168,12 @@ function segments(name: (typeof TRACKS)[number], bundle: Bundle): Segment[] {
       color: "#6a3036",
     }));
   }
+  const labels = objectLabels(bundle.objects);
   return bundle.steps.map((step) => ({
     key: step.id,
     start: step.time_start ?? 0,
     end: step.time_end ?? (step.time_start ?? 0) + 0.2,
-    label: step.name,
+    label: nameObjects(step.name, labels),
     color: "#2c4a3d",
     stepId: step.local_id,
   }));
