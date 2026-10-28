@@ -22,11 +22,13 @@ from urllib.parse import urlparse
 
 from app.providers.cli_account import link_status, mask_account
 from app.providers.types import (
+    PROVIDER_TIMEOUT_S,
     AuthenticationError,
     GenerationRequest,
     ProviderError,
     ProviderResponse,
     Usage,
+    provider_timeout,
 )
 from app.services.storage import data_path, ensure_data_dirs
 
@@ -160,18 +162,10 @@ def subscription_env() -> dict[str, str]:
 # Above every model's upper limit. The CLI clamps this to that model's maximum,
 # so a subscription run is not stopped at Claude Code's lower default.
 _MODEL_OUTPUT_MAXIMUM = "128000"
-# The shared request timeout (default 180s) is also the HTTP deadline for API
-# providers. Claude Code keeps a longer ceiling: image analysis with reasoning
-# often outlasts 180s. A configured timeout above this still applies.
-HARD_TIMEOUT_S = 600
-# Partial message events reset this. A quiet CLI is killed; one that keeps
-# streaming is stopped only by the hard ceiling.
-IDLE_TIMEOUT_S = 120
+# Partial message events reset this. Silence is allowed until the global
+# provider deadline.
+IDLE_TIMEOUT_S = PROVIDER_TIMEOUT_S
 _OUTPUT_POLL_S = 0.25
-
-
-def hard_timeout(requested: float) -> float:
-    return max(float(requested), HARD_TIMEOUT_S)
 
 
 def generation_env() -> dict[str, str]:
@@ -666,7 +660,7 @@ async def complete(request: GenerationRequest) -> ProviderResponse:
                 argv,
                 build_stdin(request),
                 generation_env(),
-                hard_timeout(request.timeout_s),
+                provider_timeout(request.timeout_s),
                 directory,
             )
         except OSError as exc:

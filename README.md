@@ -6,7 +6,7 @@ The lab stores the original video, the frames that were actually submitted, the 
 
 ## Run it
 
-System tools: Python 3.12, Node 20+, ffmpeg and ffprobe.
+System tools: Python 3.12, Node 20+, ffmpeg and ffprobe. Scene Lab also needs Blender on `PATH` or `LEARNLOOP_BLENDER_BIN`. Headless Eevee is enough. Rendering still works without a GPU.
 
 ```bash
 /usr/local/bin/python3.12 -m venv backend/.venv
@@ -26,6 +26,7 @@ Open http://127.0.0.1:5173. The API is http://127.0.0.1:8000. On a fresh data di
 - Inspect objects, actions, state, workflow, ambiguities, and coverage.
 - Correct a label. The raw document stays; the correction is a new human revision.
 - Compare two runs, score a run against a saved ground-truth revision, and export a zip with no credentials in it.
+- Open Scene Lab, render a mechanical-assembly variant, and score a deterministic analysis against the hidden scene. See `SIMULATION.md`.
 
 ## What needs a key
 
@@ -40,3 +41,4 @@ OpenAI, Anthropic, Gemini, Meta Muse, and an optional OpenAI-compatible endpoint
 - `RESEARCH_METHODOLOGY.md` — what the lab is allowed to claim
 - `TESTING.md` — how to run tests
 - `IMPLEMENTATION_PROGRESS.md` — current status
+- `SIMULATION.md` — kinematic scenes, Blender renders, and how scoring stays off the inference path

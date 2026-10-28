@@ -481,6 +481,15 @@ def test_completion_attaches_frames_in_read_only_mode_without_the_api_key(
     assert Path(recorded["images"][0]).resolve().is_relative_to(Path(recorded["cwd"]).resolve())
 
 
+def test_codex_cli_uses_the_global_provider_timeout():
+    from app.providers.types import PROVIDER_TIMEOUT_S, provider_timeout
+
+    assert PROVIDER_TIMEOUT_S == 30 * 60
+    assert provider_timeout(180) == 1800
+    assert provider_timeout(600) == 1800
+    assert provider_timeout(2400) == 2400
+
+
 def test_output_schema_is_strict_enough_for_codex():
     from app.providers.codex_cli import strict_output_schema
     from app.schemas.analysis import AnalysisDocument

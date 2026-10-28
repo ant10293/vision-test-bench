@@ -23,7 +23,7 @@ from app.pipeline.infer import model_for_call
 from app.pipeline.parsing import ParseFailure, extract_json_object
 from app.pipeline.prompts import LOCATE_PART
 from app.providers.registry import get_provider, needs_secret, run_transport
-from app.providers.types import FrameInput, GenerationRequest
+from app.providers.types import FrameInput, GenerationRequest, provider_timeout
 from app.schemas.analysis import AnalysisDocument, BBox
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
 from app.services.credentials import load_secret
@@ -172,7 +172,7 @@ async def _one(session, run, document, frames, object_id, times, secret, transpo
         temperature=config.get("temperature"),
         reasoning_effort=config.get("reasoning_effort"),
         image_detail=config.get("image_detail") or "high",
-        timeout_s=float(config.get("timeout_s") or 180),
+        timeout_s=provider_timeout(config.get("timeout_s")),
         metadata={"transport": transport} if run.provider_id in {"openai", "anthropic", "cursor"} else {},
     )
     row = open_provider_call(

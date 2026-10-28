@@ -31,6 +31,10 @@ COLUMN_UPGRADES = {
         ("ingest_error", "TEXT DEFAULT ''"),
     ],
     "model_responses": [("price_known", "BOOLEAN NOT NULL DEFAULT 0")],
+    "simulation_datasets": [
+        ("analysis_config", "JSON"),
+        ("analysis_run_id", "VARCHAR(36) DEFAULT ''"),
+    ],
     "spatial_track_points": [
         ("track_status", "VARCHAR(32) DEFAULT ''"),
         ("association_score", "FLOAT"),

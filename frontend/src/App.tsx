@@ -17,6 +17,7 @@ import {
   StepsPage,
   WorkflowPage,
 } from "./pages/RunPages";
+import { SceneLabPage } from "./pages/SceneLab";
 import { VideoDetailPage, VideosPage } from "./pages/Videos";
 import { ProjectsPage } from "./pages/Projects";
 import { AudioPage } from "./pages/Audio";
@@ -40,6 +41,7 @@ export function App() {
             <Route path="tasks" element={<Navigate to="/projects" replace />} />
             <Route path="tasks/:projectId" element={<TaskRedirect />} />
             <Route path="experiments/new" element={<ExperimentPage />} />
+            <Route path="scene-lab" element={<SceneLabPage />} />
             <Route path="runs" element={<RunsPage />} />
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="prompts" element={<PromptsPage />} />

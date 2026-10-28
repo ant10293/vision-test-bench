@@ -14,7 +14,7 @@ from openai import AsyncOpenAI
 
 from app.providers.common import data_url, translate
 from app.providers.meta_provider import META_BASE
-from app.providers.types import ProviderError
+from app.providers.types import ProviderError, provider_timeout
 
 BOX_RE = re.compile(
     r"(?P<id>\d+)<\|box;(?P<body>[^|]+)\|><\|mask;(?P<mask>[^|]+)\|>"
@@ -139,9 +139,9 @@ def decode_mask_raster(record: SamRecord):
 class SamAdapter:
     model_id = "sam-3.1"
 
-    def __init__(self, secret: str, timeout_s: float = 180):
+    def __init__(self, secret: str, timeout_s: float | None = None):
         self.secret = secret
-        self.timeout_s = timeout_s
+        self.timeout_s = provider_timeout(timeout_s)
 
     def _client(self) -> AsyncOpenAI:
         return AsyncOpenAI(api_key=self.secret, base_url=META_BASE, timeout=self.timeout_s)

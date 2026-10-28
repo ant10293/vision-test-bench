@@ -15,7 +15,7 @@ Edits copy the active document, change it, and rematerialize. They do not write 
 
 ## Pipeline
 
-Stages, in order: metadata, preprocess, sample frames, spatial tracking, scene analysis, object extraction, action analysis, state tracking, segmentation, workflow, ambiguity, validation, reinspection, transcription, audio context, artifacts.
+Stages, in order: metadata, preprocess, sample frames, spatial tracking, scene analysis, Blender scene, object extraction, action analysis, state tracking, segmentation, workflow, ambiguity, validation, reinspection, transcription, audio context, artifacts. Blender scene is skipped unless the experiment left scene creation on. It runs after scene analysis and places a shape for each object in that analysis. It does not replace the selected video. Frame counts for that render appear on this stage. A failure in that stage is recorded and the rest of the analysis still finishes.
 
 Transcription and audio context are skipped immediately when the experiment leaves them off, before Whisper is imported. A failure in either stage is recorded and the visual run still finishes. See `AUDIO.md`.
 
@@ -84,6 +84,10 @@ Alignment maps execution actions onto template steps by action type, roles, and 
 
 `perception/verify.py` still audits unsupported claims inside one analysis. It is not the cross-recording verdict.
 
+## Scene simulation
+
+`backend/app/simulation` evaluates one kinematic scene, then Blender renders that state. Instance masks and boxes come from the id pass of those meshes. The ingested video is a normal `VideoAsset`. Analysis requests do not receive the scene file. Scoring happens after the run. Simulation jobs are their own table. The image-space scene graph on a real run keeps unobserved tracks and does not invent a metric pose. Details are in `SIMULATION.md`.
+
 ## Where files live
 
-`data/originals` immutable uploads, `data/proxies`, `data/frames`, `data/runs/{id}` working JSON and crops, `data/runs/{id}/embeddings` cached appearance vectors, `data/transcripts/{checksum}` cached local transcripts, `data/learnloop.db`. API keys, if saved in the app, are Fernet-encrypted under `data/.credential_key` (mode 0600) or read from the environment. Exports omit them.
+`data/originals` immutable uploads, `data/proxies`, `data/frames`, `data/runs/{id}` working JSON and crops, `data/runs/{id}/embeddings` cached appearance vectors, `data/transcripts/{checksum}` cached local transcripts, `data/simulations/{id}` rendered datasets, `data/learnloop.db`. API keys, if saved in the app, are Fernet-encrypted under `data/.credential_key` (mode 0600) or read from the environment. Exports omit them. Simulation exports omit `logs/`.

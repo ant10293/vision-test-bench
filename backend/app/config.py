@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     worker_enabled: bool = True
     ingest_inline: bool = False
     stale_job_seconds: int = 900
+    blender_bin: str = ""
+    simulation_timeout_sec: int = 900
 
     @property
     def resolved_data_dir(self) -> Path:

@@ -23,12 +23,14 @@ from pathlib import Path
 from app.providers.claude_code import login_url_from, subscription_env
 from app.providers.cli_account import link_status, mask_account
 from app.providers.types import (
+    PROVIDER_TIMEOUT_S,
     AuthenticationError,
     GenerationRequest,
     ProviderError,
     ProviderResponse,
     UnsupportedMode,
     Usage,
+    provider_timeout,
 )
 from app.services.storage import data_path, ensure_data_dirs
 
@@ -49,15 +51,10 @@ _MODEL_LINE = re.compile(
 _MODEL_HEADER = {"model", "models", "id", "available"}
 _MODEL_CACHE_S = 60.0
 _model_cache: dict[str, tuple[float, list[tuple[str, str]]]] = {}
-# The shared request timeout (default 180s) is also the HTTP deadline for API
-# providers. Cursor keeps its own ceiling. Image windows on this bench already
-# finish near 10 minutes, and merging those documents takes longer. A configured
-# timeout above this still applies.
-HARD_TIMEOUT_S = 1800
 # stream-json writes thinking deltas, tool calls, and (with partial output) text
-# as they happen. Those bytes reset this. A quiet CLI is killed; one that keeps
-# streaming is stopped only by the hard ceiling.
-IDLE_TIMEOUT_S = 120
+# as they happen. Those bytes reset this. Silence is allowed until the global
+# provider deadline.
+IDLE_TIMEOUT_S = PROVIDER_TIMEOUT_S
 _OUTPUT_POLL_S = 0.25
 _PROMPT = (
     "Read instructions.md and every frame file it names. "
@@ -112,10 +109,6 @@ def resolve_binary(binary: str) -> str | None:
     if candidate.is_file() and os.access(candidate, os.X_OK):
         return str(candidate.resolve())
     return shutil.which(binary)
-
-
-def hard_timeout(requested: float) -> float:
-    return max(float(requested), HARD_TIMEOUT_S)
 
 
 def child_env(transport: str, secret: str = "") -> dict[str, str]:
@@ -778,7 +771,7 @@ async def complete(request: GenerationRequest, secret: str = "") -> ProviderResp
         write_instructions(root, request, listed)
         argv = build_argv(resolved, request.model_id, root)
         try:
-            code, out, err = await _execute(argv, env, directory, hard_timeout(request.timeout_s))
+            code, out, err = await _execute(argv, env, directory, provider_timeout(request.timeout_s))
         except OSError as exc:
             raise ProviderError(str(exc)) from exc
         if code != 0 and _signed_out(err or out):
@@ -795,7 +788,7 @@ async def complete(request: GenerationRequest, secret: str = "") -> ProviderResp
                     build_repair_argv(resolved, request.model_id, root, failure),
                     env,
                     directory,
-                    hard_timeout(request.timeout_s),
+                    provider_timeout(request.timeout_s),
                 )
             except (OSError, ProviderError):
                 repair_out = ""
