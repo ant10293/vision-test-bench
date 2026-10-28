@@ -188,7 +188,7 @@ def test_unknown_action_is_in_the_vocabulary_and_approach_is_offered():
     assert "Do not paraphrase that action as handle, bring, or inspect." in WORKFLOW
     assert "Do not keep an id alive" in FOUNDATIONAL
     assert "rotated or partly covered part" in SCENE
-    assert "from_step and to_step must be workflow step ids" in WORKFLOW
+    assert "Do not make a step depend on itself" in WORKFLOW
 
 
 def test_action_dependency_is_dropped_and_unknown_type_is_kept():
@@ -245,6 +245,37 @@ def test_action_dependency_is_dropped_and_unknown_type_is_kept():
     assert dropped.severity == "warning"
     missing = next(issue for issue in issues if issue.code == "missing_step")
     assert missing.severity == "error"
+
+
+def test_a_step_that_depends_on_itself_is_dropped():
+    document = AnalysisDocument.model_validate(
+        {
+            "objects": [{"local_id": "Object_1", "label": "part"}],
+            "workflow_steps": [
+                {
+                    "local_id": "Step_1",
+                    "name": "Reposition the part",
+                    "evidence": _evidence(),
+                }
+            ],
+            "dependencies": [
+                {
+                    "from_step": "Step_1",
+                    "to_step": "Step_1",
+                    "category": "observed_temporal",
+                    "rationale": "Single continuous workflow step.",
+                    "evidence": _evidence(),
+                }
+            ],
+        }
+    )
+    issues = validate_document(document, 21.952)
+    codes = [issue.code for issue in issues]
+    assert codes.count("self_dependency") == 1
+    assert "cyclic_dependency" not in codes
+    assert document.dependencies == []
+    dropped = next(issue for issue in issues if issue.code == "self_dependency")
+    assert dropped.severity == "warning"
 
 
 def test_attempted_outcome_is_distinct_in_fixture():

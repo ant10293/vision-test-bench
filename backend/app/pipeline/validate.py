@@ -203,17 +203,21 @@ def validate_document(document: AnalysisDocument, duration: float) -> list[Valid
             dep.accepted = False
             kept_dependencies.append(dep)
             continue
-        kept_dependencies.append(dep)
         if dep.from_step == dep.to_step:
             issues.append(
                 ValidationIssue(
-                    severity="error",
+                    severity="warning",
                     code="self_dependency",
-                    message=f"Step {dep.from_step} depends on itself.",
+                    message=(
+                        f"Step {dep.from_step} depends on itself. "
+                        "A step has no ordering constraint against itself, so this edge was dropped."
+                    ),
                     entity_type="dependency",
                     entity_id=dep.from_step,
                 )
             )
+            continue
+        kept_dependencies.append(dep)
         graph[dep.from_step].append(dep.to_step)
     document.dependencies = kept_dependencies
 

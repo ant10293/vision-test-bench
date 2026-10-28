@@ -97,8 +97,10 @@ WORKFLOW = """
 Derive a structured procedure from the observed actions without assuming it is the correct procedure.
 Each step needs required objects, preconditions, the expected physical action, an observable completion
 condition, supporting action ids, a time interval, and uncertainty.
-Dependencies must use category necessary_physical, observed_temporal, inferred, or unknown.
-from_step and to_step must be workflow step ids such as Step_1 and Step_2.
+A dependency joins two different steps. from_step and to_step are different workflow step ids, such as Step_1 and Step_2.
+When the recording has one step, or the steps have no ordering constraint, dependencies is empty.
+Do not make a step depend on itself.
+Dependencies use category necessary_physical, observed_temporal, inferred, or unknown.
 Supporting actions belong in the step's action_local_ids. Do not put action ids in from_step or to_step.
 Do not turn chronological order into a necessary dependency unless the physics requires it.
 Independent actions may share a parallel_group instead of a false sequence.
