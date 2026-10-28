@@ -133,7 +133,10 @@ def test_provider_page_saves_the_cursor_cli(client: TestClient, tmp_path: Path, 
     ids = [model["model_id"] for model in cursor["models"]]
     assert "composer-2.5" in ids
     assert all(model["supports_temperature"] is False for model in cursor["models"])
-    assert all(model["native_video"] is False for model in cursor["models"])
+    for model in cursor["models"]:
+        token = model["model_id"].lower().removeprefix("cursor-")
+        expects_video = token.startswith("gemini") or token.startswith("muse-")
+        assert model["native_video"] is expects_video
 
     rejected = client.put(
         "/api/providers/cursor/cli",
@@ -295,6 +298,36 @@ def test_labeled_cli_model_list_keeps_the_id():
     assert parse_model_records(text)[2] == ("grok-4.7-low", "Grok 4.7 Low")
 
 
+def test_cursor_account_marks_gemini_and_muse_as_video():
+    from app.providers.catalog import lookup, models_for
+    from app.providers import model_list
+
+    catalog = [caps.as_dict() for caps in models_for("cursor")]
+    ids = [
+        "gemini-3-flash",
+        "muse-spark-1.3-high",
+        "muse-wonder-1.0-high",
+        "grok-4.7-high",
+        "claude-sonnet-5-high",
+        "composer-2.5",
+    ]
+    options = model_list.overlay_options(
+        "cursor",
+        catalog,
+        [{"model_id": model_id, "label": model_id} for model_id in ids],
+    )
+    by_id = {item["model_id"]: item for item in options}
+    assert by_id["gemini-3-flash"]["native_video"] is True
+    assert by_id["muse-spark-1.3-high"]["native_video"] is True
+    assert by_id["muse-wonder-1.0-high"]["native_video"] is True
+    assert by_id["grok-4.7-high"]["native_video"] is False
+    assert by_id["claude-sonnet-5-high"]["native_video"] is False
+    assert by_id["composer-2.5"]["native_video"] is False
+    assert lookup("cursor", "auto").native_video is False
+    for model_id in ids:
+        model_list._saved.pop(("cursor", model_id), None)
+
+
 def test_manual_cursor_model_rejects_temperature():
     from app.providers.catalog import lookup
 
@@ -356,6 +389,76 @@ def test_login_completion_reads_frames_in_ask_mode_without_the_api_key(tmp_path:
     assert recorded["frames"]
     assert Path(recorded["cwd"]).resolve() == Path(args[args.index("--workspace") + 1]).resolve()
     assert Path(recorded["cwd"]).resolve() != Path.cwd().resolve()
+
+
+def test_video_instruction_requires_the_whole_recording():
+    from app.pipeline.infer import _video_coverage_instruction
+
+    text = _video_coverage_instruction(21.952, [0.0, 21.935], frames_attached=True)
+    assert "21.952" in text
+    assert "0.000s" in text or "0.000" in text
+    assert "21.935" in text
+    assert "opening" in text and "end" in text
+
+
+def test_video_model_sends_the_file_and_the_timeline(tmp_path: Path, monkeypatch):
+    from app.providers.cursor_cli import complete
+    from app.providers.types import GenerationRequest, UnsupportedMode
+
+    fake = tmp_path / "agent"
+    _fake(fake)
+    log = tmp_path / "log.json"
+    monkeypatch.setenv("CURSOR_FAKE_LOG", str(log))
+    monkeypatch.setenv("LEARNLOOP_DATA_DIR", str(tmp_path / "data"))
+    from app.config import settings
+
+    settings.data_dir = tmp_path / "data"
+    from app.providers.cursor_cli import save_cursor_cli
+
+    save_cursor_cli(str(fake), "login")
+    clip = tmp_path / "source.mp4"
+    clip.write_bytes(b"video-bytes")
+    frame = tmp_path / "shot.jpg"
+    frame.write_bytes(b"\xff\xd8\xff\xd9")
+    import asyncio
+
+    from app.providers.types import FrameInput
+
+    response = asyncio.run(
+        complete(
+            GenerationRequest(
+                model_id="gemini-3-flash",
+                system_prompt="Describe the clip.",
+                user_prompt="Where is the bolt?",
+                frames=[FrameInput(0.0, frame), FrameInput(21.935, frame)],
+                video_path=clip,
+                modality="native_video",
+                json_schema={"type": "object"},
+                metadata={"transport": "login"},
+            )
+        )
+    )
+    assert response.text == '{"ok": true}'
+    recorded = json.loads(log.read_text())
+    assert len(recorded["frames"]) == 2
+    assert "0.000s" in recorded["instructions"]
+    assert "21.935s" in recorded["instructions"]
+    assert "clip.mp4" in recorded["instructions"]
+    assert "first moment through the last" in recorded["prompt"]
+    assert "every frame file" in recorded["prompt"]
+    with pytest.raises(UnsupportedMode, match="native video"):
+        asyncio.run(
+            complete(
+                GenerationRequest(
+                    model_id="composer-2.5",
+                    system_prompt="s",
+                    user_prompt="u",
+                    video_path=clip,
+                    modality="native_video",
+                    metadata={"transport": "login"},
+                )
+            )
+        )
 
 
 def test_api_key_completion_puts_the_key_in_the_environment_only(tmp_path: Path, monkeypatch):

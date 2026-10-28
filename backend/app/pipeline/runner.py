@@ -23,6 +23,8 @@ from app.perception.types import TrackingCancelled
 from app.pipeline.infer import (
     BudgetExceeded,
     StageSkipped,
+    _require_video_length,
+    _video_file,
     load_working,
     model_for_call,
     produce_document,
@@ -35,6 +37,7 @@ from app.pipeline.validate import validate_document
 from app.providers.types import UnsupportedMode
 from app.schemas.analysis import AnalysisDocument, Coverage, ReinspectionProposal
 from app.schemas.enums import PIPELINE_STAGES
+from app.services.experiments import adopt_video_modality
 from app.services.ingest import playback_path, sample_run_frames
 from app.services.materialize import grabcut_cutout, materialize
 from app.services.storage import data_path, relative, resolve_stored
@@ -67,6 +70,7 @@ async def execute_job(session: Session, job: Job) -> None:
     run.status = "running"
     run.started_at = run.started_at or utcnow()
     run.error = ""
+    adopt_video_modality(run)
     session.commit()
     started = job.from_stage == ""
     try:
@@ -312,13 +316,20 @@ async def _audio_context(session, run, video, stage) -> None:
         for frame in frames
         if data_path(*Path(frame.path).parts).exists()
     ]
+    send_video = adopt_video_modality(run)
     model_id, requested = model_for_call(session, run)
+    video_path = None
+    if send_video:
+        video_path = _video_file(video)
+        _require_video_length(run, video)
+        frame_inputs = []
     generation = GenerationRequest(
         model_id=model_id,
         system_prompt=request_body["system_prompt"],
         user_prompt=request_body["user_prompt"],
         frames=frame_inputs,
-        modality="sampled_frames",
+        video_path=video_path,
+        modality="native_video" if send_video else "sampled_frames",
         temperature=config.get("temperature"),
         timeout_s=float(config.get("timeout_s") or 180),
         image_detail=config.get("image_detail") or "low",
@@ -330,7 +341,7 @@ async def _audio_context(session, run, video, stage) -> None:
         stage="audio_context",
         provider_id=run.provider_id,
         model_id=model_id,
-        modality="sampled_frames",
+        modality="native_video" if send_video else "sampled_frames",
         prompt_version_id=run.prompt_version_id,
         parameters={
             "temperature": generation.temperature,
@@ -354,7 +365,12 @@ async def _audio_context(session, run, video, stage) -> None:
         result["provider_updates"] = apply_provider_classes(session, run.id, parsed)
     result["transcript_text_sent_to_provider"] = True
     result["audio_bytes_sent"] = False
-    result["note"] = "Transcript text, not the audio track, was sent to the selected model."
+    result["video_file_sent"] = send_video
+    result["note"] = (
+        "Transcript text and the video file were sent. The audio track was not."
+        if send_video
+        else "Transcript text, not the audio track, was sent to the selected model."
+    )
     stage.checkpoint_json = result
 
 
@@ -384,8 +400,8 @@ def _sample(session, run, video, stage) -> None:
         samples = plan_uniform(end, fps, pts)
         samples = [item for item in samples if start <= item.timestamp <= end + 0.01]
         note = (
-            "Native video was selected for the model. Preview frames were still extracted so the "
-            "inspector can show evidence, but they are not a claim that the model saw only those frames."
+            "The model receives the video file. Preview frames were extracted so the "
+            "inspector can show evidence."
         )
     elif preset == "adaptive":
         coarse = plan_uniform(end, 4.0, pts)
@@ -417,7 +433,10 @@ def _sample(session, run, video, stage) -> None:
     limit = int(config.get("max_frames") or 48)
     if len(samples) > limit:
         samples = [samples[index] for index in budget_indices(len(samples), limit)]
-        note += f" The frame budget truncated the set to {limit}."
+        if run.modality == "native_video":
+            note += f" Inspector previews were limited to {limit}. The video file is sent whole."
+        else:
+            note += f" The frame budget truncated the set to {limit}."
     rows = sample_run_frames(session, video, run.id, samples)
     paths = {round(row.timestamp, 3): data_path(*Path(row.path).parts) for row in rows}
     annotate_sharpness(samples, paths)

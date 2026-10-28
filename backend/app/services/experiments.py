@@ -18,7 +18,7 @@ from app.pipeline.prompts import TEMPLATES, compose
 from app.providers.claude_code import load_claude_code
 from app.providers.codex_cli import load_codex
 from app.providers.cursor_cli import load_cursor_cli
-from app.providers.model_list import capabilities_for, resolve_model_id, warm
+from app.providers.model_list import capabilities_for, resolve_model_id, use_video_file, warm
 from app.providers.types import UnsupportedMode
 from app.schemas.enums import PIPELINE_STAGES, ResearchMode
 
@@ -39,11 +39,14 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         raise ValueError(f"unknown research mode {mode}")
     provider_id = payload["provider_id"]
     model_id = payload["model_id"]
-    modality = payload.get("modality") or "sampled_frames"
+    requested = payload.get("modality") or "sampled_frames"
     _warm_account_models(session, provider_id)
+    modality = "native_video" if use_video_file(provider_id, model_id) else requested
     model_id = resolve_model_id(session, provider_id, model_id, modality)
     caps = capabilities_for(provider_id, model_id)
-    if modality == "native_video" and not caps.native_video:
+    if caps.native_video:
+        modality = "native_video"
+    elif modality == "native_video":
         raise UnsupportedMode(
             f"{model_id} does not support native video. Choose sampled frames. "
             "The selection was not changed for you."
@@ -161,6 +164,18 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
     session.commit()
     session.refresh(run)
     return run
+
+
+def adopt_video_modality(run: AnalysisRun) -> bool:
+    """Record a video-file run when this model can take one. Image-only models stay on frames."""
+    if not use_video_file(run.provider_id, run.model_id):
+        return False
+    if run.modality != "native_video":
+        run.modality = "native_video"
+        config = dict(run.config_json or {})
+        config["modality"] = "native_video"
+        run.config_json = config
+    return True
 
 
 def duplicate_run(session: Session, run: AnalysisRun, name: str | None = None) -> AnalysisRun:

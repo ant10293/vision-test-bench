@@ -16,8 +16,9 @@ from app.perception.roster import align_to_roster, drop_split_objects
 from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
-from app.providers.model_list import resolve_model_id
+from app.providers.model_list import capabilities_for, resolve_model_id
 from app.providers.registry import get_provider, needs_secret, run_transport
+from app.services.experiments import adopt_video_modality
 from app.providers.types import FrameInput, GenerationRequest, UnsupportedMode, rough_input_tokens
 from app.schemas.analysis import AnalysisDocument, Coverage
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
@@ -152,18 +153,27 @@ async def produce_document(
         system = compose(prompt_key, run.research_mode, extra)
 
     schema = AnalysisDocument.model_json_schema()
+    video_file = adopt_video_modality(run)
     user = (
         f"Recording duration {video.duration_sec:.3f} seconds. "
         f"Research mode {run.research_mode}. Input modality {run.modality}. "
         "Use only the attached evidence."
     )
+    if video_file:
+        times = [_frame_time(frame) for frame in _budget_frames(frames, int(config.get("max_frames") or 48))]
+        user += _video_coverage_instruction(
+            float(video.duration_sec or 0),
+            times,
+            frames_attached=run.provider_id == "cursor",
+        )
+        _note_video_coverage(coverage, timeline_frames=len(times) if run.provider_id == "cursor" else None)
     if user_extra:
         user += "\n\n" + user_extra
     if spatial_document is not None:
         tracked = evidence_text(spatial_document)
         if tracked:
             user += "\n\n" + tracked
-    if run.modality == "native_video":
+    if video_file and run.provider_id != "cursor":
         return _with_perception(
             await _call(
                 session,
@@ -174,11 +184,13 @@ async def produce_document(
                 [],
                 video,
                 schema,
+                attach_video=True,
             ),
             spatial_document,
         )
     selected = _budget_frames(frames, int(config.get("max_frames") or 48))
-    coverage.frames_submitted = len(selected)
+    if not video_file:
+        coverage.frames_submitted = len(selected)
     coverage.frame_timestamps = [frame.timestamp for frame in selected]
     windows = _windows(selected, int(config.get("max_images_per_call") or 16))
     partials: list[AnalysisDocument] = []
@@ -195,6 +207,7 @@ async def produce_document(
             window,
             video,
             schema,
+            attach_video=bool(video_file),
         )
         if partials:
             # The previous window is the one that shares this boundary.
@@ -212,6 +225,7 @@ async def produce_document(
         [],
         video,
         schema,
+        attach_video=False,
     )
     merged = drop_split_objects(partials[0], restore_omitted_records(merged, partials))
     return _with_perception(merged, spatial_document)
@@ -223,7 +237,7 @@ def _with_perception(document: AnalysisDocument, spatial: AnalysisDocument | Non
     return apply_perception(document, spatial)
 
 
-async def _call(session, run, stage, system, user, frames, video, schema) -> AnalysisDocument:
+async def _call(session, run, stage, system, user, frames, video, schema, *, attach_video: bool = False) -> AnalysisDocument:
     config = run.config_json or {}
     if run.input_tokens and False:
         pass
@@ -241,14 +255,18 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
             )
     provider = get_provider(run.provider_id, session)
     model_id, requested = model_for_call(session, run)
+    video_path = _video_file(video) if attach_video else None
+    if video_path is not None:
+        _require_video_length(run, video)
+    # A video API sees the file itself. The Cursor CLI only reads images it is given,
+    # so those calls keep the timeline frames beside the file.
+    image_frames = [] if attach_video and run.provider_id != "cursor" else frames
     request = GenerationRequest(
         model_id=model_id,
         system_prompt=system,
         user_prompt=user,
-        frames=[FrameInput(frame.timestamp, data_path(*Path(frame.path).parts)) for frame in frames],
-        video_path=resolve_stored(video.proxy_path or video.stored_path)
-        if run.modality == "native_video"
-        else None,
+        frames=[FrameInput(frame.timestamp, data_path(*Path(frame.path).parts)) for frame in image_frames],
+        video_path=video_path,
         modality=run.modality,
         json_schema=schema,
         temperature=config.get("temperature"),
@@ -294,6 +312,56 @@ async def _call(session, run, stage, system, user, frames, video, schema) -> Ana
     finish_provider_call(session, run, row, response)
     session.commit()
     return parse_analysis(response.text)
+
+
+def _video_file(video: VideoAsset):
+    """The playback mp4 when ingest made one, otherwise the original file."""
+    return resolve_stored(video.proxy_path or video.stored_path)
+
+
+def _require_video_length(run: AnalysisRun, video: VideoAsset) -> None:
+    limit = capabilities_for(run.provider_id, run.model_id).max_video_seconds
+    duration = float(video.duration_sec or 0)
+    if limit and duration > float(limit):
+        raise UnsupportedMode(
+            f"{run.model_id} accepts at most {limit:g} seconds of video. "
+            f"This recording is {duration:.1f} seconds. The file was not replaced with frames."
+        )
+
+
+def _video_coverage_instruction(duration: float, times: list[float], *, frames_attached: bool) -> str:
+    span = ""
+    if times:
+        span = f" The timeline runs from {times[0]:.3f}s through {times[-1]:.3f}s."
+    if frames_attached:
+        return (
+            f" The video file is the full {duration:.3f}s recording.{span} "
+            "The images are moments from that recording, from the opening through the end. "
+            "On every supplied image, box every object that is even partly visible, including when it has not moved. "
+            "Cover the opening of the recording and the end of the recording."
+        )
+    listed = ", ".join(f"{stamp:.3f}" for stamp in times)
+    grid = f" Include an observation for each visible object at each of these times, in seconds: {listed}." if listed else ""
+    return (
+        f" The video file is the full {duration:.3f}s recording.{span} "
+        "Cover the recording from the first moment through the last."
+        f"{grid} "
+        "Include moments when an object is still, hidden, or back in view."
+    )
+
+
+def _note_video_coverage(coverage: Coverage, *, timeline_frames: int | None = None) -> None:
+    coverage.modality = "native_video"
+    coverage.native_video_submitted = True
+    if timeline_frames is None:
+        coverage.frames_submitted = 0
+        extra = "The model receives the video file. Preview frames stay in the inspector."
+    else:
+        coverage.frames_submitted = timeline_frames
+        extra = "The video file is sent with the timeline frames so the whole recording is visible."
+    note = coverage.temporal_coverage_note or ""
+    if "video file" not in note.lower():
+        coverage.temporal_coverage_note = (note + " " + extra).strip()
 
 
 def _budget_frames(frames: list[FrameAsset], limit: int) -> list[FrameAsset]:

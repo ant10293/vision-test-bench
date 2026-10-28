@@ -34,9 +34,11 @@ class CursorProvider:
 
     async def generate(self, secret: str, request: GenerationRequest) -> ProviderResponse:
         caps = self.capabilities(request.model_id)
-        if request.modality == "native_video" or (request.video_path and not request.frames):
+        sending_video = request.modality == "native_video" or (request.video_path is not None and not request.frames)
+        if sending_video and not caps.native_video:
             raise UnsupportedMode(
-                "The Cursor CLI reads frame files. Native video was not silently replaced with frames."
+                f"{request.model_id} does not support native video. "
+                "The Cursor CLI was not given frames instead."
             )
         if len(request.frames) > caps.max_images:
             raise UnsupportedMode(

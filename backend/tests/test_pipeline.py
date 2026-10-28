@@ -141,6 +141,52 @@ def test_native_video_rejected_for_openai(client):
     assert "native video" in refused.json()["detail"].lower()
 
 
+def test_video_model_keeps_the_file_when_frames_were_requested(client):
+    from app.db import SessionLocal
+    from app.models.media import Project, VideoAsset
+    from app.services.experiments import create_run
+
+    session = SessionLocal()
+    project = Project(name="video-mode")
+    session.add(project)
+    session.flush()
+    video = VideoAsset(
+        project_id=project.id,
+        original_filename="clip.mp4",
+        stored_path="originals/clip.mp4",
+        checksum_sha256="videomode",
+        duration_sec=8,
+    )
+    session.add(video)
+    session.commit()
+    run = create_run(
+        session,
+        {
+            "video_id": video.id,
+            "provider_id": "gemini",
+            "model_id": "gemini-2.5-pro",
+            "modality": "sampled_frames",
+            "research_mode": "fixed_camera",
+        },
+        enqueue=False,
+    )
+    assert run.modality == "native_video"
+    assert run.config_json["modality"] == "native_video"
+    frames = create_run(
+        session,
+        {
+            "video_id": video.id,
+            "provider_id": "openai",
+            "model_id": "gpt-4.1",
+            "modality": "sampled_frames",
+            "research_mode": "fixed_camera",
+        },
+        enqueue=False,
+    )
+    assert frames.modality == "sampled_frames"
+    session.close()
+
+
 def test_job_restart_requeues_running_work(client):
     from app.db import SessionLocal
     from app.jobs.worker import recover_incomplete

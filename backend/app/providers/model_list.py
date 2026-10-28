@@ -75,6 +75,11 @@ def options_for(
     return fresh
 
 
+def use_video_file(provider_id: str, model_id: str) -> bool:
+    """True when this analysis model accepts a video file."""
+    return capabilities_for(provider_id, model_id).native_video
+
+
 def capabilities_for(provider_id: str, model_id: str) -> ModelCapabilities:
     """Capability row for a run. Live fields win once that account list has been read."""
     with _lock:

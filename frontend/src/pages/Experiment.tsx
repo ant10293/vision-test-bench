@@ -24,7 +24,6 @@ export function ExperimentPage() {
   const [providerId, setProviderId] = useState("fixture");
   const [modelId, setModelId] = useState("authored-fixture");
   const [mode, setMode] = useState("fixed_camera");
-  const [modality, setModality] = useState("sampled_frames");
   const [preset, setPreset] = useState("standard");
   const [pass, setPass] = useState("single");
   const [segmentation, setSegmentation] = useState("boxes_only");
@@ -45,6 +44,7 @@ export function ExperimentPage() {
     return provider?.models ?? [];
   }, [providers.data, providerId]);
   const selected: Capability | undefined = models.find((item) => item.model_id === modelId) ?? models[0];
+  const modality = selected?.native_video ? "native_video" : "sampled_frames";
   const codexRun = providerId === "openai" && providers.data?.find((item) => item.id === "openai")?.codex?.transport === "codex";
   const reasoningOptions = selected?.reasoning_efforts ?? [];
   const effort = reasoningOptions.includes(reasoning) ? reasoning : "";
@@ -82,7 +82,7 @@ export function ExperimentPage() {
     <div className="mx-auto max-w-3xl space-y-4">
       <h1 className="text-2xl font-medium">Experiment configuration</h1>
       <p className="text-sm text-[var(--muted)]">
-        Unsupported settings stay disabled. The lab will not swap your model or modality.
+        A model that accepts video receives the video file. A model that only accepts images receives sampled frames. Unsupported settings stay disabled.
       </p>
       <Field label="Video">
         <select className="field" value={videoId} onChange={(event) => setVideoId(event.target.value)}>
@@ -144,10 +144,19 @@ export function ExperimentPage() {
         </span>
       </Field>
       <Field label="Input modality">
-        <select className="field" value={modality} onChange={(event) => setModality(event.target.value)}>
-          <option value="sampled_frames">Sampled frames</option>
-          <option value="native_video" disabled={!selected?.native_video}>Native video {selected?.native_video ? "" : "(unsupported for this model)"}</option>
+        <select className="field" value={modality} disabled>
+          <option value="sampled_frames" disabled={Boolean(selected?.native_video)}>
+            Sampled frames {selected?.native_video ? "(this model receives the video)" : ""}
+          </option>
+          <option value="native_video" disabled={!selected?.native_video}>
+            Native video {selected?.native_video ? "" : "(unsupported for this model)"}
+          </option>
         </select>
+        <span className="text-xs text-[var(--muted)]">
+          {modality === "native_video"
+            ? "The model receives the video file. Preview frames stay in the inspector."
+            : "This model receives timestamped JPEG frames. Longer clips are split into windows."}
+        </span>
       </Field>
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Sampling">

@@ -63,6 +63,15 @@ _PROMPT = (
     "Read instructions.md and every frame file it names. "
     "Return only the JSON object requested there."
 )
+_PROMPT_VIDEO = (
+    "Read instructions.md and watch the video file it names from the first moment through the last. "
+    "Return only the JSON object requested there."
+)
+_PROMPT_VIDEO_AND_FRAMES = (
+    "Read instructions.md. Watch the video file from the first moment through the last, "
+    "and read every frame file it names. "
+    "Return only the JSON object requested there."
+)
 _ANSWER = "answer.json"
 _REPAIR_PROMPT = (
     "answer.json is not one JSON object. Edit answer.json in place until it is. "
@@ -442,7 +451,13 @@ async def begin_login(force: bool = False) -> dict:
         return status
 
 
-def build_argv(binary: str, model_id: str, workspace: Path) -> list[str]:
+def build_argv(binary: str, model_id: str, workspace: Path, *, video: bool = False, frames: bool = False) -> list[str]:
+    if video and frames:
+        prompt = _PROMPT_VIDEO_AND_FRAMES
+    elif video:
+        prompt = _PROMPT_VIDEO
+    else:
+        prompt = _PROMPT
     return [
         binary,
         "--print",
@@ -458,7 +473,7 @@ def build_argv(binary: str, model_id: str, workspace: Path) -> list[str]:
         str(workspace),
         "--model",
         model_id,
-        _PROMPT,
+        prompt,
     ]
 
 
@@ -483,7 +498,12 @@ def build_repair_argv(binary: str, model_id: str, workspace: Path, error: str) -
     ]
 
 
-def write_instructions(directory: Path, request: GenerationRequest, frames: list[tuple[float, str]]) -> None:
+def write_instructions(
+    directory: Path,
+    request: GenerationRequest,
+    frames: list[tuple[float, str]],
+    video_name: str = "",
+) -> None:
     schema = json.dumps(request.json_schema or {"type": "object"}, indent=2)
     lines = [
         request.system_prompt.strip(),
@@ -493,11 +513,14 @@ def write_instructions(directory: Path, request: GenerationRequest, frames: list
         schema,
         "",
     ]
+    if video_name:
+        lines.append(f"Video file: {video_name}")
+        lines.append("This file is the whole recording. Watch it from the first moment through the last.")
     if frames:
-        lines.append("Frames. Each path is an image. The number is seconds from the start of the clip.")
+        lines.append("Frames. Each path is one moment of that recording. Together they run from the start through the end.")
         for timestamp, name in frames:
             lines.append(f"- {timestamp:.3f}s {name}")
-    else:
+    elif not video_name:
         lines.append("This call has no frames.")
     lines.extend(["", request.user_prompt.strip(), ""])
     (directory / "instructions.md").write_text("\n".join(lines), encoding="utf-8")
@@ -740,10 +763,7 @@ async def complete(request: GenerationRequest, secret: str = "") -> ProviderResp
             "Set the executable on the Providers page."
         )
     transport = _transport(request)
-    if request.modality == "native_video" or (request.video_path and not request.frames):
-        raise UnsupportedMode(
-            "The Cursor CLI is asked to read frames. Native video was not substituted for a video file."
-        )
+    sending_video = request.modality == "native_video" or (request.video_path is not None and not request.frames)
     if request.temperature is not None:
         raise UnsupportedMode("The Cursor CLI does not accept temperature. Leave it unset.")
     if request.reasoning_effort:
@@ -768,6 +788,22 @@ async def complete(request: GenerationRequest, secret: str = "") -> ProviderResp
         frame_dir = root / "frames"
         frame_dir.mkdir()
         listed: list[tuple[float, str]] = []
+        video_name = ""
+        if sending_video:
+            from app.providers.catalog import cursor_accepts_video
+
+            if not cursor_accepts_video(request.model_id):
+                raise UnsupportedMode(
+                    f"{request.model_id} does not support native video. "
+                    "The Cursor CLI was not given frames instead."
+                )
+            if request.video_path is None or not request.video_path.is_file():
+                raise ProviderError("native video modality requires a video file")
+            suffix = request.video_path.suffix.lower()
+            if suffix not in {".mp4", ".mov", ".webm", ".mkv"}:
+                suffix = ".mp4"
+            video_name = f"clip{suffix}"
+            shutil.copyfile(request.video_path, root / video_name)
         for index, frame in enumerate(request.frames):
             if not frame.path.is_file():
                 raise ProviderError(f"frame file is missing: {frame.path.name}")
@@ -775,8 +811,8 @@ async def complete(request: GenerationRequest, secret: str = "") -> ProviderResp
             target = root / name
             shutil.copyfile(frame.path, target)
             listed.append((frame.timestamp, name))
-        write_instructions(root, request, listed)
-        argv = build_argv(resolved, request.model_id, root)
+        write_instructions(root, request, listed, video_name)
+        argv = build_argv(resolved, request.model_id, root, video=bool(video_name), frames=bool(listed))
         try:
             code, out, err = await _execute(argv, env, directory, hard_timeout(request.timeout_s))
         except OSError as exc:

@@ -257,6 +257,16 @@ for _cursor_model in ("composer-2.5", "auto"):
     )
 
 
+def cursor_accepts_video(model_id: str) -> bool:
+    """Gemini and Muse accept a video file when Cursor lists those same models.
+
+    Claude, GPT, Grok, Composer, and Auto stay on frames. Grok's chat models take
+    text and images. Its video API generates clips and does not watch one.
+    """
+    token = model_id.lower().removeprefix("cursor-")
+    return token.startswith("gemini") or token.startswith("muse-")
+
+
 def lookup(provider_id: str, model_id: str) -> ModelCapabilities:
     known = CATALOG.get((provider_id, model_id))
     if known:
@@ -266,16 +276,24 @@ def lookup(provider_id: str, model_id: str) -> ModelCapabilities:
 
 def _default_manual(provider_id: str, model_id: str) -> ModelCapabilities:
     native = provider_id in {"gemini", "meta"} and not model_id.startswith("sam")
+    if provider_id == "cursor":
+        native = cursor_accepts_video(model_id)
     temperature = provider_id not in {"meta", "cursor"}
-    note = (
-        "Manually added Cursor model. The CLI runs in ask mode and the call is recorded as "
-        "unpriced plan usage. Native video and temperature are not enabled."
-        if provider_id == "cursor"
-        else (
+    if provider_id == "cursor" and native:
+        note = (
+            "Cursor CLI ask mode. This model accepts the video file. "
+            "The call is recorded as unpriced plan usage. Temperature is not enabled."
+        )
+    elif provider_id == "cursor":
+        note = (
+            "Manually added Cursor model. The CLI runs in ask mode and the call is recorded as "
+            "unpriced plan usage. Native video and temperature are not enabled."
+        )
+    else:
+        note = (
             "Manually added model id. Capabilities are a conservative default, not a live "
             "provider capability record. Native video is not enabled for OpenAI or Anthropic defaults."
         )
-    )
     return ModelCapabilities(
         model_id=model_id,
         provider_id=provider_id,

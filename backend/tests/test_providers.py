@@ -14,6 +14,26 @@ def test_openai_catalog_has_no_native_video():
     assert caps.structured_output is True
 
 
+def test_video_capable_models_are_not_sent_frames():
+    from app.providers.model_list import use_video_file
+
+    assert use_video_file("gemini", "gemini-2.5-pro") is True
+    assert use_video_file("meta", "muse-spark-1.3") is True
+    assert use_video_file("anthropic", "claude-sonnet-5-5") is False
+    assert use_video_file("openai", "gpt-4.1") is False
+
+
+def test_overlong_video_is_not_replaced_with_frames():
+    from types import SimpleNamespace
+
+    from app.pipeline.infer import _require_video_length
+
+    run = SimpleNamespace(provider_id="gemini", model_id="gemini-2.5-flash")
+    video = SimpleNamespace(duration_sec=4000)
+    with pytest.raises(UnsupportedMode, match="not replaced with frames"):
+        _require_video_length(run, video)
+
+
 def test_openai_refuses_native_video():
     provider = OpenAIProvider()
     request = GenerationRequest(model_id="gpt-4.1", system_prompt="s", user_prompt="u", modality="native_video")
