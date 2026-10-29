@@ -1,6 +1,7 @@
 import { Download, ExternalLink, Search, X } from "lucide-react";
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
+import { fittedPreviewSize } from "../lib/previewFit";
 import { ShotFrame } from "./ShotFrame";
 
 export type PreviewImage = { src: string; filename: string; confidence?: number | null };
@@ -22,10 +23,32 @@ export function AssetPreview({
     Math.min(Math.max(0, startIndex), Math.max(0, images.length - 1)),
   );
   const [zoom, setZoom] = useState(1);
+  const [box, setBox] = useState<{ width: number; height: number } | null>(null);
+  const natural = useRef({ width: 0, height: 0 });
   const onCloseRef = useRef(onClose);
   const closeRef = useRef<HTMLButtonElement>(null);
   onCloseRef.current = onClose;
   const image = images[current];
+  const fittedSrc = useRef(image?.src);
+  if (image?.src !== fittedSrc.current) {
+    fittedSrc.current = image?.src;
+    natural.current = { width: 0, height: 0 };
+    setBox(null);
+  }
+
+  function fitToPreview() {
+    setBox(fittedPreviewSize(natural.current.width, natural.current.height, window.innerWidth, window.innerHeight));
+  }
+
+  function onImageLoad(event: SyntheticEvent<HTMLImageElement>) {
+    natural.current = { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight };
+    fitToPreview();
+  }
+
+  useEffect(() => {
+    window.addEventListener("resize", fitToPreview);
+    return () => window.removeEventListener("resize", fitToPreview);
+  }, []);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -131,7 +154,9 @@ export function AssetPreview({
           alt={image.filename}
           confidence={image.confidence}
           imgClassName="asset-preview-img"
+          imgStyle={box ? { width: box.width, height: box.height, maxWidth: "none", maxHeight: "none" } : undefined}
           draggable={false}
+          onLoad={onImageLoad}
           frameStyle={{ transform: zoom === 1 ? undefined : `scale(${zoom})` }}
         />
       </div>
