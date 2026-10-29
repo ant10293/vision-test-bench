@@ -14,6 +14,7 @@ import { api, evidenceClass, formatTime, formatUsd } from "../lib/api";
 import { formatConfidence } from "../lib/confidence";
 import { formatLogText } from "../lib/formatLog";
 import { actionPhrase, humanize, humanizeText, labeledId, nameObjects, objectLabels } from "../lib/humanize";
+import { objectFrameTimeline } from "../lib/analysis";
 import { objectScene } from "../lib/sceneSlice";
 import { BundleContext, useOptionalBundle } from "../lib/bundleContext";
 import type { Bundle, Observation } from "../lib/types";
@@ -532,6 +533,7 @@ export function ObjectsPage() {
   const selected = bundle?.objects.find((item) => item.local_id === open);
   const selectedThumb = objectThumbnail(selected);
   const shots = selected && bundle ? objectShots(selected, bundle.observations) : [];
+  const frameCells = selected && bundle ? objectFrameTimeline(bundle.frames, selected.local_id, bundle.observations) : [];
   return (
     <div className="space-y-3" aria-busy={pending || undefined}>
       {pending && <p className="sr-only">Loading objects</p>}
@@ -600,6 +602,38 @@ export function ObjectsPage() {
               </button>
             ))}
           </div>
+          {frameCells.length > 0 && (
+            <div className="min-w-0 lg:col-span-2">
+              <div className="mb-2 text-xs uppercase tracking-wide text-[var(--muted)]">Timeline</div>
+              <div className="flex overflow-x-auto pb-1" role="list" aria-label={`${humanize(selected.label)} timeline`}>
+                {frameCells.map((cell) => {
+                  const stamp = formatTime(cell.timestamp);
+                  const present = Boolean(cell.url && cell.observationId);
+                  const shotIndex = present ? shots.findIndex((shot) => shot.id === cell.observationId) : -1;
+                  return (
+                    <div key={cell.frameId} role="listitem" className="w-14 shrink-0" aria-label={present ? `Frame at ${stamp}` : `Missing at ${stamp}`}>
+                      {present ? (
+                        <button
+                          type="button"
+                          title={stamp}
+                          className="block h-14 w-14 overflow-hidden border-0 bg-black p-0"
+                          onClick={() => {
+                            useInspector.getState().setTime(cell.timestamp);
+                            if (shotIndex >= 0) setPreview(shotIndex);
+                          }}
+                        >
+                          <img src={cell.url ?? ""} alt="" className="block h-full w-full object-cover object-center" />
+                        </button>
+                      ) : (
+                        <div title={`Missing · ${stamp}`} className="h-14 w-14 border border-dashed border-[var(--line)] bg-[#0d1016]" />
+                      )}
+                      <div className="mono mt-1 text-center text-[10px] leading-none text-[var(--muted)]">{stamp}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {preview != null && (
             <AssetPreview
               key={`${selected.local_id}:${preview}`}

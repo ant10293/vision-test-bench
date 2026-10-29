@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { frameObjectStills, observationsAt, frameNear, tracksAt } from "../lib/analysis";
+import { frameObjectStills, objectFrameTimeline, observationsAt, frameNear, tracksAt } from "../lib/analysis";
 import type { Bundle } from "../lib/types";
 
 const bundle = {
@@ -62,6 +62,44 @@ describe("analysis helpers", () => {
     expect(frameObjectStills(withStill, 1)).toEqual([
       { id: "a", url: "/cup.png", label: "Cup", color: "#ff0000", confidence: null },
     ]);
+  });
+
+  it("leaves a blank cell on every frame where the object is missing", () => {
+    const cells = objectFrameTimeline(
+      [
+        { id: "f1", timestamp: 2 },
+        { id: "gap", timestamp: 0 },
+        { id: "f2", timestamp: 1 },
+      ],
+      "Object_1",
+      [
+        { id: "seen", object_local_id: "Object_1", timestamp: 0, bbox: { x: 0, y: 0, w: 0.2, h: 0.2 }, frame_id: "gap", visibility: "visible", confidence: 0.4 },
+        { id: "gone", object_local_id: "Object_1", timestamp: 1, bbox: { x: 0, y: 0, w: 0.2, h: 0.2 }, frame_id: "f2", visibility: "absent", confidence: 0.9 },
+        { id: "other", object_local_id: "Object_2", timestamp: 2, bbox: { x: 0, y: 0, w: 0.2, h: 0.2 }, frame_id: "f1", visibility: "visible", confidence: 1 },
+        { id: "back", object_local_id: "Object_1", timestamp: 2, bbox: { x: 0, y: 0, w: 0.2, h: 0.2 }, frame_id: "f1", visibility: "partial", confidence: 0.2 },
+      ] as Bundle["observations"],
+    );
+    expect(cells.map((cell) => cell.frameId)).toEqual(["gap", "f2", "f1"]);
+    expect(cells.map((cell) => cell.observationId)).toEqual(["seen", null, "back"]);
+    expect(cells[0]?.url).toBe("/api/media/observations/seen/crop");
+    expect(cells[1]?.url).toBeNull();
+    expect(cells[2]?.url).toBe("/api/media/observations/back/crop");
+  });
+
+  it("uses the timestamp when the detection's frame id is not in the strip", () => {
+    const cells = objectFrameTimeline(
+      [
+        { id: "a", timestamp: 0 },
+        { id: "b", timestamp: 1 },
+        { id: "c", timestamp: 2 },
+      ],
+      "Object_1",
+      [
+        { id: "seen", object_local_id: "Object_1", timestamp: 0.001, bbox: { x: 0, y: 0, w: 1, h: 1 }, frame_id: "stored-elsewhere", visibility: "visible", confidence: 0.5 },
+        { id: "late", object_local_id: "Object_1", timestamp: 9, bbox: { x: 0, y: 0, w: 1, h: 1 }, frame_id: "way-off", visibility: "visible", confidence: 0.5 },
+      ] as Bundle["observations"],
+    );
+    expect(cells.map((cell) => cell.observationId)).toEqual(["seen", null, null]);
   });
 
   it("keeps one track sample nearest the playhead", () => {

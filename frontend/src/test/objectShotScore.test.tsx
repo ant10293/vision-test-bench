@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { BundleContext } from "../lib/bundleContext";
 import type { Bundle } from "../lib/types";
 import { ObjectsPage } from "../pages/RunPages";
@@ -45,6 +45,8 @@ const bundle = {
 } as unknown as Bundle;
 
 describe("confidence on the object image grid", () => {
+  afterEach(() => cleanup());
+
   it("overlays the percent on the top right and skips a still with no score", () => {
     const client = new QueryClient();
     render(
@@ -65,5 +67,43 @@ describe("confidence on the object image grid", () => {
 
     const quiet = screen.getByRole("button", { name: "View 2.00s" });
     expect(quiet.querySelector(".shot-score")).toBeNull();
+  });
+
+  it("shows a square crop for each frame and a blank box where the object is missing", () => {
+    const client = new QueryClient();
+    const withFrames = {
+      ...bundle,
+      frames: [
+        { id: "f1", timestamp: 0, reason: "uniform", url: "/f1" },
+        { id: "gap", timestamp: 1, reason: "uniform", url: "/gap" },
+        { id: "f2", timestamp: 2, reason: "uniform", url: "/f2" },
+      ],
+    } as unknown as Bundle;
+    render(
+      <QueryClientProvider client={client}>
+        <BundleContext.Provider value={withFrames}>
+          <ObjectsPage />
+        </BundleContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Rod/ }));
+
+    const strip = screen.getByRole("list", { name: "Rod timeline" });
+    const cells = within(strip).getAllByRole("listitem");
+    expect(cells).toHaveLength(3);
+    expect(cells[0]).toHaveAttribute("aria-label", "Frame at 0:00.00");
+    expect(cells[0]).toHaveTextContent("0:00.00");
+    const shot = cells[0].querySelector("img");
+    expect(shot).toHaveAttribute("src", "/api/media/observations/obs-1/crop");
+    expect(shot).toHaveClass("object-cover", "object-center");
+    expect(shot?.parentElement).toHaveClass("h-14", "w-14", "border-0");
+    expect(shot?.parentElement?.className).not.toMatch(/rounded/);
+    expect(cells[1]).toHaveAttribute("aria-label", "Missing at 0:01.00");
+    expect(cells[1]).toHaveTextContent("0:01.00");
+    expect(cells[1].querySelector("img")).toBeNull();
+    expect(cells[1].querySelector("div")?.className).not.toMatch(/rounded/);
+    expect(cells[2]).toHaveTextContent("0:02.00");
+    expect(cells[2].querySelector("img")).toHaveAttribute("src", "/api/media/observations/obs-2/crop");
   });
 });
