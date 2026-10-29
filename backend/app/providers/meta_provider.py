@@ -18,6 +18,7 @@ from app.providers.types import (
     UnsupportedMode,
     Usage,
     estimate_cost,
+    provider_timeout,
 )
 
 META_BASE = "https://api.meta.ai/v1"
@@ -106,7 +107,7 @@ class MetaProvider:
             }
         started = time.perf_counter()
         try:
-            response = await self._client(secret, request.timeout_s).responses.create(**kwargs)
+            response = await self._client(secret, provider_timeout(request.timeout_s)).responses.create(**kwargs)
         except UnsupportedMode:
             raise
         except Exception as exc:
@@ -135,7 +136,7 @@ class MetaProvider:
                 {"type": "input_text", "text": request.user_prompt},
                 {"type": "input_video", "video_url": data_url(request.video_path, "video/mp4")},
             ]
-        client = self._client(secret, request.timeout_s)
+        client = self._client(secret, provider_timeout(request.timeout_s))
         try:
             with request.video_path.open("rb") as handle:
                 uploaded = await client.files.create(file=handle, purpose="user_data")

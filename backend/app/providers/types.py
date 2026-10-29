@@ -22,6 +22,16 @@ class RateLimitError(ProviderError):
     pass
 
 
+# Wall-clock deadline for every analysis call. Stored runs still default to 180s,
+# and that value is what the UI saves. Each provider raises a shorter request to
+# this floor. A configured timeout above it still applies.
+PROVIDER_TIMEOUT_S = 30 * 60
+
+
+def provider_timeout(requested: float | None = None) -> float:
+    return max(float(requested or 0), PROVIDER_TIMEOUT_S)
+
+
 @dataclass
 class FrameInput:
     timestamp: float

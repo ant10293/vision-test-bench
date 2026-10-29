@@ -481,6 +481,42 @@ def test_completion_attaches_frames_in_read_only_mode_without_the_api_key(
     assert Path(recorded["images"][0]).resolve().is_relative_to(Path(recorded["cwd"]).resolve())
 
 
+def test_codex_call_uses_the_global_thirty_minute_timeout(tmp_path: Path, monkeypatch):
+    from app.providers.codex_cli import complete, save_codex
+    from app.providers.types import FrameInput, GenerationRequest, ProviderError
+
+    fake = tmp_path / "codex"
+    _fake(fake)
+    monkeypatch.setenv("LEARNLOOP_DATA_DIR", str(tmp_path / "data"))
+    from app.config import settings
+
+    settings.data_dir = tmp_path / "data"
+    save_codex(str(fake), "codex")
+    frame = tmp_path / "shot.jpg"
+    frame.write_bytes(b"\xff\xd8\xff\xd9")
+    seen: dict[str, float] = {}
+
+    async def capture(argv, env, cwd, stdin, timeout):
+        seen["timeout"] = timeout
+        raise ProviderError("stop after recording the deadline")
+
+    monkeypatch.setattr("app.providers.codex_cli._execute", capture)
+    with pytest.raises(ProviderError, match="stop after recording"):
+        asyncio.run(
+            complete(
+                GenerationRequest(
+                    model_id="gpt-6-astra",
+                    system_prompt="Describe the clip.",
+                    user_prompt="What is in the scene?",
+                    frames=[FrameInput(1.5, frame)],
+                    timeout_s=180,
+                    metadata={"transport": "codex"},
+                )
+            )
+        )
+    assert seen["timeout"] == 1800
+
+
 def test_output_schema_is_strict_enough_for_codex():
     from app.providers.codex_cli import strict_output_schema
     from app.schemas.analysis import AnalysisDocument
