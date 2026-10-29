@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Bone, FieldBone } from "./Skeleton";
 import { api, formatTime } from "../lib/api";
 import { humanize } from "../lib/humanize";
 import {
@@ -37,6 +38,9 @@ export function VerificationPanel({ projectId }: { projectId: string }) {
     queryKey: ["verifications", projectId],
     queryFn: () => api.verifications(projectId),
   });
+  const clipsPending = (videos.data === undefined && !videos.isError) || (runs.data === undefined && !runs.isError);
+  const templatesPending = templates.data === undefined && !templates.isError;
+  const checksPending = verifications.data === undefined && !verifications.isError;
   const analyzed = clips.filter((clip) => clip.run_id);
   const [demoRun, setDemoRun] = useState("");
   const [templateId, setTemplateId] = useState("");
@@ -93,12 +97,14 @@ export function VerificationPanel({ projectId }: { projectId: string }) {
       <div className="panel flex flex-wrap items-end gap-2 p-3">
         <label className="text-sm">
           Demonstration
-          <select className="field mt-1 block" value={demoRun} onChange={(event) => setDemoRun(event.target.value)}>
-            <option value="">Analyzed clip</option>
-            {analyzed.map((clip) => (
-              <option key={clip.run_id} value={clip.run_id}>{clip.filename}</option>
-            ))}
-          </select>
+          {clipsPending ? <FieldBone compact className="mt-1" /> : (
+            <select className="field mt-1 block" value={demoRun} onChange={(event) => setDemoRun(event.target.value)}>
+              <option value="">Analyzed clip</option>
+              {analyzed.map((clip) => (
+                <option key={clip.run_id} value={clip.run_id}>{clip.filename}</option>
+              ))}
+            </select>
+          )}
         </label>
         <button className="btn" disabled={!demoRun} onClick={() => void learn()}>Learn workflow</button>
       </div>
@@ -114,20 +120,24 @@ export function VerificationPanel({ projectId }: { projectId: string }) {
       <div className="panel flex flex-wrap items-end gap-2 p-3">
         <label className="text-sm">
           Template
-          <select className="field mt-1 block" value={template?.id ?? ""} onChange={(event) => setTemplateId(event.target.value)}>
-            {(templates.data ?? []).map((item) => (
-              <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>
-            ))}
-          </select>
+          {templatesPending ? <FieldBone compact className="mt-1" /> : (
+            <select className="field mt-1 block" value={template?.id ?? ""} onChange={(event) => setTemplateId(event.target.value)}>
+              {(templates.data ?? []).map((item) => (
+                <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>
+              ))}
+            </select>
+          )}
         </label>
         <label className="text-sm">
           Execution
-          <select className="field mt-1 block" value={executionRun} onChange={(event) => setExecutionRun(event.target.value)}>
-            <option value="">Analyzed clip</option>
-            {analyzed.map((clip) => (
-              <option key={clip.run_id} value={clip.run_id}>{clip.filename}</option>
-            ))}
-          </select>
+          {clipsPending ? <FieldBone compact className="mt-1" /> : (
+            <select className="field mt-1 block" value={executionRun} onChange={(event) => setExecutionRun(event.target.value)}>
+              <option value="">Analyzed clip</option>
+              {analyzed.map((clip) => (
+                <option key={clip.run_id} value={clip.run_id}>{clip.filename}</option>
+              ))}
+            </select>
+          )}
         </label>
         <label className="text-sm">
           Strategy
@@ -146,8 +156,11 @@ export function VerificationPanel({ projectId }: { projectId: string }) {
           Verify new execution
         </button>
       </div>
-      <div className="flex flex-wrap gap-2">
-        {(verifications.data ?? []).map((item) => (
+      <div className="flex flex-wrap gap-2" aria-busy={checksPending || undefined}>
+        {checksPending && <p className="sr-only">Loading verifications</p>}
+        {checksPending ? Array.from({ length: 2 }, (_, index) => (
+          <span key={index} className="btn" aria-hidden="true"><Bone width="7rem" /></span>
+        )) : (verifications.data ?? []).map((item) => (
           <button key={item.id} className={`btn ${item.id === selectedId ? "primary" : ""}`} onClick={() => setSelectedId(item.id)}>
             {humanize(item.overall)} · v{item.template_version}
           </button>

@@ -3,11 +3,13 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, formatTime } from "../lib/api";
 import { humanize } from "../lib/humanize";
-import { useBundle } from "../lib/bundleContext";
+import { useOptionalBundle } from "../lib/bundleContext";
+import { Bone, FieldBone } from "../components/Skeleton";
 import type { AudioAlignment, TranscriptSegment } from "../lib/types";
 import { useInspector } from "../stores/ui";
 
 const FILTERS = ["all", "visually_supported", "contextual", "contradictory", "irrelevant", "uncertain"];
+const SEGMENT_PLACEHOLDERS = 2;
 
 const TONE: Record<string, string> = {
   visually_supported: "text-[var(--teal)]",
@@ -18,16 +20,16 @@ const TONE: Record<string, string> = {
 };
 
 export function AudioPage() {
-  const bundle = useBundle();
+  const bundle = useOptionalBundle();
   const setTime = useInspector((state) => state.setTime);
   const [filter, setFilter] = useState("all");
   const [compareId, setCompareId] = useState("");
   const [report, setReport] = useState<Record<string, unknown> | null>(null);
   const client = useQueryClient();
   const navigate = useNavigate();
-  const config = bundle.config || {};
-  const segments = bundle.transcripts ?? [];
-  const alignments = bundle.alignments ?? [];
+  const config = bundle?.config || {};
+  const segments = bundle?.transcripts ?? [];
+  const alignments = bundle?.alignments ?? [];
   const bySegment = new Map(alignments.map((row) => [row.segment_id, row]));
   const visible = segments.filter((segment) => {
     if (filter === "all") return true;
@@ -35,31 +37,37 @@ export function AudioPage() {
   });
   const models = useQuery({ queryKey: ["audio-models"], queryFn: api.audioModels });
   const saveText = useMutation({
-    mutationFn: ({ id, text }: { id: string; text: string }) => api.patchTranscript(bundle.run.id, id, text),
-    onSuccess: (next) => client.setQueryData(["run", bundle.run.id], next),
+    mutationFn: ({ id, text }: { id: string; text: string }) => api.patchTranscript(bundle?.run.id ?? "", id, text),
+    onSuccess: (next) => { if (bundle) client.setQueryData(["run", bundle.run.id], next); },
   });
   const saveClass = useMutation({
     mutationFn: (row: AudioAlignment) =>
-      api.patchAlignment(bundle.run.id, row.id, row.classification, row.explanation),
-    onSuccess: (next) => client.setQueryData(["run", bundle.run.id], next),
+      api.patchAlignment(bundle?.run.id ?? "", row.id, row.classification, row.explanation),
+    onSuccess: (next) => { if (bundle) client.setQueryData(["run", bundle.run.id], next); },
   });
   const visualCopy = useMutation({
-    mutationFn: () => api.visualOnlyRun(bundle.run.id),
+    mutationFn: () => api.visualOnlyRun(bundle?.run.id ?? ""),
     onSuccess: (copy) => navigate(`/runs/${copy.id}/pipeline`),
   });
   const compare = useMutation({
-    mutationFn: () => api.audioComparison(bundle.run.id, compareId, bundle.run.id),
+    mutationFn: () => api.audioComparison(bundle?.run.id ?? "", compareId, bundle?.run.id ?? ""),
     onSuccess: (body) => setReport(body),
   });
 
+  const pending = bundle == null;
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" aria-busy={pending || undefined}>
+      {pending && <p className="sr-only">Loading audio</p>}
       <section className="space-y-2">
         <h2 className="text-sm font-medium">Whisper configuration</h2>
         <p className="text-xs text-[var(--muted)]">
-          Transcription {config.transcribe ? "on" : "off"} · workflow use {config.use_transcript ? "on" : "off"} · model {humanize(String(config.whisper_model || "base"))} · language {String(config.whisper_language || "auto")} · silence filter {config.whisper_vad === false ? "off" : "on"} · window {String(config.align_window_sec || 4)}s
+          {bundle ? (
+            <>
+              Transcription {config.transcribe ? "on" : "off"} · workflow use {config.use_transcript ? "on" : "off"} · model {humanize(String(config.whisper_model || "base"))} · language {String(config.whisper_language || "auto")} · silence filter {config.whisper_vad === false ? "off" : "on"} · window {String(config.align_window_sec || 4)}s
+            </>
+          ) : <Bone width="80%" />}
         </p>
-        {Boolean(config.transcript_text_may_be_sent) && (
+        {bundle && Boolean(config.transcript_text_may_be_sent) && (
           <p className="text-xs text-[var(--amber)]">
             This run can send transcript text to {humanize(bundle.run.provider_id)}. The audio track stays on this machine.
           </p>
@@ -70,7 +78,7 @@ export function AudioPage() {
             Not downloaded yet: {models.data.models.filter((item) => !item.downloaded).map((item) => humanize(item.model)).join(", ")}. The first transcription of a model downloads it once.
           </p>
         )}
-        {bundle.video && (
+        {bundle && bundle.video && (
           <p className="text-xs text-[var(--muted)]">
             {bundle.video.audio_probed
               ? (bundle.video.has_audio ? `Audio track: ${bundle.video.audio_codec || "present"}` : "No audio track. Visual analysis is unchanged.")
@@ -88,13 +96,15 @@ export function AudioPage() {
             </button>
           ))}
         </div>
-        {visible.length === 0 && (
+        {bundle && visible.length === 0 && (
           <p className="text-sm text-[var(--muted)]">
             {config.transcribe ? "No speech segments are stored for this filter." : "Local transcription was not requested for this run."}
           </p>
         )}
         <ul className="space-y-2">
-          {visible.map((segment) => (
+          {pending ? Array.from({ length: SEGMENT_PLACEHOLDERS }, (_, index) => (
+            <SegmentCard key={index} segment={null} />
+          )) : visible.map((segment) => (
             <SegmentCard
               key={segment.id}
               segment={segment}
@@ -113,9 +123,9 @@ export function AudioPage() {
           A visual-only copy uses the same recording and model settings with both audio options off. Scores appear only when a human ground-truth set exists.
         </p>
         <div className="flex flex-wrap gap-2">
-          <button className="btn" onClick={() => visualCopy.mutate()}>Start visual-only copy</button>
-          <input className="field max-w-sm" placeholder="Visual-only run id" value={compareId} onChange={(event) => setCompareId(event.target.value)} />
-          <button className="btn" disabled={!compareId || compare.isPending} onClick={() => compare.mutate()}>Compare</button>
+          <button className="btn" disabled={pending} onClick={() => { if (bundle) visualCopy.mutate(); }}>Start visual-only copy</button>
+          <input className="field max-w-sm" placeholder="Visual-only run id" value={compareId} disabled={pending} onChange={(event) => setCompareId(event.target.value)} />
+          <button className="btn" disabled={pending || !compareId || compare.isPending} onClick={() => { if (bundle) compare.mutate(); }}>Compare</button>
         </div>
         {report && <ComparisonReport report={report} />}
       </section>
@@ -130,25 +140,34 @@ function SegmentCard({
   onText,
   onClass,
 }: {
-  segment: TranscriptSegment;
+  segment: TranscriptSegment | null;
   alignment?: AudioAlignment;
-  onSeek: (time: number) => void;
-  onText: (text: string) => void;
-  onClass: (row: AudioAlignment) => void;
+  onSeek?: (time: number) => void;
+  onText?: (text: string) => void;
+  onClass?: (row: AudioAlignment) => void;
 }) {
-  const [text, setText] = useState(segment.text);
+  const [text, setText] = useState(segment?.text ?? "");
   const [label, setLabel] = useState(alignment?.classification || "uncertain");
   const [explanation, setExplanation] = useState(alignment?.explanation || "");
+  if (!segment) {
+    return (
+      <li className="rounded-md border border-[var(--line)] p-3" aria-hidden="true">
+        <Bone width="16rem" />
+        <FieldBone textarea className="mt-2" />
+        <div className="mt-2"><span className="btn">Save text</span></div>
+      </li>
+    );
+  }
   return (
     <li className="rounded-md border border-[var(--line)] p-3">
-      <button className="text-xs text-[var(--teal)]" onClick={() => onSeek(segment.start)}>
+      <button className="text-xs text-[var(--teal)]" onClick={() => onSeek?.(segment.start)}>
         {formatTime(segment.start)} – {formatTime(segment.end)} · {humanize(segment.local_id)}
         {segment.language ? ` · ${segment.language}` : ""}
         {segment.confidence != null ? ` · ${segment.confidence.toFixed(2)}` : ""}
       </button>
       <textarea className="field mt-2 w-full" value={text} onChange={(event) => setText(event.target.value)} />
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button className="btn" onClick={() => onText(text)}>Save text</button>
+        <button className="btn" onClick={() => onText?.(text)}>Save text</button>
         {segment.corrected && <span className="tag">corrected · model text kept</span>}
         {alignment && <span className={`text-xs ${TONE[alignment.classification] || ""}`}>{humanize(alignment.classification)}</span>}
       </div>
@@ -168,7 +187,7 @@ function SegmentCard({
           </p>
           <div className="flex flex-wrap gap-2">
             {alignment.frame_timestamps.map((time) => (
-              <button key={time} className="btn" onClick={() => onSeek(time)}>{formatTime(time)}</button>
+              <button key={time} className="btn" onClick={() => onSeek?.(time)}>{formatTime(time)}</button>
             ))}
           </div>
           <div className="flex flex-wrap gap-2">
@@ -176,7 +195,7 @@ function SegmentCard({
               {FILTERS.filter((item) => item !== "all").map((item) => <option key={item} value={item}>{humanize(item)}</option>)}
             </select>
             <input className="field" value={explanation} onChange={(event) => setExplanation(event.target.value)} />
-            <button className="btn" onClick={() => onClass({ ...alignment, classification: label, explanation })}>Save classification</button>
+            <button className="btn" onClick={() => onClass?.({ ...alignment, classification: label, explanation })}>Save classification</button>
           </div>
         </div>
       )}

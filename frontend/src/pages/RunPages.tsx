@@ -5,7 +5,7 @@ import { AssetPreview } from "../components/AssetPreview";
 import { ShotFrame } from "../components/ShotFrame";
 import { BeforeAfter } from "../components/BeforeAfter";
 import { RunsTable } from "../components/RunsTable";
-import { Bone } from "../components/Skeleton";
+import { Bone, FieldBone } from "../components/Skeleton";
 import { PerceptionPanel } from "../components/PerceptionPanel";
 import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
@@ -15,7 +15,7 @@ import { formatConfidence } from "../lib/confidence";
 import { formatLogText } from "../lib/formatLog";
 import { actionPhrase, humanize, humanizeText, labeledId, nameObjects, objectLabels } from "../lib/humanize";
 import { objectScene } from "../lib/sceneSlice";
-import { BundleContext, useBundle } from "../lib/bundleContext";
+import { BundleContext, useOptionalBundle } from "../lib/bundleContext";
 import type { Bundle, Observation } from "../lib/types";
 import { useInspector } from "../stores/ui";
 import { AudioPage } from "./Audio";
@@ -33,6 +33,13 @@ const ACTION_LIST = "min-h-0 flex-1 space-y-1 overflow-y-auto";
 const INSPECT_STAGE = "panel min-w-0 p-3";
 const INSPECT_DETAIL = "panel max-h-[78vh] space-y-3 overflow-auto p-3 text-sm";
 const ACTION_PLACEHOLDERS = 5;
+const STATE_PLACEHOLDERS = 3;
+const LINE_PLACEHOLDERS = 2;
+const DEPENDENCY_PLACEHOLDERS = 3;
+const STAGE_PLACEHOLDERS = 6;
+const STEP_MEDIA_PLACEHOLDERS = 3;
+const TRUTH_PLACEHOLDERS = 2;
+const REQUEST_PLACEHOLDERS = 3;
 
 /** The still that stands in for an object. Prefer its first appearance over the leading gallery asset. */
 function objectThumbnail(object: Bundle["objects"][number] | null | undefined): string {
@@ -285,64 +292,7 @@ function AnalysisNav({
 }
 
 function PendingPane({ tab }: { tab: string }) {
-  if (tab === "objects") return <ObjectsSkeleton />;
-  if (tab === "") return <InspectSkeleton />;
-  return <PanelSkeleton />;
-}
-
-function ObjectsSkeleton() {
-  return (
-    <div className="space-y-3">
-      <div className="flex gap-2">
-        <input className="field max-w-xs" placeholder="Add a missed object" disabled />
-        <button className="btn" type="button" disabled>Add</button>
-      </div>
-      <div className={OBJECT_GRID}>
-        {Array.from({ length: OBJECT_PLACEHOLDERS }, (_, index) => <ObjectTile key={index} object={null} />)}
-      </div>
-    </div>
-  );
-}
-
-function InspectSkeleton() {
-  return (
-    <div className={INSPECT_LAYOUT}>
-      <section className={INSPECT_SIDE}>
-        <Timeline />
-        <div className={ACTION_LIST} aria-hidden="true">
-          {Array.from({ length: ACTION_PLACEHOLDERS }, (_, index) => (
-            <div key={index} className="block w-full rounded-md px-2 py-1 text-left text-sm">
-              <Bone width="78%" />
-              <div className="mono text-[10px]"><Bone width="6rem" /></div>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section className={INSPECT_STAGE}>
-        <div className="stage-slot flex min-h-0 w-full flex-col gap-2">
-          <div className="stage-frame overflow-hidden rounded-lg bg-black">
-            <Bone className="bone-fill" />
-          </div>
-        </div>
-      </section>
-      <section className={INSPECT_DETAIL} aria-hidden="true">
-        <Bone width="32%" />
-        <div className="font-medium"><Bone width="70%" /></div>
-        <div className="text-xs"><Bone width="48%" /></div>
-        <Bone width="92%" />
-      </section>
-    </div>
-  );
-}
-
-function PanelSkeleton() {
-  return (
-    <div className="panel space-y-2 p-3 text-sm" aria-hidden="true">
-      <Bone width="36%" />
-      <Bone width="88%" />
-      <Bone width="70%" />
-    </div>
-  );
+  return <AnalysisTab tab={tab} />;
 }
 
 function AnalysisTab({ tab }: { tab: string }) {
@@ -400,80 +350,135 @@ function RunActions({ bundle, embedded }: { bundle: Bundle | null; embedded: boo
   );
 }
 
+type LabAction = Bundle["actions"][number];
+
 export function InspectPage() {
-  const bundle = useBundle();
-  const labels = objectLabels(bundle.objects);
+  const bundle = useOptionalBundle();
+  const labels = objectLabels(bundle?.objects ?? []);
   const actionId = useInspector((state) => state.selectedAction);
-  const action = bundle.actions.find((item) => item.local_id === actionId) ?? bundle.actions[0];
+  const action = bundle?.actions.find((item) => item.local_id === actionId) ?? bundle?.actions[0] ?? null;
+  const actions: (LabAction | null)[] = bundle ? bundle.actions : Array.from({ length: ACTION_PLACEHOLDERS }, () => null);
   return (
     <div className={INSPECT_LAYOUT}>
       <section className={INSPECT_SIDE}>
         <Timeline bundle={bundle} />
-        <div className={ACTION_LIST}>
-          {bundle.actions.map((item, index) => (
-            <button
-              key={item.id}
-              className={`block w-full rounded-md px-2 py-1 text-left text-sm ${action?.id === item.id ? "bg-[#1a221d]" : ""}`}
-              onClick={() => {
-                useInspector.getState().selectAction(item.local_id);
-                useInspector.getState().setTime(item.start);
-                useInspector.getState().setLoop({ start: item.start, end: item.end });
-              }}
-            >
-              <div>{index + 1}. {actionPhrase(item, labels)} <span className="text-[var(--muted)]">{humanize(item.outcome)}</span></div>
-              <div className="mono text-[10px] text-[var(--muted)]">{formatTime(item.start)}–{formatTime(item.end)}</div>
-            </button>
+        <div className={ACTION_LIST} aria-hidden={bundle ? undefined : true}>
+          {actions.map((item, index) => (
+            <ActionRow key={item?.id ?? `pending-${index}`} item={item} index={index} labels={labels} selected={action?.id === item?.id} />
           ))}
         </div>
       </section>
-      <section className={INSPECT_STAGE}><VideoStage bundle={bundle} /></section>
+      <section className={INSPECT_STAGE}>
+        {bundle ? <VideoStage bundle={bundle} /> : (
+          <div className="stage-slot flex min-h-0 w-full flex-col gap-2" aria-hidden="true">
+            <div className="stage-frame overflow-hidden rounded-lg bg-black">
+              <Bone className="bone-fill" />
+            </div>
+          </div>
+        )}
+      </section>
       <section className={INSPECT_DETAIL}>
-        {action ? <ActionDetail bundle={bundle} actionId={action.local_id} /> : <p className="text-[var(--muted)]">No actions yet.</p>}
+        {bundle && !action ? <p className="text-[var(--muted)]">No actions yet.</p> : <ActionDetail bundle={bundle} action={action} />}
       </section>
     </div>
   );
 }
 
-function ActionDetail({ bundle, actionId }: { bundle: Bundle; actionId: string }) {
-  const action = bundle.actions.find((item) => item.local_id === actionId);
+function ActionRow({
+  item,
+  index,
+  labels,
+  selected,
+}: {
+  item: LabAction | null;
+  index: number;
+  labels: ReturnType<typeof objectLabels>;
+  selected: boolean;
+}) {
+  if (!item) {
+    return (
+      <div className="block w-full rounded-md px-2 py-1 text-left text-sm">
+        <Bone width="78%" />
+        <div className="mono text-[10px]"><Bone width="6rem" /></div>
+      </div>
+    );
+  }
+  return (
+    <button
+      className={`block w-full rounded-md px-2 py-1 text-left text-sm ${selected ? "bg-[#1a221d]" : ""}`}
+      onClick={() => {
+        useInspector.getState().selectAction(item.local_id);
+        useInspector.getState().setTime(item.start);
+        useInspector.getState().setLoop({ start: item.start, end: item.end });
+      }}
+    >
+      <div>{index + 1}. {actionPhrase(item, labels)} <span className="text-[var(--muted)]">{humanize(item.outcome)}</span></div>
+      <div className="mono text-[10px] text-[var(--muted)]">{formatTime(item.start)}–{formatTime(item.end)}</div>
+    </button>
+  );
+}
+
+function ActionDetail({ bundle, action }: { bundle: Bundle | null; action: LabAction | null }) {
   const [label, setLabel] = useState("");
   const client = useQueryClient();
-  if (!action) return null;
+  const pending = action == null;
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" aria-hidden={pending || undefined}>
       <div className="flex flex-wrap gap-2">
-        <span className={`tag ${evidenceClass(action.evidence_class)}`}>{humanize(action.evidence_class)}</span>
-        <span className="tag">{humanize(action.provenance)}</span>
-        <span className="tag">{humanize(action.outcome)}</span>
+        {action ? (
+          <>
+            <span className={`tag ${evidenceClass(action.evidence_class)}`}>{humanize(action.evidence_class)}</span>
+            <span className="tag">{humanize(action.provenance)}</span>
+            <span className="tag">{humanize(action.outcome)}</span>
+          </>
+        ) : (
+          <>
+            <span className="tag"><Bone width="5rem" /></span>
+            <span className="tag"><Bone width="5rem" /></span>
+            <span className="tag"><Bone width="5rem" /></span>
+          </>
+        )}
       </div>
-      <h2 className="text-base">{humanize(action.action_type)}</h2>
-      <p>{action.description}</p>
-      <p className="text-xs text-[var(--muted)]">{formatTime(action.start)}–{formatTime(action.end)} · uncertainty {action.uncertainty}</p>
-      <p><span className="text-[var(--muted)]">Before: </span>{humanize(action.initial_state) || "not stated"}</p>
-      <p><span className="text-[var(--muted)]">After: </span>{humanize(action.final_state) || "not stated"}</p>
-      <p className="text-xs">{action.evidence_note}</p>
+      <h2 className="text-base">{action ? humanize(action.action_type) : <Bone width="40%" />}</h2>
+      <p>{action ? action.description : <Bone width="92%" />}</p>
+      <p className="text-xs text-[var(--muted)]">
+        {action ? <>{formatTime(action.start)}–{formatTime(action.end)} · uncertainty {action.uncertainty}</> : <Bone width="48%" />}
+      </p>
+      <p><span className="text-[var(--muted)]">Before: </span>{action ? humanize(action.initial_state) || "not stated" : <Bone width="8rem" />}</p>
+      <p><span className="text-[var(--muted)]">After: </span>{action ? humanize(action.final_state) || "not stated" : <Bone width="8rem" />}</p>
+      <p className="text-xs">{action ? action.evidence_note : <Bone width="70%" />}</p>
       <div className="flex flex-wrap gap-2">
-        {action.object_local_ids.map((id) => {
+        {action && bundle ? action.object_local_ids.map((id) => {
           const object = bundle.objects.find((item) => item.local_id === id);
           const thumb = objectThumbnail(object);
           return thumb ? <img key={id} src={thumb} alt={humanize(object?.label ?? id)} title={humanize(object?.label ?? id)} className="h-16 w-16 rounded bg-black object-contain" /> : <span key={id} className="tag">{humanize(id)}</span>;
-        })}
+        }) : (
+          <div className="relative h-16 w-16 overflow-hidden rounded bg-black"><Bone className="bone-fill absolute inset-0" /></div>
+        )}
       </div>
       <BeforeAfter bundle={bundle} action={action} />
       <label className="block text-xs text-[var(--muted)]">
         Correct description
-        <textarea className="field mt-1" value={label} placeholder={action.description} onChange={(event) => setLabel(event.target.value)} />
+        {action ? (
+          <textarea className="field mt-1" value={label} placeholder={action.description} onChange={(event) => setLabel(event.target.value)} />
+        ) : (
+          <FieldBone textarea className="mt-1" />
+        )}
       </label>
-      <button
-        className="btn"
-        onClick={async () => {
-          await api.patchAction(bundle.run.id, action.local_id, { description: label || action.description });
-          setLabel("");
-          await client.invalidateQueries({ queryKey: ["run", bundle.run.id] });
-        }}
-      >
-        Save correction
-      </button>
+      {action && bundle ? (
+        <button
+          className="btn"
+          onClick={async () => {
+            await api.patchAction(bundle.run.id, action.local_id, { description: label || action.description });
+            setLabel("");
+            await client.invalidateQueries({ queryKey: ["run", bundle.run.id] });
+          }}
+        >
+          Save correction
+        </button>
+      ) : (
+        <span className="btn">Save correction</span>
+      )}
     </div>
   );
 }
@@ -516,27 +521,35 @@ function ObjectTile({ object, onOpen }: { object: Bundle["objects"][number] | nu
 }
 
 export function ObjectsPage() {
-  const bundle = useBundle();
+  const bundle = useOptionalBundle();
+  const pending = bundle == null;
   const [open, setOpen] = useState<string | null>(null);
   const [label, setLabel] = useState("");
   const [mergeDrop, setMergeDrop] = useState("");
   const [preview, setPreview] = useState<number | null>(null);
   const client = useQueryClient();
-  const selected = bundle.objects.find((item) => item.local_id === open);
+  const objects = bundle?.objects ?? Array.from({ length: OBJECT_PLACEHOLDERS }, () => null);
+  const selected = bundle?.objects.find((item) => item.local_id === open);
   const selectedThumb = objectThumbnail(selected);
-  const shots = selected ? objectShots(selected, bundle.observations) : [];
+  const shots = selected && bundle ? objectShots(selected, bundle.observations) : [];
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" aria-busy={pending || undefined}>
+      {pending && <p className="sr-only">Loading objects</p>}
       <div className="flex gap-2">
-        <input className="field max-w-xs" placeholder="Add a missed object" value={label} onChange={(event) => setLabel(event.target.value)} />
-        <button className="btn" disabled={!label} onClick={async () => { await api.addObject(bundle.run.id, label, "Added by the researcher."); setLabel(""); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Add</button>
+        <input className="field max-w-xs" placeholder="Add a missed object" value={label} disabled={pending} onChange={(event) => setLabel(event.target.value)} />
+        <button className="btn" disabled={pending || !label || !bundle} onClick={async () => {
+          if (!bundle) return;
+          await api.addObject(bundle.run.id, label, "Added by the researcher.");
+          setLabel("");
+          await client.invalidateQueries({ queryKey: ["run", bundle.run.id] });
+        }}>Add</button>
       </div>
       <div className={OBJECT_GRID}>
-        {bundle.objects.map((object) => (
-          <ObjectTile key={object.id} object={object} onOpen={() => { setOpen(object.local_id); setPreview(null); }} />
+        {objects.map((object, index) => (
+          <ObjectTile key={object?.id ?? `pending-${index}`} object={object} onOpen={object ? () => { setOpen(object.local_id); setPreview(null); } : undefined} />
         ))}
       </div>
-      {selected && (
+      {bundle && selected && (
         <div className="panel grid gap-4 p-4 lg:grid-cols-[280px_1fr]">
           {selectedThumb && <img src={selectedThumb} alt="" className="w-full rounded" />}
           <div className="space-y-2 text-sm">
@@ -601,54 +614,81 @@ export function ObjectsPage() {
           )}
         </div>
       )}
-      <PerceptionPanel bundle={bundle} />
+      {bundle && <PerceptionPanel bundle={bundle} />}
     </div>
   );
 }
 
 export function StatesPage() {
-  const bundle = useBundle();
-  const [localId, setLocalId] = useState(bundle.objects[0]?.local_id ?? "");
+  const bundle = useOptionalBundle();
+  const pending = bundle == null;
+  const [localId, setLocalId] = useState("");
   const time = useInspector((state) => state.time);
+  useEffect(() => {
+    if (!localId && bundle?.objects[0]) setLocalId(bundle.objects[0].local_id);
+  }, [bundle, localId]);
   const scene = useQuery({
-    queryKey: ["scene", bundle.run.id, time.toFixed(2)],
-    queryFn: () => api.scene(bundle.run.id, Number(time.toFixed(2))),
+    queryKey: ["scene", bundle?.run.id ?? "pending", time.toFixed(2)],
+    queryFn: () => api.scene(bundle?.run.id ?? "", Number(time.toFixed(2))),
+    enabled: Boolean(bundle),
   });
-  const states = bundle.states.filter((item) => item.object_local_id === localId);
-  const transitions = bundle.transitions.filter((item) => item.object_local_id === localId);
-  const relations = bundle.relationships.filter((item) => item.subject_local_id === localId || item.other_local_id === localId);
-  const selected = bundle.objects.find((item) => item.local_id === localId);
-  const record = objectScene(scene.data, bundle, localId, time);
+  const states = bundle?.states.filter((item) => item.object_local_id === localId) ?? [];
+  const transitions = bundle?.transitions.filter((item) => item.object_local_id === localId) ?? [];
+  const relations = bundle?.relationships.filter((item) => item.subject_local_id === localId || item.other_local_id === localId) ?? [];
+  const selected = bundle?.objects.find((item) => item.local_id === localId);
+  const record = bundle ? objectScene(scene.data, bundle, localId, time) : null;
+  const objects = bundle?.objects ?? Array.from({ length: OBJECT_PLACEHOLDERS }, () => null);
+  const stateRows = pending ? Array.from({ length: STATE_PLACEHOLDERS }, () => null) : states;
+  const transitionRows = pending ? Array.from({ length: LINE_PLACEHOLDERS }, () => null) : transitions;
+  const relationRows = pending ? Array.from({ length: LINE_PLACEHOLDERS }, () => null) : relations;
   return (
-    <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
+    <div className="grid gap-4 lg:grid-cols-[240px_1fr]" aria-busy={pending || undefined}>
+      {pending && <p className="sr-only">Loading states</p>}
       <div className="space-y-1">
-        {bundle.objects.map((object) => (
-          <button key={object.id} className={`btn block w-full text-left ${localId === object.local_id ? "primary" : ""}`} onClick={() => setLocalId(object.local_id)}>{labeledId(object.local_id, object.label)}</button>
+        {objects.map((object, index) => (
+          object ? (
+            <button key={object.id} className={`btn block w-full text-left ${localId === object.local_id ? "primary" : ""}`} onClick={() => setLocalId(object.local_id)}>{labeledId(object.local_id, object.label)}</button>
+          ) : (
+            <div key={`pending-${index}`} className="btn block w-full text-left" aria-hidden="true"><Bone width="70%" /></div>
+          )
         ))}
       </div>
       <div className="space-y-3">
         <h2 className="text-lg">State history</h2>
-        {states.map((state) => (
-          <button key={state.id} className="panel block w-full p-3 text-left text-sm" onClick={() => useInspector.getState().setTime(state.time_start)}>
-            <div className="mono text-xs text-[var(--muted)]">{formatTime(state.time_start)}–{formatTime(state.time_end)}</div>
-            <div>{humanize(state.state_label)}</div>
-            <div className="text-[var(--muted)]">{state.description}</div>
-            <span className={`tag ${evidenceClass(state.evidence_class)}`}>{humanize(state.evidence_class)}</span>
-          </button>
+        {stateRows.map((state, index) => (
+          state ? (
+            <button key={state.id} className="panel block w-full p-3 text-left text-sm" onClick={() => useInspector.getState().setTime(state.time_start)}>
+              <div className="mono text-xs text-[var(--muted)]">{formatTime(state.time_start)}–{formatTime(state.time_end)}</div>
+              <div>{humanize(state.state_label)}</div>
+              <div className="text-[var(--muted)]">{state.description}</div>
+              <span className={`tag ${evidenceClass(state.evidence_class)}`}>{humanize(state.evidence_class)}</span>
+            </button>
+          ) : (
+            <div key={`pending-${index}`} className="panel block w-full p-3 text-left text-sm" aria-hidden="true">
+              <div className="mono text-xs"><Bone width="8rem" /></div>
+              <div><Bone width="36%" /></div>
+              <div><Bone width="70%" /></div>
+              <span className="tag"><Bone width="5rem" /></span>
+            </div>
+          )
         ))}
         <h3 className="text-sm">Transitions</h3>
-        {transitions.map((item) => (
-          <div key={item.id} className="text-sm">{formatTime(item.timestamp)} · {humanize(item.from_state)} → {humanize(item.to_state)} · <span className={`tag ${evidenceClass(item.evidence_class)}`}>{humanize(item.evidence_class)}</span></div>
+        {transitionRows.map((item, index) => (
+          <div key={item?.id ?? `pending-${index}`} className="text-sm">
+            {item ? <>{formatTime(item.timestamp)} · {humanize(item.from_state)} → {humanize(item.to_state)} · <span className={`tag ${evidenceClass(item.evidence_class)}`}>{humanize(item.evidence_class)}</span></> : <Bone width="60%" />}
+          </div>
         ))}
         <h3 className="text-sm">Relationships</h3>
-        {relations.map((item) => (
-          <div key={item.id} className="text-sm">{humanize(item.subject_local_id)} {humanize(item.kind)} {humanize(item.other_local_id ?? "")} · {item.description}</div>
+        {relationRows.map((item, index) => (
+          <div key={item?.id ?? `pending-${index}`} className="text-sm">
+            {item ? <>{humanize(item.subject_local_id)} {humanize(item.kind)} {humanize(item.other_local_id ?? "")} · {item.description}</> : <Bone width="70%" />}
+          </div>
         ))}
         <div className="panel p-3 text-sm">
           <div className="mb-2 text-xs uppercase tracking-wide text-[var(--muted)]">
-            {selected ? labeledId(selected.local_id, selected.label) : "Object"} · scene at {time.toFixed(2)}s
+            {selected ? labeledId(selected.local_id, selected.label) : pending ? <Bone width="8rem" /> : "Object"} · scene at {pending ? <Bone width="4ch" /> : `${time.toFixed(2)}s`}
           </div>
-          <pre className="mono max-h-64 overflow-auto text-xs">{JSON.stringify(record, null, 2)}</pre>
+          <pre className="mono max-h-64 overflow-auto text-xs">{pending ? <Bone width="70%" /> : JSON.stringify(record, null, 2)}</pre>
         </div>
       </div>
     </div>
@@ -656,24 +696,40 @@ export function StatesPage() {
 }
 
 export function WorkflowPage() {
-  const bundle = useBundle();
-  const [from, setFrom] = useState(bundle.steps[0]?.local_id ?? "");
-  const [to, setTo] = useState(bundle.steps[1]?.local_id ?? "");
+  const bundle = useOptionalBundle();
+  const pending = bundle == null;
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [category, setCategory] = useState("observed_temporal");
   const client = useQueryClient();
+  useEffect(() => {
+    if (!bundle) return;
+    setFrom((current) => current || bundle.steps[0]?.local_id || "");
+    setTo((current) => current || bundle.steps[1]?.local_id || "");
+  }, [bundle]);
   const stepId = useInspector((state) => state.selectedStep);
-  const step = bundle.steps.find((item) => item.local_id === stepId);
-  const labels = objectLabels(bundle.objects);
+  const step = bundle?.steps.find((item) => item.local_id === stepId);
+  const labels = objectLabels(bundle?.objects ?? []);
+  const dependencies = pending ? Array.from({ length: DEPENDENCY_PLACEHOLDERS }, () => null) : bundle.dependencies;
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" aria-busy={pending || undefined}>
+      {pending && <p className="sr-only">Loading workflow</p>}
       <WorkflowGraph bundle={bundle} />
       <div className="flex flex-wrap gap-2 text-sm">
-        <select className="field w-auto" value={from} onChange={(event) => setFrom(event.target.value)}>{bundle.steps.map((item) => <option key={item.local_id} value={item.local_id}>{humanize(item.local_id)}</option>)}</select>
-        <select className="field w-auto" value={to} onChange={(event) => setTo(event.target.value)}>{bundle.steps.map((item) => <option key={item.local_id} value={item.local_id}>{humanize(item.local_id)}</option>)}</select>
-        <select className="field w-auto" value={category} onChange={(event) => setCategory(event.target.value)}>
+        {pending ? <FieldBone compact /> : (
+          <select className="field w-auto" value={from} onChange={(event) => setFrom(event.target.value)}>{bundle.steps.map((item) => <option key={item.local_id} value={item.local_id}>{humanize(item.local_id)}</option>)}</select>
+        )}
+        {pending ? <FieldBone compact /> : (
+          <select className="field w-auto" value={to} onChange={(event) => setTo(event.target.value)}>{bundle.steps.map((item) => <option key={item.local_id} value={item.local_id}>{humanize(item.local_id)}</option>)}</select>
+        )}
+        <select className="field w-auto" value={category} disabled={pending} onChange={(event) => setCategory(event.target.value)}>
           {["necessary_physical", "observed_temporal", "inferred", "unknown"].map((item) => <option key={item} value={item}>{humanize(item)}</option>)}
         </select>
-        <button className="btn" onClick={async () => { await api.addDependency(bundle.run.id, { from_step: from, to_step: to, category, rationale: "Added by the researcher." }); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Add dependency</button>
+        <button className="btn" disabled={pending || !bundle} onClick={async () => {
+          if (!bundle) return;
+          await api.addDependency(bundle.run.id, { from_step: from, to_step: to, category, rationale: "Added by the researcher." });
+          await client.invalidateQueries({ queryKey: ["run", bundle.run.id] });
+        }}>Add dependency</button>
       </div>
       {step && (
         <div className="panel p-3 text-sm">
@@ -684,10 +740,19 @@ export function WorkflowPage() {
         </div>
       )}
       <ul className="space-y-1 text-sm">
-        {bundle.dependencies.map((dep) => (
-          <li key={dep.id} className="flex items-center justify-between gap-2">
-            <span>{humanize(dep.from_step)} → {humanize(dep.to_step)} · {humanize(dep.category)} · {humanizeText(nameObjects(dep.rationale, labels))}</span>
-            <button className="btn" onClick={async () => { await api.removeDependency(bundle.run.id, dep.from_step, dep.to_step); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Remove</button>
+        {dependencies.map((dep, index) => (
+          <li key={dep?.id ?? `pending-${index}`} className="flex items-center justify-between gap-2">
+            {dep && bundle ? (
+              <>
+                <span>{humanize(dep.from_step)} → {humanize(dep.to_step)} · {humanize(dep.category)} · {humanizeText(nameObjects(dep.rationale, labels))}</span>
+                <button className="btn" onClick={async () => { await api.removeDependency(bundle.run.id, dep.from_step, dep.to_step); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Remove</button>
+              </>
+            ) : (
+              <>
+                <Bone width="70%" />
+                <span className="btn" aria-hidden="true">Remove</span>
+              </>
+            )}
           </li>
         ))}
       </ul>
@@ -696,33 +761,45 @@ export function WorkflowPage() {
 }
 
 export function StepsPage() {
-  const bundle = useBundle();
+  const bundle = useOptionalBundle();
   const openInspect = useOpenInspect();
   const [index, setIndex] = useState(0);
-  const step = bundle.steps[index];
-  const labels = objectLabels(bundle.objects);
-  if (!step) return <p className="text-[var(--muted)]">No workflow steps.</p>;
-  const start = step.time_start ?? 0;
-  const end = step.time_end ?? start;
+  const step = bundle?.steps[index];
+  const labels = objectLabels(bundle?.objects ?? []);
+  if (bundle && !step) return <p className="text-[var(--muted)]">No workflow steps.</p>;
+  const start = step?.time_start ?? 0;
+  const end = step?.time_end ?? start;
+  const pending = !bundle;
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" aria-busy={pending || undefined}>
+      {pending && <p className="sr-only">Loading steps</p>}
       <div className="flex items-center gap-2">
-        <span className="mr-1 text-sm tabular-nums text-[var(--muted)]">{index + 1} / {bundle.steps.length}</span>
-        <button className="btn" onClick={() => setIndex((value) => Math.max(0, value - 1))}>Previous</button>
-        <button className="btn" onClick={() => setIndex((value) => Math.min(bundle.steps.length - 1, value + 1))}>Next</button>
+        <span className="mr-1 text-sm tabular-nums text-[var(--muted)]">
+          {bundle ? `${index + 1} / ${bundle.steps.length}` : <Bone width="4ch" />}
+        </span>
+        <button className="btn" disabled={pending} onClick={() => setIndex((value) => Math.max(0, value - 1))}>Previous</button>
+        <button className="btn" disabled={pending || !bundle} onClick={() => {
+          if (!bundle) return;
+          const count = bundle.steps.length;
+          setIndex((value) => Math.min(count - 1, value + 1));
+        }}>Next</button>
       </div>
-      <h2 className="text-xl">{step.number}. {nameObjects(step.name, labels)}</h2>
-      <p>{nameObjects(step.expected_action, labels)}</p>
-      <p className="text-sm text-[var(--muted)]">Expected: {nameObjects(step.completion_condition, labels)}</p>
-      <p className="text-sm">Observed: {nameObjects(step.observed_result, labels)}</p>
+      <h2 className="text-xl">{step ? <>{step.number}. {nameObjects(step.name, labels)}</> : <Bone width="14rem" />}</h2>
+      <p>{step ? nameObjects(step.expected_action, labels) : <Bone width="80%" />}</p>
+      <p className="text-sm text-[var(--muted)]">Expected: {step ? nameObjects(step.completion_condition, labels) : <Bone width="60%" />}</p>
+      <p className="text-sm">Observed: {step ? nameObjects(step.observed_result, labels) : <Bone width="60%" />}</p>
       <div className="grid gap-2 md:grid-cols-3">
-        {[start, (start + end) / 2, end].map((stamp) => {
+        {bundle && step ? [start, (start + end) / 2, end].map((stamp) => {
           const frame = bundle.frames.reduce((best, item) => Math.abs(item.timestamp - stamp) < Math.abs(best.timestamp - stamp) ? item : best, bundle.frames[0]);
           return frame ? <img key={stamp} src={frame.url} alt="" className="panel aspect-video w-full bg-black object-contain" /> : null;
-        })}
+        }) : Array.from({ length: STEP_MEDIA_PLACEHOLDERS }, (_, mediaIndex) => (
+          <div key={mediaIndex} className="panel relative aspect-video w-full overflow-hidden bg-black" aria-hidden="true">
+            <Bone className="bone-fill absolute inset-0" />
+          </div>
+        ))}
       </div>
       <div className="flex flex-wrap items-start gap-4">
-        {step.required_objects.map((id) => {
+        {bundle && step ? step.required_objects.map((id) => {
           const object = bundle.objects.find((item) => item.local_id === id);
           const thumb = objectThumbnail(object);
           return (
@@ -731,9 +808,17 @@ export function StepsPage() {
               <div className="leading-snug">{humanize(object?.label ?? id)}</div>
             </div>
           );
-        })}
+        }) : Array.from({ length: STEP_MEDIA_PLACEHOLDERS }, (_, mediaIndex) => (
+          <div key={mediaIndex} className="w-28 shrink-0 text-xs" aria-hidden="true">
+            <div className="relative mb-2 h-16 w-16 overflow-hidden rounded bg-black">
+              <Bone className="bone-fill absolute inset-0" />
+            </div>
+            <Bone width="80%" />
+          </div>
+        ))}
       </div>
-      <button className="btn" type="button" onClick={() => {
+      <button className="btn" type="button" disabled={pending} onClick={() => {
+        if (!bundle || !step) return;
         const inspector = useInspector.getState();
         const linked = bundle.actions.find((item) => step.action_local_ids.includes(item.local_id));
         const covering = bundle.actions.find((item) => item.start <= end && item.end >= start);
@@ -749,26 +834,36 @@ export function StepsPage() {
 }
 
 export function PipelinePage() {
-  const bundle = useBundle();
+  const bundle = useOptionalBundle();
   const client = useQueryClient();
-  const done = bundle.stages.filter((stage) => stage.status === "completed" || stage.status === "skipped").length;
-  const fraction = bundle.stages.length ? done / bundle.stages.length : 0;
+  const pending = bundle == null;
+  const stages = bundle?.stages ?? [];
+  const done = stages.filter((stage) => stage.status === "completed" || stage.status === "skipped").length;
+  const fraction = stages.length ? done / stages.length : 0;
+  const rows = pending ? Array.from({ length: STAGE_PLACEHOLDERS }, () => null) : stages;
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" aria-busy={pending || undefined}>
+      {pending && <p className="sr-only">Loading pipeline</p>}
       <div className="h-2 overflow-hidden rounded bg-[#0d1016]">
         <div className="h-full bg-[var(--teal)]" style={{ width: `${fraction * 100}%` }} />
       </div>
-      <p className="text-xs text-[var(--muted)]">{done} of {bundle.stages.length} stages finished or skipped. The bar counts stages, not a guessed percentage.</p>
-      {bundle.stages.map((stage) => (
-        <div key={stage.stage} className="panel grid gap-2 p-3 text-sm md:grid-cols-[180px_120px_1fr_auto]">
-          <div>{humanize(stage.stage)}</div>
-          <div>{humanize(stage.status)}</div>
+      <p className="text-xs text-[var(--muted)]">
+        {pending ? <Bone width="24rem" /> : `${done} of ${stages.length} stages finished or skipped. The bar counts stages, not a guessed percentage.`}
+      </p>
+      {rows.map((stage, index) => (
+        <div key={stage?.stage ?? `pending-${index}`} className="panel grid gap-2 p-3 text-sm md:grid-cols-[180px_120px_1fr_auto]" aria-hidden={stage ? undefined : true}>
+          <div>{stage ? humanize(stage.stage) : <Bone width="8rem" />}</div>
+          <div>{stage ? humanize(stage.status) : <Bone width="5rem" />}</div>
           <div className="text-[var(--muted)]">
-            {stage.progress_current}/{stage.progress_total || 0}
-            {stage.error ? ` · ${humanize(stage.error)}` : ""}
-            {stage.checkpoint?.reason ? ` · ${humanize(String(stage.checkpoint.reason))}` : ""}
+            {stage ? (
+              <>
+                {stage.progress_current}/{stage.progress_total || 0}
+                {stage.error ? ` · ${humanize(stage.error)}` : ""}
+                {stage.checkpoint?.reason ? ` · ${humanize(String(stage.checkpoint.reason))}` : ""}
+              </>
+            ) : <Bone width="6rem" />}
           </div>
-          {stage.status === "failed" && (
+          {stage?.status === "failed" && bundle && (
             <button className="btn h-fit self-center" onClick={async () => { await api.retryStage(bundle.run.id, stage.stage); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Retry</button>
           )}
         </div>
@@ -778,27 +873,44 @@ export function PipelinePage() {
 }
 
 export function EvaluatePage() {
-  const bundle = useBundle();
+  const bundle = useOptionalBundle();
   const client = useQueryClient();
-  const truths = useQuery({ queryKey: ["truth", bundle.run.id], queryFn: () => api.groundTruth(bundle.run.id) });
+  const truths = useQuery({
+    queryKey: ["truth", bundle?.run.id ?? "pending"],
+    queryFn: () => api.groundTruth(bundle?.run.id ?? ""),
+    enabled: Boolean(bundle),
+  });
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [iou, setIou] = useState(0.3);
+  const pending = bundle == null || (truths.data === undefined && !truths.isError);
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" aria-busy={pending || undefined}>
+      {pending && <p className="sr-only">Loading evaluation</p>}
       <p className="text-sm text-[var(--muted)]">Promote the current revision, then score another run against it. Matching uses interval overlap. Model confidence is not accuracy.</p>
-      <button className="btn" onClick={async () => { await api.promoteTruth(bundle.run.id, `Reference ${bundle.run.name}`); await client.invalidateQueries({ queryKey: ["truth", bundle.run.id] }); }}>Save current revision as ground truth</button>
+      <button className="btn" disabled={!bundle} onClick={async () => {
+        if (!bundle) return;
+        await api.promoteTruth(bundle.run.id, `Reference ${bundle.run.name}`);
+        await client.invalidateQueries({ queryKey: ["truth", bundle.run.id] });
+      }}>Save current revision as ground truth</button>
       <label className="flex w-fit items-center gap-4 text-sm">
         <span className="whitespace-nowrap">Action IoU threshold</span>
         <input className="field max-w-xs" type="number" step={0.05} value={iou} onChange={(event) => setIou(Number(event.target.value))} />
       </label>
+      {truths.isError && <p className="text-sm text-[var(--rose)]">{(truths.error as Error).message}</p>}
       <ul className="space-y-2 text-sm">
-        {truths.data?.map((item) => (
+        {pending ? Array.from({ length: TRUTH_PLACEHOLDERS }, (_, index) => (
+          <li key={index} aria-hidden="true"><span className="btn"><Bone width="10rem" /></span></li>
+        )) : truths.data?.map((item) => (
           <li key={item.id}>
-            <button className="btn" onClick={async () => { const report = await api.evaluate(bundle.run.id, item.id, { action_iou: iou }); setResult(report.metrics); }}>{humanizeText(item.name)}</button>
+            <button className="btn" onClick={async () => {
+              if (!bundle) return;
+              const report = await api.evaluate(bundle.run.id, item.id, { action_iou: iou });
+              setResult(report.metrics);
+            }}>{humanizeText(item.name)}</button>
           </li>
         ))}
       </ul>
-      {result && <IdentityReport report={result} runId={bundle.run.id} />}
+      {bundle && result && <IdentityReport report={result} runId={bundle.run.id} />}
       {result && <pre className="panel mono overflow-auto p-3 text-xs">{JSON.stringify(result, null, 2)}</pre>}
     </div>
   );
@@ -854,17 +966,34 @@ function requestCost(row: Record<string, unknown>): string {
 }
 
 export function LogsPage() {
-  const bundle = useBundle();
-  const rows = useQuery({ queryKey: ["requests", bundle.run.id], queryFn: () => api.requests(bundle.run.id) });
+  const bundle = useOptionalBundle();
+  const rows = useQuery({
+    queryKey: ["requests", bundle?.run.id ?? "pending"],
+    queryFn: () => api.requests(bundle?.run.id ?? ""),
+    enabled: Boolean(bundle),
+  });
+  const requestsPending = rows.data === undefined && !rows.isError;
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" aria-busy={!bundle || requestsPending || undefined}>
+      {(!bundle || requestsPending) && <p className="sr-only">Loading logs</p>}
       <h2 className="text-lg">Requests and raw responses</h2>
-      {bundle.validation?.length ? (
+      {!bundle ? (
+        <p className="text-sm" aria-hidden="true"><Bone width="16rem" /></p>
+      ) : bundle.validation?.length ? (
         <ul className="space-y-1 text-sm">
           {bundle.validation.map((issue, index) => <li key={index} className={issue.severity === "error" ? "text-[var(--rose)]" : "text-[var(--amber)]"}>{humanize(issue.severity)} · {humanize(issue.code)} · {issue.message}</li>)}
         </ul>
       ) : <p className="text-sm text-[var(--muted)]">No validation issues on the active document.</p>}
-      {rows.data?.length ? (
+      {rows.isError && <p className="text-sm text-[var(--rose)]">{(rows.error as Error).message}</p>}
+      {requestsPending ? (
+        <ul className="min-w-0 space-y-3" aria-hidden="true">
+          {Array.from({ length: REQUEST_PLACEHOLDERS }, (_, index) => (
+            <li key={index}><div className="panel p-3 text-sm"><Bone width="72%" /></div></li>
+          ))}
+        </ul>
+      ) : rows.isError || !rows.data?.length ? (
+        rows.isError ? null : <p className="text-sm text-[var(--muted)]">This run has not recorded a model request. Fixture and deterministic analyses are stored as documents, not provider calls.</p>
+      ) : (
         <ul className="min-w-0 space-y-3">
           {rows.data.map((row) => {
             const lines = formatLogText(String(row.response_text || row.error || "")).split("\n");
@@ -886,8 +1015,6 @@ export function LogsPage() {
             );
           })}
         </ul>
-      ) : (
-        <p className="text-sm text-[var(--muted)]">This run has not recorded a model request. Fixture and deterministic analyses are stored as documents, not provider calls.</p>
       )}
     </div>
   );

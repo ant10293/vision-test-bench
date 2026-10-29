@@ -121,6 +121,8 @@ a { color: inherit; text-decoration: none; }
   border-radius: 8px;
   padding: 0.4rem 0.7rem;
 }
+/* Pending views render static buttons as spans. Match the button box so padding takes up space. */
+span.btn { display: inline-block; }
 .btn:hover { border-color: #465066; }
 .btn.primary { background: #16382c; border-color: #2f6b52; color: var(--teal); }
 .btn.danger { border-color: var(--rose); color: var(--rose); }
@@ -461,7 +463,8 @@ button.linkish {
   border-radius: 8px;
   background: #000;
 }
-.library-picker-thumb img {
+.library-picker-thumb img,
+.library-picker-thumb > .bone {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -943,6 +946,33 @@ body.is-sorting * { cursor: grabbing; }
   width: 100%;
   height: 100%;
   border-radius: 0;
+}
+/* Same box as the control it stands in for, so a loading form does not jump when the options arrive. */
+.field.bone.is-placeholder {
+  display: block;
+  width: 100%;
+  height: 2.25rem;
+  max-width: calc((48rem - 0.75rem) / 2);
+  padding: 0;
+  border-radius: 8px;
+}
+.field.bone.is-placeholder.stretch,
+.field.bone.is-placeholder.is-tall,
+.field.bone.is-placeholder.is-textarea {
+  max-width: none;
+}
+.field.bone.is-placeholder.is-tall {
+  height: 12rem;
+}
+.field.bone.is-placeholder.is-textarea {
+  height: 4rem;
+}
+.field.bone.is-placeholder.is-compact {
+  width: 10rem;
+  max-width: 10rem;
+}
+.field.bone.is-placeholder.is-input {
+  max-width: 20rem;
 }
 .thumb-grid > .bone {
   width: 100%;

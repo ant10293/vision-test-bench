@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { Bone, FieldBone } from "../components/Skeleton";
 import { SettingsFieldset } from "../components/SettingsFieldset";
 import { api } from "../lib/api";
 import { humanize } from "../lib/humanize";
@@ -48,6 +49,9 @@ export function ExperimentPage() {
   const codexRun = providerId === "openai" && providers.data?.find((item) => item.id === "openai")?.codex?.transport === "codex";
   const reasoningOptions = selected?.reasoning_efforts ?? [];
   const effort = reasoningOptions.includes(reasoning) ? reasoning : "";
+  const videosPending = videos.data === undefined && !videos.isError;
+  const providersPending = providers.data === undefined && !providers.isError;
+  const promptsPending = prompts.data === undefined && !prompts.isError;
 
   const create = useMutation({
     mutationFn: () =>
@@ -84,11 +88,18 @@ export function ExperimentPage() {
       <p className="text-sm text-[var(--muted)]">
         A model that accepts video receives the video file. A model that only accepts images receives sampled frames. Unsupported settings stay disabled.
       </p>
+      {(videos.isError || providers.isError || prompts.isError) && (
+        <p className="text-sm text-[var(--rose)]">
+          {(videos.error as Error | null)?.message || (providers.error as Error | null)?.message || (prompts.error as Error | null)?.message}
+        </p>
+      )}
       <Field label="Video">
-        <select className="field" value={videoId} onChange={(event) => setVideoId(event.target.value)}>
-          <option value="">Choose a video</option>
-          {videos.data?.filter(videoReady).map((video) => <option key={video.id} value={video.id}>{video.filename}</option>)}
-        </select>
+        {videosPending ? <FieldBone /> : (
+          <select className="field" value={videoId} onChange={(event) => setVideoId(event.target.value)}>
+            <option value="">Choose a video</option>
+            {videos.data?.filter(videoReady).map((video) => <option key={video.id} value={video.id}>{video.filename}</option>)}
+          </select>
+        )}
       </Field>
       <Field label="Research mode">
         <select className="field" value={mode} onChange={(event) => setMode(event.target.value)}>
@@ -97,23 +108,35 @@ export function ExperimentPage() {
       </Field>
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Provider">
-          <select className="field stretch" value={providerId} onChange={(event) => {
-            const next = event.target.value;
-            setProviderId(next);
-            const first = providers.data?.find((item) => item.id === next)?.models[0];
-            if (first) setModelId(first.model_id);
-          }}>
-            {providers.data?.map((provider) => <option key={provider.id} value={provider.id}>{humanize(provider.id)}</option>)}
-          </select>
+          {providersPending ? <FieldBone stretch /> : (
+            <select className="field stretch" value={providerId} onChange={(event) => {
+              const next = event.target.value;
+              setProviderId(next);
+              const first = providers.data?.find((item) => item.id === next)?.models[0];
+              if (first) setModelId(first.model_id);
+            }}>
+              {providers.data?.map((provider) => <option key={provider.id} value={provider.id}>{humanize(provider.id)}</option>)}
+            </select>
+          )}
         </Field>
         <Field label="Model">
-          <select className="field stretch" value={modelId} onChange={(event) => setModelId(event.target.value)}>
-            {models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label || humanize(model.model_id)}</option>)}
-          </select>
+          {providersPending ? <FieldBone stretch /> : (
+            <select className="field stretch" value={modelId} onChange={(event) => setModelId(event.target.value)}>
+              {models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label || humanize(model.model_id)}</option>)}
+            </select>
+          )}
         </Field>
       </div>
-      {selected && (
-        <div className="panel space-y-1 p-3 text-xs text-[var(--muted)]">
+      {(providersPending || selected) && (
+        <div className="panel space-y-1 p-3 text-xs text-[var(--muted)]" aria-hidden={providersPending || undefined}>
+          {providersPending ? (
+            <>
+              <div><Bone width="90%" /></div>
+              <div><Bone width="70%" /></div>
+              <div><Bone width="80%" /></div>
+            </>
+          ) : selected && (
+            <>
           <div>Image {yes(selected.image)} · Native video {yes(selected.native_video)} · Structured JSON {yes(selected.structured_output)} · Temperature {yes(selected.supports_temperature)}</div>
           <div>Max images per call {selected.max_images}. Reasoning: {selected.reasoning_efforts.map(effortLabel).join(", ") || "not offered"}.</div>
           <div>{selected.notes}</div>
@@ -128,6 +151,8 @@ export function ExperimentPage() {
           )}
           {providerId === "cursor" && providers.data?.find((item) => item.id === "cursor")?.cursor_cli?.transport === "api_key" && (
             <div>This run uses the Cursor API key through the CLI in ask mode. The lab records the call as unpriced.</div>
+          )}
+            </>
           )}
         </div>
       )}
@@ -192,11 +217,13 @@ export function ExperimentPage() {
         </Field>
       </div>
       <Field label="Prompt family">
-        <select className="field" defaultValue="scene">
-          {prompts.data?.filter((item, index, all) => all.findIndex((other) => other.key === item.key) === index).map((item) => (
-            <option key={item.key} value={item.key}>{humanize(item.name)}</option>
-          ))}
-        </select>
+        {promptsPending ? <FieldBone /> : (
+          <select className="field" defaultValue="scene">
+            {prompts.data?.filter((item, index, all) => all.findIndex((other) => other.key === item.key) === index).map((item) => (
+              <option key={item.key} value={item.key}>{humanize(item.name)}</option>
+            ))}
+          </select>
+        )}
       </Field>
       <SettingsFieldset legend="Audio analysis">
         <label className="flex items-center gap-2 text-sm">

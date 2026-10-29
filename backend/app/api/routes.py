@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from sqlalchemy import case, delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import __version__
@@ -666,10 +667,7 @@ def list_providers(session: Session = Depends(db)) -> list[dict]:
     for item, models in zip(prepared, model_lists, strict=True):
         provider_id = item["id"]
         status = item["status"]
-        seen = {model["model_id"] for model in models}
-        for model_id in added.get(provider_id, []):
-            if model_id not in seen:
-                models.append(lookup(provider_id, model_id).as_dict())
+        models = with_manual_models(provider_id, models, added.get(provider_id, []))
         payload.append(
             {
                 "id": provider_id,
@@ -820,23 +818,38 @@ async def discover_models(provider_id: str, refresh: bool = False, session: Sess
     except Exception as exc:
         models = catalog
         error = str(exc)
-    seen = {item["model_id"] for item in models}
-    manual = session.scalars(select(ManualModel).where(ManualModel.provider_id == provider_id)).all()
-    for row in manual:
-        if row.model_id not in seen:
-            models.append(lookup(provider_id, row.model_id).as_dict())
-    discovered = [item["model_id"] for item in models] if models is not catalog else []
+    listed = models is not catalog
+    manual = session.scalars(select(ManualModel.model_id).where(ManualModel.provider_id == provider_id)).all()
+    models = with_manual_models(provider_id, models, list(manual))
+    discovered = [item["model_id"] for item in models] if listed else []
     return {"catalog": models, "discovered": discovered, "error": error}
+
+
+def with_manual_models(provider_id: str, models: list[dict], manual_ids: list[str]) -> list[dict]:
+    """Append researcher-added ids the provider did not list. Each model id appears once."""
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for model in [*models, *(lookup(provider_id, model_id).as_dict() for model_id in manual_ids)]:
+        if model["model_id"] not in seen:
+            seen.add(model["model_id"])
+            merged.append(model)
+    return merged
 
 
 @router.post("/providers/{provider_id}/models")
 def add_model(provider_id: str, payload: dict, session: Session = Depends(db)) -> dict:
-    model_id = payload.get("model_id")
+    model_id = (payload.get("model_id") or "").strip()
     if not model_id:
         raise HTTPException(400, "model_id is required")
-    row = ManualModel(provider_id=provider_id, model_id=model_id, notes=payload.get("notes") or "")
-    session.add(row)
-    session.commit()
+    exists = session.scalar(
+        select(ManualModel.id).where(ManualModel.provider_id == provider_id, ManualModel.model_id == model_id)
+    )
+    if not exists:
+        session.add(ManualModel(provider_id=provider_id, model_id=model_id, notes=payload.get("notes") or ""))
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
     return lookup(provider_id, model_id).as_dict()
 
 

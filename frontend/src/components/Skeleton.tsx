@@ -14,3 +14,32 @@ export function MediaPlaceholder() {
     </div>
   );
 }
+
+/**
+ * A field-shaped bone. Matches a select by default; `input` matches a text input,
+ * `textarea` a default two-row text area, `tall` a prompt editor, and `compact` an inline select.
+ */
+export function FieldBone({
+  stretch = false,
+  tall = false,
+  textarea = false,
+  compact = false,
+  input = false,
+  className = "",
+}: {
+  stretch?: boolean;
+  tall?: boolean;
+  textarea?: boolean;
+  compact?: boolean;
+  input?: boolean;
+  className?: string;
+}) {
+  const names = ["bone", "field", "is-placeholder"];
+  if (stretch) names.push("stretch");
+  if (tall) names.push("is-tall");
+  if (textarea) names.push("is-textarea");
+  if (compact) names.push("is-compact");
+  if (input) names.push("is-input");
+  if (className) names.push(className);
+  return <div className={names.join(" ")} aria-hidden="true" />;
+}

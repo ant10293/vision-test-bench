@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type Ref
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { Bone } from "./Skeleton";
-import { api, formatUsd, formatWhen } from "../lib/api";
+import { api, formatUsd, formatWhen, type ProviderCall } from "../lib/api";
 import { humanize } from "../lib/humanize";
 
 export function ProjectCosts({ projectId, className = "" }: { projectId: string; className?: string }) {
@@ -47,6 +47,42 @@ export function ProjectCosts({ projectId, className = "" }: { projectId: string;
         />
       )}
     </>
+  );
+}
+
+function CallRow({ call }: { call: ProviderCall | null }) {
+  if (!call) {
+    return (
+      <li aria-hidden="true">
+        <div className="block rounded-md p-2">
+          <span className="flex items-baseline justify-between gap-3">
+            <Bone width="46%" />
+            <Bone width="7ch" />
+          </span>
+          <span className="mt-0.5 block"><Bone width="70%" /></span>
+          <span className="block"><Bone width="40%" /></span>
+        </div>
+      </li>
+    );
+  }
+  const when = formatWhen(call.created_at);
+  const money = call.status === "completed" ? formatUsd(call.cost_usd, call.price_known) : "—";
+  return (
+    <li>
+      <Link to={`/runs/${call.run_id}/logs`} className="block rounded-md border border-transparent p-2 hover:border-[var(--line)]">
+        <span className="flex items-baseline justify-between gap-3">
+          <span className="min-w-0 truncate">{call.video_filename || call.run_name}</span>
+          <span className="mono shrink-0 text-xs">{money}</span>
+        </span>
+        <span className="mt-0.5 block text-xs text-[var(--muted)]">
+          {humanize(call.provider_id)}/{humanize(call.model_id)} · {humanize(call.stage)} · {humanize(call.status)}
+          {when ? ` · ${when}` : ""}
+        </span>
+        <span className="mono text-xs text-[var(--muted)]">
+          {call.input_tokens.toLocaleString()} in · {call.output_tokens.toLocaleString()} out
+        </span>
+      </Link>
+    </li>
   );
 }
 
@@ -138,7 +174,7 @@ function CostBreakdown({
         <div className="border-b border-[var(--line)] p-4">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-medium">Provider API cost</h2>
-            {amount && <div className="mono text-2xl">{amount}</div>}
+            {(amount || loading) && <div className="mono text-2xl">{amount ?? <Bone width="7ch" />}</div>}
           </div>
           <p className="mt-1 text-xs text-[var(--muted)]">
             Each model call is priced from the catalog list rate. This is an estimate, not an invoice.
@@ -146,39 +182,27 @@ function CostBreakdown({
         </div>
         <div className="space-y-3 p-4">
           {error && <p className="text-sm text-[var(--rose)]">{error}</p>}
-          {loading && <p className="text-sm text-[var(--muted)]">Loading provider calls…</p>}
-          {data && (
+          {loading && <p className="sr-only">Loading provider calls</p>}
+          {(loading || data) && (
             <>
               <p className="text-xs text-[var(--muted)]">
-                {data.input_tokens.toLocaleString()} input tokens · {data.output_tokens.toLocaleString()} output tokens
-                {data.unpriced_calls > 0
-                  ? ` · ${data.unpriced_calls} ${data.unpriced_calls === 1 ? "call has" : "calls have"} no catalog price`
-                  : ""}
-                {data.unitemized_usd > 0 ? ` · ${formatUsd(data.unitemized_usd)} stored on runs without a per-call record` : ""}
+                {data ? (
+                  <>
+                    {data.input_tokens.toLocaleString()} input tokens · {data.output_tokens.toLocaleString()} output tokens
+                    {data.unpriced_calls > 0
+                      ? ` · ${data.unpriced_calls} ${data.unpriced_calls === 1 ? "call has" : "calls have"} no catalog price`
+                      : ""}
+                    {data.unitemized_usd > 0 ? ` · ${formatUsd(data.unitemized_usd)} stored on runs without a per-call record` : ""}
+                  </>
+                ) : <Bone width="80%" />}
               </p>
-              {data.calls.length ? (
+              {loading ? (
+                <ul className="space-y-2 text-sm" aria-hidden="true">
+                  {Array.from({ length: 3 }, (_, index) => <CallRow key={index} call={null} />)}
+                </ul>
+              ) : data && data.calls.length ? (
                 <ul className="space-y-2 text-sm">
-                  {data.calls.map((call) => {
-                    const when = formatWhen(call.created_at);
-                    const money = call.status === "completed" ? formatUsd(call.cost_usd, call.price_known) : "—";
-                    return (
-                      <li key={call.id}>
-                        <Link to={`/runs/${call.run_id}/logs`} className="block rounded-md border border-transparent p-2 hover:border-[var(--line)]">
-                          <span className="flex items-baseline justify-between gap-3">
-                            <span className="min-w-0 truncate">{call.video_filename || call.run_name}</span>
-                            <span className="mono shrink-0 text-xs">{money}</span>
-                          </span>
-                          <span className="mt-0.5 block text-xs text-[var(--muted)]">
-                            {humanize(call.provider_id)}/{humanize(call.model_id)} · {humanize(call.stage)} · {humanize(call.status)}
-                            {when ? ` · ${when}` : ""}
-                          </span>
-                          <span className="mono text-xs text-[var(--muted)]">
-                            {call.input_tokens.toLocaleString()} in · {call.output_tokens.toLocaleString()} out
-                          </span>
-                        </Link>
-                      </li>
-                    );
-                  })}
+                  {data.calls.map((call) => <CallRow key={call.id} call={call} />)}
                 </ul>
               ) : (
                 <p className="text-sm text-[var(--muted)]">No provider calls yet. Fixture and local analyses are not billed.</p>

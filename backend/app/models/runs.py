@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -38,6 +38,7 @@ class ManualModel(Base):
     model_id: Mapped[str] = mapped_column(String(200))
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    __table_args__ = (Index("uq_manual_model_provider_model", "provider_id", "model_id", unique=True),)
 
 
 class ProviderSecret(Base):

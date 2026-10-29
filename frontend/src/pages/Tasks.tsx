@@ -1,23 +1,59 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Bone } from "../components/Skeleton";
+import { Bone, FieldBone } from "../components/Skeleton";
 import { api, evidenceClass, formatTime, type TaskBundle, type TaskClip } from "../lib/api";
 import { captureToLocalInput, localInputToCapture } from "../lib/captureTime";
 import { humanize, labeledId } from "../lib/humanize";
 import { clipPosition } from "../lib/taskOrder";
 
 const MODES = ["", "fixed_camera", "constrained_head_mounted", "unconstrained_head_mounted"];
+const SESSION_PLACEHOLDERS = 2;
+const STEP_PLACEHOLDERS = 3;
+const OBJECT_PLACEHOLDERS = 2;
+const NOTE_PLACEHOLDERS = 2;
 
-function TaskSectionsSkeleton() {
+function TransitionCard({
+  row,
+  onSave,
+}: {
+  row: TaskBundle["transitions"][number] | null;
+  onSave?: (hypothesis: string) => Promise<void>;
+}) {
   return (
-    <section className="space-y-2" aria-busy="true">
-      <p className="sr-only">Loading chronology</p>
-      <h2 className="text-lg"><Bone width="8rem" /></h2>
-      {Array.from({ length: 3 }, (_, index) => (
-        <div key={index} className="panel p-3"><Bone width="60%" /></div>
-      ))}
-    </section>
+    <article className="panel space-y-2 p-3 text-sm" aria-hidden={row ? undefined : true}>
+      {row ? (
+        <span className={`tag ${evidenceClass(row.evidence_class)}`}>{humanize(row.evidence_class)}</span>
+      ) : (
+        <span className="tag"><Bone width="5rem" /></span>
+      )}
+      {row?.verified && <span className="tag">researcher verified</span>}
+      <p><strong>Observed change.</strong> {row ? row.observed_change : <Bone width="50%" />}</p>
+      <p><strong>Hypothesis.</strong> {row ? row.hypothesis || "None stored." : <Bone width="40%" />}</p>
+      <p className="text-[var(--muted)]">{row ? row.gap_note : <Bone width="70%" />}</p>
+      {row && onSave && <HypothesisEditor initial={row.hypothesis} onSave={onSave} />}
+    </article>
+  );
+}
+
+function PendingClip() {
+  return (
+    <div className="mt-2 rounded-md border border-[var(--line)] p-2 text-sm" aria-hidden="true">
+      <div className="flex items-center gap-3">
+        <div className="relative aspect-video w-40 shrink-0 overflow-hidden rounded bg-black">
+          <Bone className="bone-fill absolute inset-0" />
+        </div>
+        <div className="min-w-0 flex-1 space-y-2">
+          <Bone width="40%" />
+          <Bone width="80%" />
+          <div className="flex flex-wrap gap-2">
+            <FieldBone compact />
+            <FieldBone compact />
+            <FieldBone compact />
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -33,14 +69,14 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
     await client.invalidateQueries({ queryKey: ["task", projectId] });
     await client.invalidateQueries({ queryKey: ["videos"] });
   };
-  const task = query.data;
+  const task = query.data ?? null;
+  const loading = task == null;
   const clipById = useMemo(() => new Map((task?.clips ?? []).map((clip) => [clip.id, clip])), [task]);
   if (query.isError) return <p className="text-sm text-[var(--rose)]">{(query.error as Error).message}</p>;
-  if (!task) return <TaskSectionsSkeleton />;
-  const displayIds = [
+  const displayIds = task ? [
     ...task.order.ranked.flat(),
     ...task.clips.map((clip) => clip.id).filter((id) => !task.order.ranked.flat().includes(id)),
-  ];
+  ] : [];
 
   async function dropOn(targetId: string) {
     if (!dragId || dragId === targetId) return;
@@ -52,7 +88,8 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" aria-busy={loading || undefined}>
+      {loading && <p className="sr-only">Loading chronology</p>}
       <section className="space-y-2">
         <h2 className="text-lg">Chronology</h2>
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -84,12 +121,25 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
           </div>
         </div>
         <p className="text-xs text-[var(--muted)]">
-          Method {task.order.method ? humanize(task.order.method) : "none"}. This order is {task.order.fact ? "marked as fact" : "not treated as fact"}.
-          Drag a clip onto another to lock a manual order. Ambiguous positions stay highlighted.
+          {task ? (
+            <>
+              Method {task.order.method ? humanize(task.order.method) : "none"}. This order is {task.order.fact ? "marked as fact" : "not treated as fact"}.
+              Drag a clip onto another to lock a manual order. Ambiguous positions stay highlighted.
+            </>
+          ) : <Bone width="80%" />}
         </p>
-        {task.order.notes?.map((note) => <p key={note} className="text-xs text-[var(--amber)]">{note}</p>)}
+        {task?.order.notes?.map((note) => <p key={note} className="text-xs text-[var(--amber)]">{note}</p>)}
         <div className="grid gap-2">
-          {task.sessions.map((recording) => {
+          {loading && Array.from({ length: SESSION_PLACEHOLDERS }, (_, index) => (
+            <div key={index} className="panel p-3" aria-hidden="true">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-left font-medium"><Bone width="9rem" /></span>
+                <span className="btn">Lock session order</span>
+              </div>
+              <PendingClip />
+            </div>
+          ))}
+          {task && task.sessions.map((recording) => {
             const open = openSessions[recording.id] !== false;
             const members = displayIds.map((id) => clipById.get(id)).filter((clip): clip is TaskClip => Boolean(clip && clip.session_id === recording.id));
             return (
@@ -119,7 +169,7 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
             );
           })}
         </div>
-        {task.context_hypothesis?.evidence?.length > 0 && (
+        {task && task.context_hypothesis?.evidence?.length > 0 && (
           <div className="panel p-3 text-sm">
             <div className="tag inferred">Context hypothesis, not a fact</div>
             {task.context_hypothesis.evidence.map((item, index) => <p key={index} className="mt-2">{item.support}</p>)}
@@ -129,9 +179,19 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
 
       <section className="space-y-2">
         <h2 className="text-lg">Timeline</h2>
-        <p className="text-xs text-[var(--muted)]">{task.time_basis.project_time}. {task.time_basis.clip_time}.</p>
+        <p className="text-xs text-[var(--muted)]">
+          {task ? <>{task.time_basis.project_time}. {task.time_basis.clip_time}.</> : <Bone width="70%" />}
+        </p>
         <ol className="space-y-2">
-          {task.workflow.steps.map((step) => (
+          {loading && Array.from({ length: STEP_PLACEHOLDERS }, (_, index) => (
+            <li key={index} className="panel p-3 text-sm" aria-hidden="true">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="tag"><Bone width="4.5rem" /></span>
+                <Bone width="40%" />
+              </div>
+            </li>
+          ))}
+          {task?.workflow.steps.map((step) => (
             <li key={step.id} className="panel p-3 text-sm">
               <div className="flex flex-wrap items-center gap-2">
                 <span className={`tag ${evidenceClass(step.evidence_class)}`}>{humanize(step.kind)}</span>
@@ -151,7 +211,7 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
             </li>
           ))}
         </ol>
-        {task.clips.flatMap((clip) => clip.actions.map((action) => (
+        {task?.clips.flatMap((clip) => clip.actions.map((action) => (
           <Link
             key={`${clip.id}-${action.local_id}`}
             className="panel block p-3 text-sm"
@@ -164,7 +224,16 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
 
       <section className="space-y-3">
         <h2 className="text-lg">Cross-session objects</h2>
-        {task.canonical_objects.map((object) => (
+        {loading && Array.from({ length: OBJECT_PLACEHOLDERS }, (_, index) => (
+          <article key={index} className="panel p-3" aria-hidden="true">
+            <div className="flex flex-wrap items-center gap-2">
+              <Bone width="0.75rem" />
+              <strong><Bone width="8rem" /></strong>
+            </div>
+            <p className="mt-1 text-sm"><Bone width="70%" /></p>
+          </article>
+        ))}
+        {task?.canonical_objects.map((object) => (
           <article key={object.id} className="panel p-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-block h-3 w-3 rounded-full" style={{ background: object.color }} />
@@ -193,9 +262,9 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
             </div>
           </article>
         ))}
-        {compare.length === 2 && <ComparePane task={task} keys={compare} />}
+        {task && compare.length === 2 && <ComparePane task={task} keys={compare} />}
         <div className="grid gap-2">
-          {task.links.filter((link) => link.status !== "rejected").map((link) => (
+          {task?.links.filter((link) => link.status !== "rejected").map((link) => (
             <div key={link.id} className="panel flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
               <div>
                 {clipById.get(link.video_id)?.filename} / {humanize(link.object_local_id)} · {humanize(link.status)}
@@ -210,7 +279,7 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
             </div>
           ))}
         </div>
-        {task.canonical_objects.length >= 2 && (
+        {task && task.canonical_objects.length >= 2 && (
           <button
             className="btn"
             onClick={async () => {
@@ -225,23 +294,20 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
 
       <section className="space-y-2">
         <h2 className="text-lg">Inter-session changes</h2>
-        {task.transitions.map((row) => (
-          <article key={row.id} className="panel space-y-2 p-3 text-sm">
-            <span className={`tag ${evidenceClass(row.evidence_class)}`}>{humanize(row.evidence_class)}</span>
-            {row.verified && <span className="tag">researcher verified</span>}
-            <p><strong>Observed change.</strong> {row.observed_change}</p>
-            <p><strong>Hypothesis.</strong> {row.hypothesis || "None stored."}</p>
-            <p className="text-[var(--muted)]">{row.gap_note}</p>
-            <HypothesisEditor
-              initial={row.hypothesis}
-              onSave={async (hypothesis) => {
-                await api.patchTransition(projectId, row.id, { hypothesis, verified: true });
-                await refresh();
-              }}
-            />
-          </article>
+        {loading && Array.from({ length: NOTE_PLACEHOLDERS }, (_, index) => (
+          <TransitionCard key={index} row={null} />
         ))}
-        {task.workflow.procedural_dependencies?.map((edge) => (
+        {task?.transitions.map((row) => (
+          <TransitionCard
+            key={row.id}
+            row={row}
+            onSave={async (hypothesis) => {
+              await api.patchTransition(projectId, row.id, { hypothesis, verified: true });
+              await refresh();
+            }}
+          />
+        ))}
+        {task?.workflow.procedural_dependencies?.map((edge) => (
           <p key={`${edge.before}-${edge.after}`} className="text-sm text-[var(--amber)]">
             Procedural dependency is inferred and {edge.accepted ? "accepted" : "not accepted"}: {edge.note}
           </p>
@@ -250,7 +316,13 @@ export function TaskProjectSections({ projectId }: { projectId: string }) {
 
       <section className="space-y-2">
         <h2 className="text-lg">Project readings</h2>
-        {task.revisions.map((revision) => (
+        {loading && Array.from({ length: NOTE_PLACEHOLDERS }, (_, index) => (
+          <div key={index} className="panel p-3 text-sm" aria-hidden="true">
+            <div><Bone width="40%" /></div>
+            <p className="text-[var(--muted)]"><Bone width="70%" /></p>
+          </div>
+        ))}
+        {task?.revisions.map((revision) => (
           <div key={revision.id} className="panel p-3 text-sm">
             <div>Version {revision.version} · {humanize(revision.trigger)}</div>
             <p className="text-[var(--muted)]">{revision.change_summary}</p>

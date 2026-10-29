@@ -1,8 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { Bone, FieldBone } from "../components/Skeleton";
 import { api } from "../lib/api";
 import { humanize, humanizeText } from "../lib/humanize";
-import type { ClaudeCodeSettings, CliLinkStatus, CodexSettings, CursorCliSettings, RunSummary } from "../lib/types";
+import type { ClaudeCodeSettings, CliLinkStatus, CodexSettings, CursorCliSettings, ProviderInfo, RunSummary } from "../lib/types";
+
+function LinkTag({ pending, linked }: { pending: boolean; linked: boolean }) {
+  if (pending) return <span className="tag" aria-hidden="true"><Bone width="5.5rem" /></span>;
+  return <span className={`tag ${linked ? "observed" : "unknown"}`}>{linked ? "linked" : "not linked"}</span>;
+}
 
 function AccountIdentity({ status }: { status?: Pick<CliLinkStatus, "logged_in" | "subscription" | "account"> }) {
   if (!status?.logged_in) return null;
@@ -76,7 +82,7 @@ function CodexPanel({ settings }: { settings: CodexSettings }) {
     <div className="space-y-2 rounded-lg border border-[var(--line)] p-3">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-medium">Codex</h3>
-        <span className={`tag ${linked ? "observed" : "unknown"}`}>{linked ? "linked" : "not linked"}</span>
+        <LinkTag pending={status.data === undefined && !status.isError} linked={linked} />
         <span className="tag">{transport === "codex" ? "runs use the ChatGPT plan" : "runs use API key"}</span>
         {status.data?.version && <span className="tag">{status.data.version}</span>}
       </div>
@@ -165,7 +171,7 @@ function ClaudeCodePanel({ settings }: { settings: ClaudeCodeSettings }) {
     <div className="space-y-2 rounded-lg border border-[var(--line)] p-3">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-medium">Claude Code</h3>
-        <span className={`tag ${linked ? "observed" : "unknown"}`}>{linked ? "linked" : "not linked"}</span>
+        <LinkTag pending={status.data === undefined && !status.isError} linked={linked} />
         <span className="tag">{transport === "claude_code" ? "runs use Claude Code" : "runs use API key"}</span>
         {status.data?.version && <span className="tag">{status.data.version}</span>}
       </div>
@@ -271,7 +277,7 @@ function CursorCliPanel({ settings }: { settings: CursorCliSettings }) {
     <div className="space-y-2 rounded-lg border border-[var(--line)] p-3">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-medium">Cursor CLI</h3>
-        <span className={`tag ${linked ? "observed" : "unknown"}`}>{linked ? "linked" : "not linked"}</span>
+        <LinkTag pending={status.data === undefined && !status.isError} linked={linked} />
         <span className="tag">{transport === "login" ? "runs use the Cursor account" : "runs use the API key"}</span>
         {status.data?.version && <span className="tag">{status.data.version}</span>}
       </div>
@@ -336,6 +342,117 @@ function CursorCliPanel({ settings }: { settings: CursorCliSettings }) {
   );
 }
 
+const LOCAL_PROVIDERS = ["deterministic", "fixture", "manual_json"];
+const PROVIDER_PLACEHOLDERS = 4;
+const MODEL_PLACEHOLDERS = 2;
+
+function ProviderCard({
+  provider,
+  apiKey,
+  base,
+  modelDraft,
+  onKey,
+  onBase,
+  onModel,
+  onSaveKey,
+  onValidate,
+  onReady,
+  onAddModel,
+  onDiscover,
+}: {
+  provider: ProviderInfo | null;
+  apiKey: string;
+  base: string;
+  modelDraft: string;
+  onKey: (value: string) => void;
+  onBase: (value: string) => void;
+  onModel: (value: string) => void;
+  onSaveKey: () => void;
+  onValidate: () => void;
+  onReady: () => void;
+  onAddModel: () => void;
+  onDiscover: () => void;
+}) {
+  const pending = provider == null;
+  const local = provider != null && LOCAL_PROVIDERS.includes(provider.id);
+  return (
+    <section className="panel space-y-2 p-4" aria-hidden={pending || undefined}>
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-lg">{provider ? humanize(provider.id) : <Bone width="8rem" />}</h2>
+        {provider ? (
+          <span className={`tag ${provider.validated ? "observed" : "unknown"}`}>{provider.validated ? "validated" : "not validated"}</span>
+        ) : (
+          <span className="tag"><Bone width="6.5rem" /></span>
+        )}
+        {provider?.configured && <span className="tag">key {humanize(provider.secret_source)} {provider.hint}</span>}
+      </div>
+      {provider?.last_error && <p className="text-sm text-[var(--rose)]">{provider.last_error}</p>}
+      {pending && <p className="text-sm"><Bone width="70%" /></p>}
+      {provider?.id === "openai" && (
+        <p className="text-sm text-[var(--muted)]">API key. Analysis runs use it when OpenAI runs is set to API key.</p>
+      )}
+      {provider?.id === "anthropic" && (
+        <p className="text-sm text-[var(--muted)]">API key. Analysis runs use it when Anthropic runs is set to API key.</p>
+      )}
+      {provider?.id === "cursor" && (
+        <p className="text-sm text-[var(--muted)]">API key. Analysis runs use it when Cursor runs is set to API key.</p>
+      )}
+      {(pending || (provider && !local)) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {provider ? (
+            <>
+              <input className="field" type="password" autoComplete="off" placeholder="API key" value={apiKey} onChange={(event) => onKey(event.target.value)} />
+              {provider.id !== "cursor" && (
+                <input className="field" placeholder={provider.id === "openai_compatible" ? "Base URL" : "Optional base URL"} value={base} onChange={(event) => onBase(event.target.value)} />
+              )}
+              <button className="btn" onClick={onSaveKey}>Save key</button>
+              <button className="btn" onClick={onValidate}>Validate</button>
+            </>
+          ) : (
+            <>
+              <FieldBone input />
+              <FieldBone input />
+              <span className="btn">Save key</span>
+              <span className="btn">Validate</span>
+            </>
+          )}
+        </div>
+      )}
+      {provider?.id === "openai" && provider.codex && <CodexPanel settings={provider.codex} />}
+      {provider?.id === "anthropic" && provider.claude_code && <ClaudeCodePanel settings={provider.claude_code} />}
+      {provider?.id === "cursor" && provider.cursor_cli && <CursorCliPanel settings={provider.cursor_cli} />}
+      {provider && local && (
+        <button className="btn" onClick={onReady}>Mark local provider ready</button>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {provider ? (
+          <input className="field" placeholder="Add model id" value={modelDraft} onChange={(event) => onModel(event.target.value)} />
+        ) : (
+          <FieldBone input />
+        )}
+        {provider ? (
+          <>
+            <button className="btn shrink-0" onClick={onAddModel}>Add model</button>
+            <button className="btn shrink-0" onClick={onDiscover}>Discover</button>
+          </>
+        ) : (
+          <>
+            <span className="btn shrink-0">Add model</span>
+            <span className="btn shrink-0">Discover</span>
+          </>
+        )}
+      </div>
+      <ul className="grid gap-1 text-xs text-[var(--muted)] md:grid-cols-2">
+        {provider ? provider.models.map((model) => (
+          <li key={model.model_id}>{model.label || humanize(model.model_id)} · video {model.native_video ? "yes" : "no"} · images {model.max_images} · {model.notes}</li>
+        )) : Array.from({ length: MODEL_PLACEHOLDERS }, (_, index) => (
+          <li key={index}><Bone width="80%" /></li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function ProvidersPage() {
   const client = useQueryClient();
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
@@ -352,6 +469,10 @@ export function ProvidersPage() {
     },
     onError: (error: Error) => setMessage(error.message),
   });
+  const pending = providers.data === undefined && !providers.isError;
+  const rows: (ProviderInfo | null)[] = pending
+    ? Array.from({ length: PROVIDER_PLACEHOLDERS }, () => null)
+    : providers.data ?? [];
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-medium">Providers</h1>
@@ -360,63 +481,55 @@ export function ProvidersPage() {
         Deterministic and fixture providers need no key. Live inference has not been claimed from this screen until that call returns ok.
       </p>
       {message && <p className="text-sm">{message}</p>}
-      <div className="space-y-3">
-        {providers.data?.map((provider) => (
-          <section key={provider.id} className="panel space-y-2 p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg">{humanize(provider.id)}</h2>
-              <span className={`tag ${provider.validated ? "observed" : "unknown"}`}>{provider.validated ? "validated" : "not validated"}</span>
-              {provider.configured && <span className="tag">key {humanize(provider.secret_source)} {provider.hint}</span>}
-            </div>
-            {provider.last_error && <p className="text-sm text-[var(--rose)]">{provider.last_error}</p>}
-            {provider.id === "openai" && (
-              <p className="text-sm text-[var(--muted)]">API key. Analysis runs use it when OpenAI runs is set to API key.</p>
-            )}
-            {provider.id === "anthropic" && (
-              <p className="text-sm text-[var(--muted)]">API key. Analysis runs use it when Anthropic runs is set to API key.</p>
-            )}
-            {provider.id === "cursor" && (
-              <p className="text-sm text-[var(--muted)]">API key. Analysis runs use it when Cursor runs is set to API key.</p>
-            )}
-            {!["deterministic", "fixture", "manual_json"].includes(provider.id) && (
-              <div className="flex flex-wrap items-center gap-2">
-                <input className="field" type="password" autoComplete="off" placeholder="API key" value={keys[provider.id] ?? ""} onChange={(event) => setKeys({ ...keys, [provider.id]: event.target.value })} />
-                {provider.id !== "cursor" && (
-                  <input className="field" placeholder={provider.id === "openai_compatible" ? "Base URL" : "Optional base URL"} value={bases[provider.id] ?? provider.base_url} onChange={(event) => setBases({ ...bases, [provider.id]: event.target.value })} />
-                )}
-                <button className="btn" onClick={() => save.mutate(provider.id)}>Save key</button>
-                <button className="btn" onClick={async () => {
-                  try {
-                    await api.validateProvider(provider.id);
-                    setMessage(`${provider.id} validation request succeeded.`);
-                  } catch (error) {
-                    setMessage(error instanceof Error ? error.message : "validation failed");
-                  }
-                  await client.invalidateQueries({ queryKey: ["providers"] });
-                }}>Validate</button>
-              </div>
-            )}
-            {provider.id === "openai" && provider.codex && <CodexPanel settings={provider.codex} />}
-            {provider.id === "anthropic" && provider.claude_code && <ClaudeCodePanel settings={provider.claude_code} />}
-            {provider.id === "cursor" && provider.cursor_cli && <CursorCliPanel settings={provider.cursor_cli} />}
-            {["deterministic", "fixture", "manual_json"].includes(provider.id) && (
-              <button className="btn" onClick={async () => { await api.validateProvider(provider.id); await client.invalidateQueries({ queryKey: ["providers"] }); }}>Mark local provider ready</button>
-            )}
-            <div className="flex flex-wrap items-center gap-2">
-              <input className="field" placeholder="Add model id" value={models[provider.id] ?? ""} onChange={(event) => setModels({ ...models, [provider.id]: event.target.value })} />
-              <button className="btn shrink-0" onClick={async () => { await api.addModel(provider.id, models[provider.id] ?? ""); await client.invalidateQueries({ queryKey: ["providers"] }); }}>Add model</button>
-              <button className="btn shrink-0" onClick={async () => {
+      {providers.isError && <p className="text-sm text-[var(--rose)]">{(providers.error as Error).message}</p>}
+      <div className="space-y-3" aria-busy={pending || undefined}>
+        {pending && <p className="sr-only">Loading providers</p>}
+        {rows.map((provider, index) => (
+          <ProviderCard
+            key={provider?.id ?? `pending-${index}`}
+            provider={provider}
+            apiKey={provider ? keys[provider.id] ?? "" : ""}
+            base={provider ? bases[provider.id] ?? provider.base_url : ""}
+            modelDraft={provider ? models[provider.id] ?? "" : ""}
+            onKey={(value) => { if (provider) setKeys({ ...keys, [provider.id]: value }); }}
+            onBase={(value) => { if (provider) setBases({ ...bases, [provider.id]: value }); }}
+            onModel={(value) => { if (provider) setModels({ ...models, [provider.id]: value }); }}
+            onSaveKey={() => { if (provider) save.mutate(provider.id); }}
+            onValidate={() => {
+              if (!provider) return;
+              void (async () => {
+                try {
+                  await api.validateProvider(provider.id);
+                  setMessage(`${provider.id} validation request succeeded.`);
+                } catch (error) {
+                  setMessage(error instanceof Error ? error.message : "validation failed");
+                }
+                await client.invalidateQueries({ queryKey: ["providers"] });
+              })();
+            }}
+            onReady={() => {
+              if (!provider) return;
+              void (async () => {
+                await api.validateProvider(provider.id);
+                await client.invalidateQueries({ queryKey: ["providers"] });
+              })();
+            }}
+            onAddModel={() => {
+              if (!provider) return;
+              void (async () => {
+                await api.addModel(provider.id, models[provider.id] ?? "");
+                await client.invalidateQueries({ queryKey: ["providers"] });
+              })();
+            }}
+            onDiscover={() => {
+              if (!provider) return;
+              void (async () => {
                 const found = await api.discoverModels(provider.id);
                 await client.invalidateQueries({ queryKey: ["providers"] });
                 setMessage(found.error ? found.error : `Discovered ${found.discovered.length} model ids.`);
-              }}>Discover</button>
-            </div>
-            <ul className="grid gap-1 text-xs text-[var(--muted)] md:grid-cols-2">
-              {provider.models.map((model) => (
-                <li key={model.model_id}>{model.label || humanize(model.model_id)} · video {model.native_video ? "yes" : "no"} · images {model.max_images} · {model.notes}</li>
-              ))}
-            </ul>
-          </section>
+              })();
+            }}
+          />
         ))}
       </div>
     </div>
@@ -469,28 +582,30 @@ function latestPrompts(rows: PromptRecord[]): PromptRecord[] {
   });
 }
 
-function PromptSection({ prompt }: { prompt: PromptRecord }) {
+function PromptSection({ prompt, pendingKey = "" }: { prompt: PromptRecord | null; pendingKey?: string }) {
   const client = useQueryClient();
-  const [draft, setDraft] = useState(prompt.body);
-  const [savedBody, setSavedBody] = useState(prompt.body);
+  const [draft, setDraft] = useState(prompt?.body ?? "");
+  const [savedBody, setSavedBody] = useState(prompt?.body ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const title = humanize(prompt.key);
-  const detail = prompt.name && prompt.name !== title && prompt.name !== prompt.key ? prompt.name : "";
+  const key = prompt?.key ?? pendingKey;
+  const title = humanize(key);
+  const detail = prompt && prompt.name && prompt.name !== title && prompt.name !== prompt.key ? prompt.name : "";
   const unchanged = comparablePrompt(draft) === comparablePrompt(savedBody);
   const rows = Math.min(24, Math.max(8, draft.split("\n").length));
+  const pending = prompt == null;
   return (
-    <section className="panel space-y-3 p-4" aria-labelledby={`prompt-${prompt.key}`}>
+    <section className="panel space-y-3 p-4" aria-labelledby={key ? `prompt-${key}` : undefined}>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h2 id={`prompt-${prompt.key}`} className="text-sm font-medium">{title}</h2>
-          <span className="tag">v{prompt.version}</span>
+          <h2 id={key ? `prompt-${key}` : undefined} className="text-sm font-medium">{title}</h2>
+          <span className="tag">{prompt ? `v${prompt.version}` : <Bone width="2ch" />}</span>
         </div>
         <button
           className="btn primary shrink-0"
-          disabled={unchanged || saving}
+          disabled={pending || unchanged || saving}
           onClick={async () => {
-            if (unchanged || saving) return;
+            if (!prompt || unchanged || saving) return;
             setSaving(true);
             setError("");
             try {
@@ -507,15 +622,19 @@ function PromptSection({ prompt }: { prompt: PromptRecord }) {
           {saving ? "Saving…" : "Save new version"}
         </button>
       </div>
-      {detail && <p className="text-xs text-[var(--muted)]">{detail}</p>}
-      <textarea
-        className="field resize-y font-mono text-xs leading-relaxed"
-        rows={rows}
-        aria-label={`${title} prompt`}
-        value={draft}
-        spellCheck={false}
-        onChange={(event) => setDraft(event.target.value)}
-      />
+      {pending ? <p className="text-xs"><Bone width="12rem" /></p> : detail && <p className="text-xs text-[var(--muted)]">{detail}</p>}
+      {prompt ? (
+        <textarea
+          className="field resize-y font-mono text-xs leading-relaxed"
+          rows={rows}
+          aria-label={`${title} prompt`}
+          value={draft}
+          spellCheck={false}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+      ) : (
+        <FieldBone tall />
+      )}
       {error && <p className="text-xs text-[var(--rose)]">{error}</p>}
     </section>
   );
@@ -523,6 +642,7 @@ function PromptSection({ prompt }: { prompt: PromptRecord }) {
 
 export function PromptsPage() {
   const prompts = useQuery({ queryKey: ["prompts"], queryFn: api.prompts });
+  const pending = prompts.data === undefined && !prompts.isError;
   const sections = latestPrompts(prompts.data ?? []);
   return (
     <div className="space-y-4">
@@ -532,15 +652,15 @@ export function PromptsPage() {
           Each prompt has its own editor. Saving creates a new version of that prompt. Past experiments keep the snapshot they launched with.
         </p>
       </div>
-      {prompts.isPending && <p className="text-sm text-[var(--muted)]">Loading prompts…</p>}
+      {pending && <p className="sr-only">Loading prompts</p>}
       {prompts.isError && <p className="text-sm text-[var(--rose)]">Could not load prompts.</p>}
-      {!prompts.isPending && !prompts.isError && sections.length === 0 && (
+      {!pending && !prompts.isError && sections.length === 0 && (
         <p className="text-sm text-[var(--muted)]">No prompts yet.</p>
       )}
-      <div className="space-y-4">
-        {sections.map((item) => (
-          <PromptSection key={item.id} prompt={item} />
-        ))}
+      <div className="space-y-4" aria-busy={pending || undefined}>
+        {pending
+          ? PROMPT_ORDER.map((key) => <PromptSection key={key} prompt={null} pendingKey={key} />)
+          : sections.map((item) => <PromptSection key={item.id} prompt={item} />)}
       </div>
     </div>
   );
@@ -554,14 +674,17 @@ export function ComparePage() {
   const [comparisonId, setComparisonId] = useState("");
   const [matchLeft, setMatchLeft] = useState("");
   const [matchRight, setMatchRight] = useState("");
-  const completed = runs.data?.filter((run) => run.status === "completed") ?? [];
+  const pending = runs.data === undefined && !runs.isError;
+  const completed = pending ? null : (runs.data ?? []).filter((run) => run.status === "completed");
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-medium">Model comparison laboratory</h1>
       <p className="max-w-3xl text-sm text-[var(--muted)]">
         Object ids from different runs are not the same object. Assisted matches use labels and are marked as assisted. Disagreement is not a verdict.
       </p>
-      <div className="grid items-stretch gap-4 lg:grid-cols-2">
+      {runs.isError && <p className="text-sm text-[var(--rose)]">{(runs.error as Error).message}</p>}
+      <div className="grid items-stretch gap-4 lg:grid-cols-2" aria-busy={pending || undefined}>
+        {pending && <p className="sr-only">Loading runs</p>}
         <RunColumn title="Left run" value={left} onChange={setLeft} runs={completed} />
         <RunColumn title="Right run" value={right} onChange={setRight} runs={completed} />
       </div>
@@ -587,6 +710,26 @@ export function ComparePage() {
   );
 }
 
+const RUN_FACTS: { label: string; truncate?: boolean; value: (run: RunSummary) => string }[] = [
+  { label: "Model", value: (run) => humanize(run.model_id) || "unset" },
+  { label: "Provider", value: (run) => humanize(run.provider_id) },
+  { label: "Video", truncate: true, value: (run) => run.video_filename },
+  { label: "Objects / actions", value: (run) => `${run.object_count} / ${run.action_count}` },
+];
+
+function RunFacts({ run }: { run: RunSummary }) {
+  return (
+    <dl className="mt-auto grid grid-cols-2 gap-x-4 gap-y-2 border-t border-[var(--line)] pt-3 text-xs">
+      {RUN_FACTS.map((fact) => (
+        <div key={fact.label} className={fact.truncate ? "min-w-0" : undefined}>
+          <dt className="text-[var(--muted)]">{fact.label}</dt>
+          <dd className={fact.truncate ? "truncate" : undefined}>{fact.value(run)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function RunColumn({
   title,
   value,
@@ -596,36 +739,20 @@ function RunColumn({
   title: string;
   value: string;
   onChange: (id: string) => void;
-  runs: RunSummary[];
+  runs: RunSummary[] | null;
 }) {
-  const selected = runs.find((run) => run.id === value);
+  const pending = runs == null;
+  const selected = runs?.find((run) => run.id === value);
   return (
-    <section className="panel flex h-full min-h-48 flex-col gap-3 p-4">
+    <section className="panel flex h-full min-h-48 flex-col gap-3 p-4" aria-busy={pending || undefined}>
       <h2 className="text-sm font-medium">{title}</h2>
-      <select className="field stretch" value={value} onChange={(event) => onChange(event.target.value)} aria-label={title}>
-        <option value="">{title}</option>
-        {runs.map((run) => <option key={run.id} value={run.id}>{humanizeText(run.name)}</option>)}
-      </select>
-      {selected ? (
-        <dl className="mt-auto grid grid-cols-2 gap-x-4 gap-y-2 border-t border-[var(--line)] pt-3 text-xs">
-          <div>
-            <dt className="text-[var(--muted)]">Model</dt>
-            <dd>{humanize(selected.model_id) || "unset"}</dd>
-          </div>
-          <div>
-            <dt className="text-[var(--muted)]">Provider</dt>
-            <dd>{humanize(selected.provider_id)}</dd>
-          </div>
-          <div className="min-w-0">
-            <dt className="text-[var(--muted)]">Video</dt>
-            <dd className="truncate">{selected.video_filename}</dd>
-          </div>
-          <div>
-            <dt className="text-[var(--muted)]">Objects / actions</dt>
-            <dd>{selected.object_count} / {selected.action_count}</dd>
-          </div>
-        </dl>
-      ) : (
+      {pending ? <FieldBone stretch /> : (
+        <select className="field stretch" value={value} onChange={(event) => onChange(event.target.value)} aria-label={title}>
+          <option value="">{title}</option>
+          {runs.map((run) => <option key={run.id} value={run.id}>{humanizeText(run.name)}</option>)}
+        </select>
+      )}
+      {selected ? <RunFacts run={selected} /> : (
         <p className="mt-auto text-xs text-[var(--muted)]">Select a completed run.</p>
       )}
     </section>

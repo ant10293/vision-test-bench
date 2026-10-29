@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AssetDropZone } from "../components/AssetDropZone";
 import { Bone, MediaPlaceholder } from "../components/Skeleton";
@@ -143,6 +143,25 @@ export function VideosPage() {
   );
 }
 
+const VIDEO_FACTS: { key: string; label: string; bone: string; mono?: boolean; value: (item: VideoInfo) => string }[] = [
+  { key: "checksum", label: "Checksum", bone: "12ch", mono: true, value: (item) => item.checksum },
+  { key: "duration", label: "Duration", bone: "6ch", value: (item) => formatTime(item.duration_sec) },
+  { key: "frame", label: "", bone: "18ch", value: (item) => `${item.width}×${item.height} · ${item.codec} · ${item.container}` },
+  { key: "capture", label: "Capture", bone: "18ch", value: (item) => `${item.capture_time_utc || item.capture_time_raw || "not in the file"} (${item.timestamp_reliability || "absent"})` },
+  { key: "mtime", label: "File modified", bone: "10ch", value: (item) => item.file_mtime || "unknown" },
+  { key: "source", label: "Source", bone: "8ch", value: (item) => item.timestamp_source || "absent" },
+];
+
+function VideoFact({ item, fact }: { item: VideoInfo | null; fact: (typeof VIDEO_FACTS)[number] }) {
+  const value: ReactNode = item ? fact.value(item) : <Bone width={fact.bone} />;
+  return (
+    <div>
+      {fact.label ? <>{fact.label} </> : null}
+      {fact.mono ? <span className="mono text-xs">{value}</span> : value}
+    </div>
+  );
+}
+
 export function VideoDetailPage() {
   const { videoId = "" } = useParams();
   const [params] = useSearchParams();
@@ -159,36 +178,47 @@ export function VideoDetailPage() {
     if (node.readyState >= 1) seek();
     return () => node.removeEventListener("loadedmetadata", seek);
   }, [params, video.data?.id]);
-  if (!video.data) return <p className="text-[var(--muted)]">Loading video…</p>;
-  const item = video.data;
-  const backHref = item.project_id ? `/projects/${item.project_id}` : "/videos";
-  const backLabel = item.project_id ? "← Back to project" : "← Back to library";
+  const item = video.data ?? null;
+  const pending = item == null && !video.isError;
+  if (video.isError && !item) return <p className="text-sm text-[var(--rose)]">{(video.error as Error).message}</p>;
+  const backHref = item?.project_id ? `/projects/${item.project_id}` : "/videos";
+  const backLabel = item?.project_id ? "← Back to project" : "← Back to library";
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" aria-busy={pending || undefined}>
+      {pending && <p className="sr-only">Loading video</p>}
       <div>
-        <Link className="text-sm text-[var(--muted)]" to={backHref}>{backLabel}</Link>
-        <h1 className="mt-2 text-2xl font-medium">{item.filename}</h1>
+        {item ? (
+          <Link className="text-sm text-[var(--muted)]" to={backHref}>{backLabel}</Link>
+        ) : (
+          <div className="text-sm" aria-hidden="true"><Bone width="11rem" /></div>
+        )}
+        <h1 className="mt-2 text-2xl font-medium">{item ? item.filename : <Bone width="16rem" />}</h1>
       </div>
       <p className="text-xs text-[var(--amber)]">Clip time starts at the beginning of this file. It is not the project capture clock.</p>
-      <video ref={player} src={item.playback_url} controls className="max-h-[480px] w-full rounded-lg bg-black" />
+      {item ? (
+        <video ref={player} src={item.playback_url} controls className="max-h-[480px] w-full rounded-lg bg-black" />
+      ) : (
+        <div className="relative aspect-video max-h-[480px] w-full overflow-hidden rounded-lg bg-black" aria-hidden="true">
+          <Bone className="bone-fill absolute inset-0" />
+        </div>
+      )}
       <div className="panel grid gap-2 p-3 text-sm md:grid-cols-3">
-        <div>Checksum <span className="mono text-xs">{item.checksum}</span></div>
-        <div>Duration {formatTime(item.duration_sec)}</div>
-        <div>{item.width}×{item.height} · {item.codec} · {item.container}</div>
-        <div>Capture {item.capture_time_utc || item.capture_time_raw || "not in the file"} ({item.timestamp_reliability || "absent"})</div>
-        <div>File modified {item.file_mtime || "unknown"}</div>
-        <div>Source {item.timestamp_source || "absent"}</div>
+        {VIDEO_FACTS.map((fact) => <VideoFact key={fact.key} item={item} fact={fact} />)}
       </div>
-      {item.contact_sheet_url && <img src={item.contact_sheet_url} alt="Contact sheet" className="panel w-full" />}
+      {item?.contact_sheet_url && <img src={item.contact_sheet_url} alt="Contact sheet" className="panel w-full" />}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-        {item.frames?.map((frame) => (
+        {item?.frames?.map((frame) => (
           <figure key={frame.id} className="panel overflow-hidden">
             <img src={frame.url} alt="" className="aspect-video w-full bg-black object-contain" />
             <figcaption className="mono px-2 py-1 text-xs text-[var(--muted)]">{frame.timestamp.toFixed(2)}s · {frame.reason}</figcaption>
           </figure>
         ))}
       </div>
-      <Link className="btn primary inline-block" to={`/experiments/new?video=${item.id}`}>Analyze this video</Link>
+      {item ? (
+        <Link className="btn primary inline-block" to={`/experiments/new?video=${item.id}`}>Analyze this video</Link>
+      ) : (
+        <span className="btn primary" aria-hidden="true">Analyze this video</span>
+      )}
     </div>
   );
 }

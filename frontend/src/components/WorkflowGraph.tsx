@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   Background,
   BaseEdge,
@@ -14,6 +15,7 @@ import "@xyflow/react/dist/style.css";
 import { humanize, nameObjects, objectLabels } from "../lib/humanize";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
+import { Bone } from "./Skeleton";
 
 const COLORS: Record<string, string> = {
   necessary_physical: "#3ddc97",
@@ -133,9 +135,24 @@ function DependencyEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition
   );
 }
 
-export function WorkflowGraph({ bundle }: { bundle: Bundle }) {
+function GraphShell({ children, hidden = false }: { children: ReactNode; hidden?: boolean }) {
+  return (
+    <div className="workflow-graph h-[520px] overflow-hidden rounded-lg border border-[var(--line)]" aria-hidden={hidden || undefined}>
+      {children}
+    </div>
+  );
+}
+
+export function WorkflowGraph({ bundle }: { bundle: Bundle | null }) {
   const selectStep = useInspector((state) => state.selectStep);
   const setTime = useInspector((state) => state.setTime);
+  if (!bundle) {
+    return (
+      <GraphShell hidden>
+        <Bone className="bone-fill" />
+      </GraphShell>
+    );
+  }
   const labels = objectLabels(bundle.objects);
   const nodes: Node[] = bundle.steps.map((step, index) => ({
     id: step.local_id,
@@ -166,7 +183,7 @@ export function WorkflowGraph({ bundle }: { bundle: Bundle }) {
     data: { rationale: dep.rationale },
   }));
   return (
-    <div className="workflow-graph h-[520px] overflow-hidden rounded-lg border border-[var(--line)]">
+    <GraphShell>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -185,6 +202,6 @@ export function WorkflowGraph({ bundle }: { bundle: Bundle }) {
         <Background />
         <Controls />
       </ReactFlow>
-    </div>
+    </GraphShell>
   );
 }

@@ -63,6 +63,39 @@ def ensure_task_columns(engine: Engine) -> None:
                 )
     allow_missing_project(engine, "video_assets")
     allow_missing_project(engine, "analysis_runs")
+    unique_manual_models(engine)
+
+
+def unique_manual_models(engine: Engine) -> None:
+    """Drop repeated manual model ids, keeping the earliest, then enforce one row per provider and id."""
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as conn:
+        exists = conn.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_models'")
+        ).first()
+        if not exists:
+            return
+        conn.execute(text(DEDUPE_MANUAL_MODELS))
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_manual_model_provider_model "
+                "ON manual_models (provider_id, model_id)"
+            )
+        )
+
+
+DEDUPE_MANUAL_MODELS = """
+DELETE FROM manual_models
+WHERE id NOT IN (
+    SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+            PARTITION BY provider_id, model_id ORDER BY created_at, id
+        ) AS position
+        FROM manual_models
+    ) AS ranked WHERE position = 1
+)
+"""
 
 
 def allow_missing_project(engine: Engine, table: str) -> None:
