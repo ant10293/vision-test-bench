@@ -538,25 +538,26 @@ export function ObjectsPage() {
         <div className="panel grid gap-4 p-4 lg:grid-cols-[280px_1fr]">
           {selectedThumb && <img src={selectedThumb} alt="" className="w-full rounded" />}
           <div className="space-y-2 text-sm">
-            <h2>{labeledId(selected.local_id, selected.label)}</h2>
-            <p>{selected.description}</p>
-            <p className="text-[var(--muted)]">Initial: {humanize(selected.initial_state) || "—"} · Final: {humanize(selected.final_state) || "—"}</p>
             <div className="flex flex-wrap items-center gap-2">
-              <label className="flex max-w-full min-w-0 items-center gap-4" htmlFor={`rename-${selected.local_id}`}>
-                <span className="shrink-0 whitespace-nowrap">Rename</span>
-                <input
-                  key={selected.local_id}
-                  className="field max-w-full"
-                  style={{ width: "calc((48rem - 0.75rem) / 2)" }}
-                  defaultValue={selected.label}
-                  id={`rename-${selected.local_id}`}
-                />
-              </label>
+              <h2 className="shrink-0 font-medium">{humanize(selected.local_id)}:</h2>
+              <input
+                key={selected.local_id}
+                className="field max-w-full"
+                style={{ width: "calc((48rem - 0.75rem) / 2)" }}
+                defaultValue={selected.label}
+                id={`label-${selected.local_id}`}
+                aria-label={`${humanize(selected.local_id)} name`}
+              />
               <button className="btn shrink-0" onClick={async () => {
-                const input = document.getElementById(`rename-${selected.local_id}`) as HTMLInputElement;
+                const input = document.getElementById(`label-${selected.local_id}`) as HTMLInputElement;
                 await api.patchObject(bundle.run.id, selected.local_id, { label: input.value });
                 await client.invalidateQueries({ queryKey: ["run", bundle.run.id] });
               }}>Save label</button>
+            </div>
+            <p>{selected.description}</p>
+            <div className="text-[var(--muted)]">
+              <div>Initial: {humanize(selected.initial_state) || "—"}</div>
+              <div>Final: {humanize(selected.final_state) || "—"}</div>
             </div>
             <div className="flex gap-2">
               <select className="field" value={mergeDrop} onChange={(event) => setMergeDrop(event.target.value)}>

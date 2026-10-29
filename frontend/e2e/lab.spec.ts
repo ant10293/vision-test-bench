@@ -13,7 +13,7 @@ test("fixture laboratory can be inspected, corrected, compared, and exported", a
   await expect(page.getByText("Fixture — authored, not model output")).toBeVisible();
   await page.getByRole("link", { name: "Objects" }).click();
   await page.locator("button.panel").first().click();
-  const rename = page.locator("input[id^='rename-']");
+  const rename = page.locator("input[id^='label-']");
   await rename.fill("Corrected label");
   await page.getByRole("button", { name: "Save label" }).click();
   await expect(page.getByText("Corrected label").first()).toBeVisible();
