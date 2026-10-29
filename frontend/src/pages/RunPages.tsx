@@ -584,24 +584,6 @@ export function ObjectsPage() {
               <button className="btn" disabled={!mergeDrop} onClick={async () => { await api.mergeObjects(bundle.run.id, selected.local_id, mergeDrop); await client.invalidateQueries({ queryKey: ["run", bundle.run.id] }); }}>Merge</button>
             </div>
           </div>
-          <div className="flex flex-wrap items-start gap-3 lg:col-span-2">
-            {shots.map((image, index) => (
-              <button
-                key={image.id}
-                type="button"
-                className="block w-fit max-w-full border-0 bg-transparent p-0 text-left"
-                aria-label={shotLabel(image)}
-                onClick={() => setPreview(index)}
-              >
-                <ShotFrame
-                  src={image.url}
-                  confidence={image.confidence}
-                  imgClassName="h-64 w-auto max-w-full rounded bg-black object-contain"
-                />
-                <div className="mt-1 text-[10px] text-[var(--muted)]">{image.caption}</div>
-              </button>
-            ))}
-          </div>
           {frameCells.length > 0 && (
             <div className="min-w-0 lg:col-span-2">
               <div className="mb-2 text-xs uppercase tracking-wide text-[var(--muted)]">Timeline</div>
@@ -634,6 +616,27 @@ export function ObjectsPage() {
               </div>
             </div>
           )}
+          <div className="min-w-0 lg:col-span-2">
+            <div className="mb-2 text-xs uppercase tracking-wide text-[var(--muted)]">Dataset</div>
+            <div className="flex flex-wrap items-start gap-3">
+            {shots.map((image, index) => (
+              <button
+                key={image.id}
+                type="button"
+                className="block w-fit max-w-full border-0 bg-transparent p-0 text-left"
+                aria-label={shotLabel(image)}
+                onClick={() => setPreview(index)}
+              >
+                <ShotFrame
+                  src={image.url}
+                  confidence={image.confidence}
+                  imgClassName="h-64 w-auto max-w-full rounded bg-black object-contain"
+                />
+                <div className="mt-1 text-[10px] text-[var(--muted)]">{image.caption}</div>
+              </button>
+            ))}
+            </div>
+          </div>
           {preview != null && (
             <AssetPreview
               key={`${selected.local_id}:${preview}`}

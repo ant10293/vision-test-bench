@@ -90,6 +90,9 @@ describe("confidence on the object image grid", () => {
     fireEvent.click(screen.getByRole("button", { name: /Rod/ }));
 
     const strip = screen.getByRole("list", { name: "Rod timeline" });
+    const firstShot = screen.getByRole("button", { name: "View Initial · 0.00s, 42% confidence" });
+    expect(strip.compareDocumentPosition(firstShot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Dataset")).toBeInTheDocument();
     const cells = within(strip).getAllByRole("listitem");
     expect(cells).toHaveLength(3);
     expect(cells[0]).toHaveAttribute("aria-label", "Frame at 0:00.00");
