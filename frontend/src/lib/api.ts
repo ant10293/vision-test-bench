@@ -455,6 +455,19 @@ export function formatTime(seconds: number | null | undefined): string {
   return `${sign}${mins}:${rest.toFixed(2).padStart(5, "0")}`;
 }
 
+/** Run length as hours, minutes, and seconds, rounded to the nearest second. Zero units are omitted. */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || Number.isNaN(seconds)) return "—";
+  const total = Math.max(0, Math.round(seconds));
+  const parts = [
+    [Math.floor(total / 3600), "h"],
+    [Math.floor((total % 3600) / 60), "m"],
+    [total % 60, "s"],
+  ].filter(([value]) => value !== 0);
+  if (!parts.length) return "0s";
+  return parts.map(([value, unit]) => `${value}${unit}`).join(" ");
+}
+
 export function formatWhen(raw: string | null | undefined): string {
   const value = raw ?? "";
   const stamped = value && !/(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? `${value}Z` : value;

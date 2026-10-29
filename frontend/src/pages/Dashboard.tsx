@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { RunsTable } from "../components/RunsTable";
 import { Bone } from "../components/Skeleton";
-import { api, formatTime, formatUsd } from "../lib/api";
-import { humanize, humanizeText } from "../lib/humanize";
-import type { Dashboard, RunSummary } from "../lib/types";
+import { api, formatUsd } from "../lib/api";
+import { humanize } from "../lib/humanize";
+import type { Dashboard } from "../lib/types";
 import { AnalysisPending, RunAnalysis } from "./RunPages";
 
 const RECENT_PLACEHOLDERS = 4;
@@ -49,15 +50,17 @@ export function DashboardPage() {
             ))}
           </section>
           <section className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-            <div className="panel relative">
+            <div className="panel relative min-w-0">
               {/* Out of flow on large screens so the chart column sets the row height and this list scrolls inside it. */}
               <div className="flex max-h-[32rem] flex-col p-4 lg:absolute lg:inset-0 lg:max-h-none">
                 <h2 className="mb-3 shrink-0 text-sm font-medium">Recent experiments</h2>
-                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto" aria-busy={loading || undefined}>
-                  {(data ? data.recent_runs : Array.from({ length: RECENT_PLACEHOLDERS }, () => null)).map((run, index) => (
-                    <RecentRunRow key={run?.id ?? `pending-${index}`} run={run} />
-                  ))}
-                  {data && !data.recent_runs.length && <p className="text-sm text-[var(--muted)]">No experiments yet. Start one, or let the fixture laboratory finish seeding.</p>}
+                <div className="min-h-0 min-w-0 flex-1 overflow-auto" aria-busy={loading || undefined}>
+                  {loading && <p className="sr-only">Loading experiments</p>}
+                  {data && !data.recent_runs.length ? (
+                    <p className="text-sm text-[var(--muted)]">No experiments yet. Start one, or let the fixture laboratory finish seeding.</p>
+                  ) : (
+                    <RunsTable runs={data ? data.recent_runs : Array.from({ length: RECENT_PLACEHOLDERS }, () => null)} />
+                  )}
                 </div>
               </div>
             </div>
@@ -67,43 +70,6 @@ export function DashboardPage() {
       )}
       <LatestAnalysis />
     </div>
-  );
-}
-
-function RecentRunRow({ run }: { run: RunSummary | null }) {
-  const thumb = run?.thumbnail_url ? (
-    <img src={run.thumbnail_url} alt="" className="aspect-video w-full rounded object-cover" />
-  ) : (
-    <div className="aspect-video w-full overflow-hidden rounded bg-[#0d1016]">
-      {!run && <Bone className="bone-fill" />}
-    </div>
-  );
-  const body = (
-    <>
-      {thumb}
-      <div className="min-w-0">
-        <div className="truncate">{run ? humanizeText(run.name) : <Bone width="70%" />}</div>
-        <div className="text-xs text-[var(--muted)]">
-          {run ? (
-            <>
-              {humanize(run.provider_id)} · {humanize(run.model_id)} · {humanize(run.modality)} · {humanize(run.status)}
-              {run.fixture ? " · fixture" : ""} · {run.action_count} actions · {run.object_count} objects
-              · {formatTime(run.duration_sec)} · {formatUsd(run.cost_usd)}
-              {run.unpriced_calls > 0 ? ` · ${run.unpriced_calls} unpriced` : ""}
-            </>
-          ) : (
-            <Bone width="94%" />
-          )}
-        </div>
-      </div>
-    </>
-  );
-  const className = "grid grid-cols-[72px_1fr] gap-3 rounded-md border border-transparent p-2";
-  if (!run) return <div className={className} aria-hidden="true">{body}</div>;
-  return (
-    <Link to={`/runs/${run.id}`} className={`${className} hover:border-[var(--line)]`}>
-      {body}
-    </Link>
   );
 }
 

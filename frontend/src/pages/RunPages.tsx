@@ -4,12 +4,13 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { AssetPreview } from "../components/AssetPreview";
 import { ShotFrame } from "../components/ShotFrame";
 import { BeforeAfter } from "../components/BeforeAfter";
+import { RunsTable } from "../components/RunsTable";
 import { Bone } from "../components/Skeleton";
 import { PerceptionPanel } from "../components/PerceptionPanel";
 import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
 import { WorkflowGraph } from "../components/WorkflowGraph";
-import { api, evidenceClass, formatTime, formatUsd, formatWhen } from "../lib/api";
+import { api, evidenceClass, formatTime, formatUsd } from "../lib/api";
 import { formatConfidence } from "../lib/confidence";
 import { formatLogText } from "../lib/formatLog";
 import { actionPhrase, humanize, humanizeText, labeledId, nameObjects, objectLabels } from "../lib/humanize";
@@ -892,29 +893,30 @@ export function LogsPage() {
   );
 }
 
+const RUN_PLACEHOLDERS = 4;
+
 export function RunsPage() {
   const [status, setStatus] = useState("");
   const runs = useQuery({ queryKey: ["runs", status], queryFn: () => api.runs(status ? { status } : {}) });
+  const rows = runs.data;
+  const loading = rows == null && !runs.isError;
   return (
     <div className="space-y-3">
       <h1 className="text-2xl font-medium">Runs</h1>
-      <select className="field max-w-xs" value={status} onChange={(event) => setStatus(event.target.value)}>
+      <select className="field max-w-xs" aria-label="Filter by status" value={status} onChange={(event) => setStatus(event.target.value)}>
         <option value="">All statuses</option>
         {["pending", "running", "completed", "failed", "canceled"].map((item) => <option key={item} value={item}>{humanize(item)}</option>)}
       </select>
-      <div className="space-y-2">
-        {runs.data?.map((run) => {
-          const when = formatWhen(run.created_at);
-          return (
-            <a key={run.id} href={`/runs/${run.id}`} className="panel flex items-baseline justify-between gap-4 p-3 text-sm">
-              <span className="min-w-0">
-                {humanizeText(run.name)} · {humanize(run.status)} · {humanize(run.provider_id)}/{humanize(run.model_id)} · {formatUsd(run.cost_usd)} · {run.object_count} objects · {run.action_count} actions
-              </span>
-              {when && <time className="mono shrink-0 text-xs text-[var(--muted)]" dateTime={run.created_at}>{when}</time>}
-            </a>
-          );
-        })}
-      </div>
+      {runs.isError && <p className="text-sm text-[var(--rose)]">{(runs.error as Error).message}</p>}
+      {rows && !rows.length && (
+        <p className="text-sm text-[var(--muted)]">{status ? "No runs with this status." : "No runs yet."}</p>
+      )}
+      {(loading || (rows && rows.length > 0)) && (
+        <div className="panel overflow-x-auto" aria-busy={loading || undefined}>
+          {loading && <p className="sr-only">Loading runs</p>}
+          <RunsTable runs={rows ?? Array.from({ length: RUN_PLACEHOLDERS }, () => null)} />
+        </div>
+      )}
     </div>
   );
 }

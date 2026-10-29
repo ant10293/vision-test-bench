@@ -9,7 +9,9 @@ A box the model scores under 70% is rejected. A box with no score is still eligi
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -32,6 +34,16 @@ from app.services.storage import data_path
 logger = logging.getLogger(__name__)
 
 MAX_OBJECTS = 8
+
+
+@dataclass(frozen=True)
+class _Still:
+    """A frame's path and size, copied before any locate call commits."""
+
+    timestamp: float
+    path: Path
+    width: int
+    height: int
 _SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -76,7 +88,13 @@ async def locate_missing(
     document: AnalysisDocument,
     frames: list[FrameAsset],
 ) -> tuple[AnalysisDocument, dict]:
-    """Fill missing boxes for parts that already have a stable extent. Failures stay in the report."""
+    """Fill missing boxes for parts that already have a stable extent. Failures stay in the report.
+
+    The model calls overlap. Each one reads this document and does not see another
+    call's boxes. The boxes are applied in target order, so a later part still
+    yields when its box lands on an earlier one. A call that fails does not spend
+    a budget slot. A call that returns does, including one that adds no box.
+    """
     if run.provider_id in {"fixture", "deterministic", "manual_json"} or not frames:
         return document, {"skipped": "no vision provider"}
     transport = run_transport(run.provider_id, run.config_json)
@@ -89,20 +107,78 @@ async def locate_missing(
     sent = session.query(ModelRequestRow).filter(ModelRequestRow.run_id == run.id).count()
     budget = int(config.get("max_requests") or 12)
     targets = _targets(document)[:MAX_OBJECTS]
-    located: list[str] = []
-    errors: list[str] = []
-    for object_id, times in targets:
-        if sent >= budget:
-            errors.append(f"{object_id}: request budget reached")
-            break
-        try:
-            document = await _one(session, run, document, frames, object_id, times, secret, transport)
-            located.append(object_id)
-            sent += 1
-        except Exception as exc:
-            logger.warning("locate failed for %s: %s", object_id, exc)
-            errors.append(f"{object_id}: {exc}")
+    stills = _stills(frames)
+    provider = get_provider(run.provider_id, session)
+    gate = asyncio.Lock()
+    found_boxes: dict[str, list] = {}
+    failures: dict[str, BaseException] = {}
+    pending = list(targets)
+    in_flight: set[asyncio.Task] = set()
+    run_id = run.id
+
+    def start_ready() -> None:
+        while pending and sent + len(in_flight) < budget:
+            object_id, times = pending.pop(0)
+            in_flight.add(
+                asyncio.create_task(
+                    _locate_object(
+                        session,
+                        gate,
+                        provider,
+                        run,
+                        run_id,
+                        document,
+                        stills,
+                        object_id,
+                        times,
+                        secret,
+                        transport,
+                    )
+                )
+            )
+
+    try:
+        while True:
+            start_ready()
+            if not in_flight:
+                break
+            done, in_flight = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                object_id, boxes, error = task.result()
+                if error is None:
+                    found_boxes[object_id] = boxes
+                    sent += 1
+                else:
+                    logger.warning("locate failed for %s: %s", object_id, error)
+                    failures[object_id] = error
+    finally:
+        for task in in_flight:
+            task.cancel()
+        if in_flight:
+            await asyncio.gather(*in_flight, return_exceptions=True)
+
+    errors = [f"{object_id}: {failures[object_id]}" for object_id, _times in targets if object_id in failures]
+    if pending and sent >= budget:
+        errors.append(f"{pending[0][0]}: request budget reached")
+    for object_id, _times in targets:
+        boxes = found_boxes.get(object_id)
+        if boxes is None:
+            continue
+        document = apply_located(document, object_id, boxes)
+    located = [object_id for object_id, _times in targets if object_id in found_boxes]
     return document, {"located": located, "errors": errors}
+
+
+def _stills(frames: list[FrameAsset]) -> list[_Still]:
+    return [
+        _Still(
+            timestamp=float(frame.timestamp),
+            path=_stored(frame),
+            width=int(frame.width or 0),
+            height=int(frame.height or 0),
+        )
+        for frame in frames
+    ]
 
 
 def _targets(document: AnalysisDocument) -> list[tuple[str, list[float]]]:
@@ -125,33 +201,68 @@ def _targets(document: AnalysisDocument) -> list[tuple[str, list[float]]]:
     return [(object_id, times) for _priority, object_id, times in ranked]
 
 
-async def _one(session, run, document, frames, object_id, times, secret, transport: str) -> AnalysisDocument:
+async def _locate_object(
+    session,
+    gate: asyncio.Lock,
+    provider,
+    run,
+    run_id: str,
+    document,
+    stills: list["_Still"],
+    object_id: str,
+    times: list[float],
+    secret: str,
+    transport: str,
+) -> tuple[str, list, BaseException | None]:
+    try:
+        boxes = await _lookup(
+            session, gate, provider, run, run_id, document, stills, object_id, times, secret, transport
+        )
+    except Exception as exc:
+        return object_id, [], exc
+    return object_id, boxes, None
+
+
+async def _lookup(
+    session,
+    gate: asyncio.Lock,
+    provider,
+    run,
+    run_id: str,
+    document,
+    stills: list["_Still"],
+    object_id: str,
+    times: list[float],
+    secret: str,
+    transport: str,
+) -> list:
+    """Ask for one part. The database is touched only while the gate is held."""
     reference = reference_time(document.observations, object_id)
     if reference is None or reference.bbox is None:
-        return document
-    source = _frame_at(frames, reference.timestamp)
+        return []
+    source = _frame_at(stills, reference.timestamp)
     if source is None:
         raise RuntimeError(f"no stored frame near {reference.timestamp:.3f}s")
-    image = cv2.imread(str(_stored(source)))
+    image = cv2.imread(str(source.path))
     if image is None:
         raise RuntimeError("reference frame could not be read")
     crop = _crop(image, reference.bbox)
     if crop.size == 0:
         raise RuntimeError("reference crop was empty")
-    dest = data_path("runs", run.id, "locate", f"{object_id}.jpg")
+    dest = data_path("runs", run_id, "locate", f"{object_id}.jpg")
     dest.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(dest), crop):
         raise RuntimeError("reference crop could not be stored")
     selected: list[FrameInput] = [FrameInput(reference.timestamp, dest)]
     search_times: list[float] = []
     for timestamp in times:
-        frame = _frame_at(frames, timestamp)
+        frame = _frame_at(stills, timestamp)
         if frame is None:
             continue
-        selected.append(FrameInput(frame.timestamp, _stored(frame)))
+        selected.append(FrameInput(frame.timestamp, frame.path))
         search_times.append(frame.timestamp)
     if len(selected) < 2:
-        return document
+        return []
     label = next((obj.label for obj in document.objects if obj.local_id == object_id), object_id)
     listed = ", ".join(f"{timestamp:.3f}s" for timestamp in search_times)
     user = (
@@ -159,57 +270,59 @@ async def _one(session, run, document, frames, object_id, times, secret, transpo
         f"The first image is the reference crop from {reference.timestamp:.0f}s, not a frame to annotate. "
         f"Return a tight box for this part on the full frames at {listed}, or absent when it is fully hidden."
     )
-    provider = get_provider(run.provider_id, session)
-    config = run.config_json or {}
-    model_id, requested = model_for_call(session, run)
-    request = GenerationRequest(
-        model_id=model_id,
-        system_prompt=LOCATE_PART,
-        user_prompt=user,
-        frames=selected,
-        modality="sampled_frames",
-        json_schema=_SCHEMA,
-        temperature=config.get("temperature"),
-        reasoning_effort=config.get("reasoning_effort"),
-        image_detail=config.get("image_detail") or "high",
-        timeout_s=float(config.get("timeout_s") or 180),
-        metadata={"transport": transport} if run.provider_id in {"openai", "anthropic", "cursor"} else {},
-    )
-    row = open_provider_call(
-        session,
-        run,
-        stage="locate",
-        provider_id=run.provider_id,
-        model_id=model_id,
-        modality="sampled_frames",
-        prompt_version_id=run.prompt_version_id,
-        parameters={
-            "object_id": object_id,
-            "reference_timestamp": reference.timestamp,
-            **({"requested_model_id": requested} if requested != model_id else {}),
-        },
-        frame_timestamps=search_times,
-    )
-    session.commit()
+    async with gate:
+        config = run.config_json or {}
+        model_id, requested = model_for_call(session, run)
+        request = GenerationRequest(
+            model_id=model_id,
+            system_prompt=LOCATE_PART,
+            user_prompt=user,
+            frames=selected,
+            modality="sampled_frames",
+            json_schema=_SCHEMA,
+            temperature=config.get("temperature"),
+            reasoning_effort=config.get("reasoning_effort"),
+            image_detail=config.get("image_detail") or "high",
+            timeout_s=float(config.get("timeout_s") or 180),
+            metadata={"transport": transport} if run.provider_id in {"openai", "anthropic", "cursor"} else {},
+        )
+        row = open_provider_call(
+            session,
+            run,
+            stage="locate",
+            provider_id=run.provider_id,
+            model_id=model_id,
+            modality="sampled_frames",
+            prompt_version_id=run.prompt_version_id,
+            parameters={
+                "object_id": object_id,
+                "reference_timestamp": reference.timestamp,
+                **({"requested_model_id": requested} if requested != model_id else {}),
+            },
+            frame_timestamps=search_times,
+        )
+        session.commit()
     try:
         response = await provider.generate(secret, request)
     except Exception as exc:
-        fail_provider_call(row, exc)
-        session.commit()
+        async with gate:
+            fail_provider_call(row, exc)
+            session.commit()
         raise
-    finish_provider_call(session, run, row, response)
-    session.commit()
+    async with gate:
+        finish_provider_call(session, run, row, response)
+        session.commit()
     sizes = {
         round(float(frame.timestamp), 3): (int(frame.width), int(frame.height))
-        for frame in frames
+        for frame in stills
         if frame.width and frame.height
     }
     found = _parse(response.text, set(search_times), sizes)
-    return apply_located(document, object_id, _on_the_same_surface(crop, frames, found))
+    return _on_the_same_surface(crop, stills, found)
 
 
 def _on_the_same_surface(
-    reference, frames: list[FrameAsset], found: list[tuple[float, BBox | None, str, float | None]]
+    reference, frames: list[_Still], found: list[tuple[float, BBox | None, str, float | None]]
 ):
     """Drop a follow-up box whose pixels are a different surface from the reference crop."""
     kept = []
@@ -218,7 +331,7 @@ def _on_the_same_surface(
             kept.append((timestamp, bbox, visibility, None))
             continue
         frame = _frame_at(frames, timestamp)
-        image = cv2.imread(str(_stored(frame))) if frame is not None else None
+        image = cv2.imread(str(frame.path)) if frame is not None else None
         candidate = _crop(image, bbox, pad=0.0) if image is not None else None
         if candidate is not None and candidate.size and same_surface(reference, candidate):
             kept.append((timestamp, bbox, visibility, confidence))
@@ -305,7 +418,7 @@ def _frame_size(sizes: dict[float, tuple[int, int]], timestamp: float) -> tuple[
     return sizes[nearest]
 
 
-def _frame_at(frames: list[FrameAsset], timestamp: float) -> FrameAsset | None:
+def _frame_at(frames: list[_Still], timestamp: float) -> _Still | None:
     best = None
     best_dt = 0.2
     for frame in frames:
