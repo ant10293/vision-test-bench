@@ -11,7 +11,7 @@ import { WorkflowGraph } from "../components/WorkflowGraph";
 import { api, evidenceClass, formatTime, formatUsd, formatWhen } from "../lib/api";
 import { formatConfidence } from "../lib/confidence";
 import { formatLogText } from "../lib/formatLog";
-import { humanize, humanizeText, labeledId, nameObjects, objectLabels } from "../lib/humanize";
+import { actionPhrase, humanize, humanizeText, labeledId, nameObjects, objectLabels } from "../lib/humanize";
 import { objectScene } from "../lib/sceneSlice";
 import { BundleContext, useBundle } from "../lib/bundleContext";
 import type { Bundle, Observation } from "../lib/types";
@@ -26,7 +26,8 @@ const ANALYSIS_TABS = ["", "objects", "states", "workflow", "steps", "pipeline",
 const OBJECT_GRID = "grid gap-3 sm:grid-cols-2 xl:grid-cols-4";
 const OBJECT_PLACEHOLDERS = 4;
 const INSPECT_LAYOUT = "grid min-h-[70vh] min-w-0 gap-3 xl:grid-cols-[280px_minmax(0,1fr)_320px]";
-const INSPECT_SIDE = "panel max-h-[78vh] space-y-3 overflow-auto p-3";
+const INSPECT_SIDE = "panel flex max-h-[78vh] min-h-0 flex-col gap-3 overflow-hidden p-3";
+const ACTION_LIST = "min-h-0 flex-1 space-y-1 overflow-y-auto";
 const INSPECT_STAGE = "panel min-w-0 p-3";
 const INSPECT_DETAIL = "panel max-h-[78vh] space-y-3 overflow-auto p-3 text-sm";
 const ACTION_PLACEHOLDERS = 5;
@@ -306,7 +307,7 @@ function InspectSkeleton() {
     <div className={INSPECT_LAYOUT}>
       <section className={INSPECT_SIDE}>
         <Timeline />
-        <div className="space-y-1" aria-hidden="true">
+        <div className={ACTION_LIST} aria-hidden="true">
           {Array.from({ length: ACTION_PLACEHOLDERS }, (_, index) => (
             <div key={index} className="block w-full rounded-md px-2 py-1 text-left text-sm">
               <Bone width="78%" />
@@ -399,13 +400,14 @@ function RunActions({ bundle, embedded }: { bundle: Bundle | null; embedded: boo
 
 export function InspectPage() {
   const bundle = useBundle();
+  const labels = objectLabels(bundle.objects);
   const actionId = useInspector((state) => state.selectedAction);
   const action = bundle.actions.find((item) => item.local_id === actionId) ?? bundle.actions[0];
   return (
     <div className={INSPECT_LAYOUT}>
       <section className={INSPECT_SIDE}>
         <Timeline bundle={bundle} />
-        <div className="space-y-1">
+        <div className={ACTION_LIST}>
           {bundle.actions.map((item, index) => (
             <button
               key={item.id}
@@ -416,7 +418,7 @@ export function InspectPage() {
                 useInspector.getState().setLoop({ start: item.start, end: item.end });
               }}
             >
-              <div>{index + 1}. {humanize(item.action_type)} <span className="text-[var(--muted)]">{humanize(item.outcome)}</span></div>
+              <div>{index + 1}. {actionPhrase(item, labels)} <span className="text-[var(--muted)]">{humanize(item.outcome)}</span></div>
               <div className="mono text-[10px] text-[var(--muted)]">{formatTime(item.start)}–{formatTime(item.end)}</div>
             </button>
           ))}
@@ -702,9 +704,9 @@ export function StepsPage() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
+        <span className="mr-1 text-sm tabular-nums text-[var(--muted)]">{index + 1} / {bundle.steps.length}</span>
         <button className="btn" onClick={() => setIndex((value) => Math.max(0, value - 1))}>Previous</button>
         <button className="btn" onClick={() => setIndex((value) => Math.min(bundle.steps.length - 1, value + 1))}>Next</button>
-        <span className="text-sm text-[var(--muted)]">{index + 1} / {bundle.steps.length}</span>
       </div>
       <h2 className="text-xl">{step.number}. {nameObjects(step.name, labels)}</h2>
       <p>{nameObjects(step.expected_action, labels)}</p>

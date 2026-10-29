@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { humanize, humanizeText, labeledId, nameObjects } from "../lib/humanize";
+import { actionPhrase, humanize, humanizeText, labeledId, nameObjects } from "../lib/humanize";
 
 describe("humanize", () => {
   it("splits snake_case into a sentence-style label", () => {
@@ -78,6 +78,17 @@ describe("humanize", () => {
     );
     expect(nameObjects("Pick up Object_3.", labels)).toBe("Pick up Object 3.");
     expect(nameObjects("Both pieces are held.", labels)).toBe("Both pieces are held.");
+  });
+
+  it("names the parts on an action so two lifts are not the same words", () => {
+    const labels = new Map([
+      ["Object_1", "Light-gray molded body"],
+      ["Object_7", "Small clear round part"],
+    ]);
+    expect(actionPhrase({ action_type: "pick_up", object_local_ids: ["Object_1", "Object_7"] }, labels)).toBe(
+      "Pick up · Light-gray molded body, Small clear round part",
+    );
+    expect(actionPhrase({ action_type: "rotate", object_local_ids: [] }, labels)).toBe("Rotate");
   });
 
   it("leaves prose, JSON, and uuids alone", () => {

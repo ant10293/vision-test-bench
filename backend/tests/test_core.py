@@ -184,6 +184,7 @@ def test_unknown_action_is_in_the_vocabulary_and_approach_is_offered():
     assert "unknown" in RECOGNIZED_ACTIONS
     assert "approach" in ACTIONS
     assert "say unknown rather than forcing one" in ACTIONS
+    assert "one start and one end is one action" in ACTIONS
     assert "inserted state" in ACTIONS
     assert "Do not paraphrase that action as handle, bring, or inspect." in WORKFLOW
     assert "Do not keep an id alive" in FOUNDATIONAL

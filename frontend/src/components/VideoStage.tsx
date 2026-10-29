@@ -1,8 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { Eye, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { AssetPreview } from "./AssetPreview";
 import { api } from "../lib/api";
 import type { Bundle, TrackPointSample } from "../lib/types";
-import { observationsAt, tracksAt } from "../lib/analysis";
+import { frameObjectStills, observationsAt, tracksAt } from "../lib/analysis";
 import { formatConfidence } from "../lib/confidence";
 import { humanize, labeledId } from "../lib/humanize";
 import { panStage, stageZoomByWheel, clampStageView, type StageView } from "../lib/stageZoom";
@@ -39,6 +41,10 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
   const [content, setContent] = useState({ x: 0, y: 0, w: 1, h: 1, vw: 640, vh: 360 });
   contentRef.current = content;
   const [fontReady, setFontReady] = useState(false);
+  const [objectsOpen, setObjectsOpen] = useState(true);
+  const [preview, setPreview] = useState<number | null>(null);
+  const previewRef = useRef<number | null>(null);
+  previewRef.current = preview;
   const commitView = useCallback((next: StageView) => {
     viewRef.current = next;
     setZoom(next.zoom);
@@ -75,6 +81,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      if (previewRef.current != null) return;
       const target = event.target as HTMLElement | null;
       if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       if (event.code === "Space") {
@@ -112,7 +119,9 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
     };
   }, []);
 
-  const visible = overlay ? observationsAt(bundle, time) : [];
+  const inFrame = observationsAt(bundle, time);
+  const visible = overlay ? inFrame : [];
+  const stills = frameObjectStills(bundle, time);
   const trackHits = tracksAt(bundle.tracks?.points ?? [], time);
   const showTracks = layers.tracks || layers.trajectory || layers.uncertain;
   const src = bundle.video ? bundle.video.playback_url : "";
@@ -304,6 +313,43 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
             })}
           </svg>
         )}
+        {stills.length > 0 && (
+          <div
+            className="frame-objects"
+            onPointerDown={(event) => event.stopPropagation()}
+            onWheel={(event) => event.stopPropagation()}
+          >
+            <div className="frame-objects-head">
+              <div className="frame-objects-title">Objects in frame</div>
+              <button
+                type="button"
+                className="frame-objects-toggle"
+                aria-expanded={objectsOpen}
+                aria-label={objectsOpen ? "Hide objects in frame" : "Show objects in frame"}
+                onClick={() => setObjectsOpen((open) => !open)}
+              >
+                {objectsOpen ? <Eye size={13} strokeWidth={1.75} /> : <EyeOff size={13} strokeWidth={1.75} />}
+              </button>
+            </div>
+            {objectsOpen && (
+              <div className="frame-objects-row">
+                {stills.map((still, index) => (
+                  <button
+                    key={still.id}
+                    type="button"
+                    className="frame-object"
+                    title={still.label}
+                    aria-label={`View ${still.label}`}
+                    onClick={() => setPreview(index)}
+                  >
+                    <img src={still.url} alt={still.label} style={{ borderColor: still.color }} />
+                    <span>{still.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {showTracks && (
           <svg
             className="pointer-events-none absolute"
@@ -354,6 +400,14 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
         <span className="mono text-[var(--muted)]">{time.toFixed(2)}s</span>
         <span className="text-xs text-[var(--muted)]">Space play · arrows step · f fullscreen · scroll over a point to zoom · drag to pan</span>
       </div>
+      {preview != null && stills[preview] && (
+        <AssetPreview
+          key={stills[preview].id}
+          images={stills.map((still) => ({ src: still.url, filename: still.label }))}
+          startIndex={preview}
+          onClose={() => setPreview(null)}
+        />
+      )}
       {seedError && <p className="text-xs text-[var(--rose)]">{seedError}</p>}
       {bundle.tracks?.truncated && <p className="text-xs text-[var(--muted)]">Showing the first {bundle.tracks.points.length} of {bundle.tracks.total} track points.</p>}
     </div>

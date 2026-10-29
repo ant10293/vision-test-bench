@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { formatTime } from "../lib/api";
 import { Bone } from "./Skeleton";
-import { humanize, nameObjects, objectLabels } from "../lib/humanize";
+import { actionPhrase, humanize, nameObjects, objectLabels } from "../lib/humanize";
 import type { Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
 
@@ -12,34 +12,37 @@ export function Timeline({ bundle = null }: { bundle?: Bundle | null }) {
   const { time, setTime, selectAction, selectStep, selectObject, selectedStep } = useInspector();
 
   return (
-    <div className="space-y-1">
-      <div className="relative">
-        {bundle ? (
-          <input
-            aria-label="Seek"
-            className="seek"
-            type="range"
-            min={0}
-            max={duration}
-            step={0.01}
-            value={Math.min(time, duration)}
-            onChange={(event) => setTime(Number(event.target.value))}
-          />
-        ) : (
-          <div className="h-4">
-            <Bone className="bone-fill" />
-          </div>
+    <div className="shrink-0">
+      <div className="space-y-1">
+        <div className="relative">
+          {bundle ? (
+            <input
+              aria-label="Seek"
+              className="seek"
+              type="range"
+              min={0}
+              max={duration}
+              step={0.01}
+              value={Math.min(time, duration)}
+              onChange={(event) => setTime(Number(event.target.value))}
+            />
+          ) : (
+            <div className="h-4">
+              <Bone className="bone-fill" />
+            </div>
+          )}
+        </div>
+        {TRACKS.map((track) =>
+          bundle ? (
+            <Track key={track} name={track} duration={duration} bundle={bundle} selectedStep={selectedStep} onSeek={setTime} onAction={selectAction} onStep={selectStep} onObject={selectObject} />
+          ) : (
+            <TrackLane key={track} name={track}>
+              <Bone className="bone-fill" />
+            </TrackLane>
+          ),
         )}
       </div>
-      {TRACKS.map((track) =>
-        bundle ? (
-          <Track key={track} name={track} duration={duration} bundle={bundle} selectedStep={selectedStep} onSeek={setTime} onAction={selectAction} onStep={selectStep} onObject={selectObject} />
-        ) : (
-          <TrackLane key={track} name={track}>
-            <Bone className="bone-fill" />
-          </TrackLane>
-        ),
-      )}
+      <hr className="-mx-3 mt-3 h-px border-0 bg-[var(--line)]" />
     </div>
   );
 }
@@ -126,11 +129,12 @@ function segments(name: (typeof TRACKS)[number], bundle: Bundle): Segment[] {
   }
   if (name === "tracks") return trackSegments(bundle);
   if (name === "actions") {
+    const labels = objectLabels(bundle.objects);
     return bundle.actions.map((action) => ({
       key: action.id,
       start: action.start,
       end: Math.max(action.end, action.start + 0.05),
-      label: `${humanize(action.action_type)} · ${humanize(action.outcome)}`,
+      label: `${actionPhrase(action, labels)} · ${humanize(action.outcome)}`,
       color: action.outcome === "completed" ? "#1f6b4a" : action.outcome === "attempted" ? "#8a6a22" : "#5c3a55",
       actionId: action.local_id,
     }));

@@ -60,6 +60,21 @@ function rewriteToken(part: string): string {
 
 const OBJECT_REF = /(?<![A-Za-z0-9_])Object_\d+(?:\/Object_\d+)*(?:'s)?(?![A-Za-z0-9_])/g;
 
+/** Verb plus the parts it acts on, so two lifts in one second are not the same row. */
+export function actionPhrase(
+  action: { action_type: string; object_local_ids?: readonly string[] },
+  labels: ReadonlyMap<string, string>,
+): string {
+  const names = (action.object_local_ids ?? [])
+    .map((id) => {
+      const label = labels.get(id)?.trim();
+      return label ? humanizeText(label) : humanize(id);
+    })
+    .filter((name, index, all) => name && all.indexOf(name) === index);
+  const verb = humanize(action.action_type);
+  return names.length ? `${verb} · ${names.join(", ")}` : verb;
+}
+
 export function objectLabels(objects: readonly { local_id: string; label: string }[]): Map<string, string> {
   return new Map(objects.map((object) => [object.local_id, object.label]));
 }

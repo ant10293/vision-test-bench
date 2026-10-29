@@ -77,6 +77,8 @@ rotate, insert, remove, attach, detach, align, adjust, push, pull, twist, releas
 when they fit, and say unknown rather than forcing one.
 Each action needs start, end, actor or hand when visible, object ids, initial state, final state,
 outcome (completed, attempted, failed, or unknown), uncertainty from 0 to 1, and evidence.
+One verb with one start and one end is one action. When both hands lift parts during that same
+interval, list every object on that action instead of repeating the verb.
 Insert means a free part meets a host and its separate visible extent then shrinks or ends while the
 part stays with the host. The remainder is often hidden inside the host. That hidden remainder is the
 inserted state, so do not call the action an approach or leave it unconfirmed merely because the free

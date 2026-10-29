@@ -1,4 +1,39 @@
-import type { Bundle, Observation, TrackPointSample } from "./types";
+import { humanize } from "./humanize";
+import type { Bundle, LabObject, Observation, TrackPointSample } from "./types";
+
+export type FrameObjectStill = {
+  id: string;
+  url: string;
+  label: string;
+  color: string;
+};
+
+/** Crops of the labeled objects visible at the playhead, one still per object. */
+export function frameObjectStills(bundle: Bundle, time: number): FrameObjectStill[] {
+  return observationsAt(bundle, time).flatMap((observation) => {
+    const object = bundle.objects.find((item) => item.local_id === observation.object_local_id);
+    const url = stillUrl(object, observation);
+    if (!url) return [];
+    const name = object?.label?.trim() ? humanize(object.label) : humanize(observation.object_local_id);
+    return [{
+      id: observation.id,
+      url,
+      label: name,
+      color: object?.color ?? "#7EB6FF",
+    }];
+  });
+}
+
+function stillUrl(object: LabObject | undefined, observation: Observation): string {
+  if (observation.frame_id) return `/api/media/observations/${observation.id}/crop`;
+  const images = object?.images ?? [];
+  const stills = images.filter((image) => image.url && image.kind !== "boxed" && !image.kind.endsWith("_boxed"));
+  const nearest = stills.reduce<(typeof stills)[number] | undefined>((best, image) => {
+    if (!best) return image;
+    return Math.abs(image.timestamp - observation.timestamp) < Math.abs(best.timestamp - observation.timestamp) ? image : best;
+  }, undefined);
+  return nearest?.url || object?.primary_image_url || "";
+}
 
 export function observationsAt(bundle: Bundle, time: number, window = 0.45): Observation[] {
   const chosen: Observation[] = [];

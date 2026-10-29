@@ -20,6 +20,7 @@ from app.perception.continuity import reconcile_identity
 from app.perception.roster import drop_contained_objects
 from app.perception.ground import apply_perception
 from app.perception.types import TrackingCancelled
+from app.pipeline.actions import collapse_repeated_actions
 from app.pipeline.infer import (
     BudgetExceeded,
     StageSkipped,
@@ -548,6 +549,7 @@ async def _ground(session, run, stage, document: AnalysisDocument, frames: list[
             document = reconcile_identity(document)
             document = drop_contained_objects(document)
         document = apply_assembly(document)
+    document = collapse_repeated_actions(document)
     return document, locate_info
 
 

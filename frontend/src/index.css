@@ -761,6 +761,87 @@ body.is-sorting * { cursor: grabbing; }
   cursor: grabbing;
 }
 
+/* Labeled crops for whatever the playhead is showing, pinned to the image corner. */
+.frame-objects {
+  position: absolute;
+  z-index: 3;
+  left: 0.5rem;
+  bottom: 0.5rem;
+  max-width: calc(100% - 1rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.35rem 0.45rem 0.4rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, #090b10 78%, transparent);
+}
+.frame-objects-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.frame-objects-title {
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--muted);
+}
+.frame-objects-toggle {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  line-height: 0;
+}
+.frame-objects-toggle:hover {
+  color: var(--text);
+}
+.frame-objects-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.4rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.frame-object {
+  display: flex;
+  width: 3rem;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: center;
+}
+.frame-object img {
+  display: block;
+  height: 3rem;
+  width: 3rem;
+  object-fit: cover;
+  object-position: center;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
+.frame-object span {
+  display: block;
+  max-width: 3rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--text);
+}
+
 /* Height follows the surrounding type, so a bone stays the size of the text it replaces. */
 .bone {
   display: inline-block;
