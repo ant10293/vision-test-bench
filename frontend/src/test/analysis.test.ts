@@ -49,7 +49,7 @@ describe("analysis helpers", () => {
       frames: [],
     } as unknown as Bundle;
     expect(frameObjectStills(scene, 1.1)).toEqual([
-      { id: "near", url: "/api/media/observations/near/crop", label: "Rod", color: "#7EB6FF" },
+      { id: "near", url: "/api/media/observations/near/crop", label: "Rod", color: "#7EB6FF", confidence: null },
     ]);
   });
 
@@ -60,7 +60,7 @@ describe("analysis helpers", () => {
       objects: [{ ...bundle.objects[0], primary_image_url: "/cup.png", images: [] }],
     } as unknown as Bundle;
     expect(frameObjectStills(withStill, 1)).toEqual([
-      { id: "a", url: "/cup.png", label: "Cup", color: "#ff0000" },
+      { id: "a", url: "/cup.png", label: "Cup", color: "#ff0000", confidence: null },
     ]);
   });
 

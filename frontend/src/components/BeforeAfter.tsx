@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { frameNear } from "../lib/analysis";
 import type { Bundle, LabAction } from "../lib/types";
+import { ZoomStepper } from "./ZoomStepper";
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 3;
@@ -17,26 +18,12 @@ export function BeforeAfter({ bundle, action }: { bundle: Bundle; action: LabAct
         <Pane title="After" url={after?.url} note={`${after?.timestamp.toFixed(2) ?? "?"}s`} zoom={zoom} />
       </div>
       <div className="flex justify-center">
-        <div className="inline-flex overflow-hidden rounded-md border border-[var(--line)] bg-[var(--panel-2)] text-sm" role="group" aria-label="Zoom">
-          <button
-            type="button"
-            className="px-3.5 py-1 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label="Zoom out"
-            disabled={zoom <= MIN_ZOOM}
-            onClick={() => setZoom((value) => Math.max(MIN_ZOOM, value - ZOOM_STEP))}
-          >
-            −
-          </button>
-          <button
-            type="button"
-            className="border-l border-[var(--line)] px-3.5 py-1 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label="Zoom in"
-            disabled={zoom >= MAX_ZOOM}
-            onClick={() => setZoom((value) => Math.min(MAX_ZOOM, value + ZOOM_STEP))}
-          >
-            +
-          </button>
-        </div>
+        <ZoomStepper
+          canZoomOut={zoom > MIN_ZOOM}
+          canZoomIn={zoom < MAX_ZOOM}
+          onZoomOut={() => setZoom((value) => Math.max(MIN_ZOOM, value - ZOOM_STEP))}
+          onZoomIn={() => setZoom((value) => Math.min(MAX_ZOOM, value + ZOOM_STEP))}
+        />
       </div>
       <p className="text-xs text-[var(--muted)]">Different timestamps do not by themselves prove the state changed.</p>
     </div>

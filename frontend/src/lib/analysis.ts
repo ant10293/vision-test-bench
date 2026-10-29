@@ -6,6 +6,7 @@ export type FrameObjectStill = {
   url: string;
   label: string;
   color: string;
+  confidence: number | null;
 };
 
 /** Crops of the labeled objects visible at the playhead, one still per object. */
@@ -20,6 +21,7 @@ export function frameObjectStills(bundle: Bundle, time: number): FrameObjectStil
       url,
       label: name,
       color: object?.color ?? "#7EB6FF",
+      confidence: observation.confidence ?? null,
     }];
   });
 }

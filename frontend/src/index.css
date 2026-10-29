@@ -16,6 +16,7 @@
   --amber: #e6b450;
   --rose: #e06c75;
   --blue: #7eb6ff;
+  --overlay: color-mix(in srgb, var(--bg) 78%, transparent);
   font-family: "IBM Plex Sans", sans-serif;
   background: var(--bg);
   color: var(--text);
@@ -688,6 +689,9 @@ body.is-sorting * { cursor: grabbing; }
   overflow: auto;
   padding: 3rem 4rem;
 }
+.asset-preview-viewport .shot-frame {
+  transition: transform 0.15s ease;
+}
 .asset-preview-img {
   max-width: 90vw;
   max-height: 85vh;
@@ -760,6 +764,15 @@ body.is-sorting * { cursor: grabbing; }
 .stage-frame.is-panning video {
   cursor: grabbing;
 }
+.stage-zoom {
+  position: absolute;
+  z-index: 4;
+  right: 0.5rem;
+  bottom: 0.5rem;
+}
+.stage-zoom [role="group"] {
+  background: var(--overlay);
+}
 
 /* Labeled crops for whatever the playhead is showing, pinned to the image corner. */
 .frame-objects {
@@ -767,13 +780,13 @@ body.is-sorting * { cursor: grabbing; }
   z-index: 3;
   left: 0.5rem;
   bottom: 0.5rem;
-  max-width: calc(100% - 1rem);
+  max-width: calc(100% - 6.5rem);
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
   padding: 0.35rem 0.45rem 0.4rem;
   border-radius: 8px;
-  background: color-mix(in srgb, #090b10 78%, transparent);
+  background: var(--overlay);
 }
 .frame-objects-head {
   display: flex;

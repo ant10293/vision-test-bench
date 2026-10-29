@@ -121,6 +121,9 @@ describe("objects in the current frame", () => {
     fireEvent.click(frame.getByRole("button", { name: "View Rod" }));
     const dialog = screen.getByRole("dialog", { name: "Rod" });
     expect(dialog.querySelector("img")).toHaveAttribute("src", "/api/media/observations/obs-1/crop");
+    const score = within(dialog).getByText("42%");
+    expect(score).toHaveClass("shot-score");
+    expect(score.parentElement).toHaveClass("shot-frame");
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 

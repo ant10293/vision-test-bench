@@ -7,11 +7,13 @@ import type { Bundle, TrackPointSample } from "../lib/types";
 import { frameObjectStills, observationsAt, tracksAt } from "../lib/analysis";
 import { formatConfidence } from "../lib/confidence";
 import { humanize, labeledId } from "../lib/humanize";
-import { panStage, stageZoomByWheel, clampStageView, type StageView } from "../lib/stageZoom";
+import { panStage, stageViewAt, stageZoomByWheel, clampStageView, MAX_STAGE_ZOOM, MIN_STAGE_ZOOM, type StageView } from "../lib/stageZoom";
+import { ZoomStepper } from "./ZoomStepper";
 import { labelSpan, wrapLines } from "../lib/wrapText";
 import { useInspector } from "../stores/ui";
 
 const LABEL_SIZE = 14;
+const STAGE_ZOOM_STEP = 0.25;
 const LABEL_LINE = LABEL_SIZE * 1.2;
 const LABEL_FONT = `${LABEL_SIZE}px "IBM Plex Sans", sans-serif`;
 const CONFIDENCE_INSET = 4;
@@ -234,6 +236,24 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
     setPanning(false);
   }
 
+  function stepZoom(direction: number) {
+    const frame = boxRef.current;
+    if (!frame) return;
+    const rect = frame.getBoundingClientRect();
+    const picture = pictureSize(rect.width, rect.height);
+    const nextZoom = Math.min(MAX_STAGE_ZOOM, Math.max(MIN_STAGE_ZOOM, viewRef.current.zoom + direction * STAGE_ZOOM_STEP));
+    commitView(stageViewAt(
+      viewRef.current,
+      rect.width / 2,
+      rect.height / 2,
+      rect.width,
+      rect.height,
+      nextZoom,
+      picture.width,
+      picture.height,
+    ));
+  }
+
   const frameTransform = { transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center" };
 
   return (
@@ -350,6 +370,18 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
             )}
           </div>
         )}
+        <div
+          className="stage-zoom"
+          onPointerDown={(event) => event.stopPropagation()}
+          onWheel={(event) => event.stopPropagation()}
+        >
+          <ZoomStepper
+            canZoomOut={zoom > MIN_STAGE_ZOOM}
+            canZoomIn={zoom < MAX_STAGE_ZOOM}
+            onZoomOut={() => stepZoom(-1)}
+            onZoomIn={() => stepZoom(1)}
+          />
+        </div>
         {showTracks && (
           <svg
             className="pointer-events-none absolute"
@@ -362,48 +394,54 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
           </svg>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <button className="btn" onClick={() => setPlaying(!playing)}>{playing ? "Pause" : "Play"}</button>
-        <button className="btn" onClick={() => step(-1)}>Prev frame</button>
-        <button className="btn" onClick={() => step(1)}>Next frame</button>
-        <label className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
-          <span>Speed</span>
-          <select className="field w-auto text-[var(--text)]" value={speed} onChange={(event) => useInspector.getState().setSpeed(Number(event.target.value))}>
-            {[0.25, 0.5, 1, 1.5, 2].map((value) => <option key={value} value={value}>{value}×</option>)}
-          </select>
-        </label>
-        <button className="btn" onClick={() => useInspector.getState().setOverlay(!overlay)}>{overlay ? "Hide boxes" : "Show boxes"}</button>
-        <button className="btn" aria-pressed={layers.confidence} onClick={() => useInspector.getState().setLayer("confidence", !layers.confidence)}>
-          {layers.confidence ? "Hide confidence" : "Show confidence"}
-        </button>
-        <button className="btn" aria-pressed={layers.tracks} onClick={() => useInspector.getState().setLayer("tracks", !layers.tracks)}>
-          {layers.tracks ? "Hide tracks" : "Show tracks"}
-        </button>
-        {([
-          ["trajectory", "trajectory"],
-          ["uncertain", "uncertain tracks"],
-        ] as const).map(([key, label]) => (
-          <button key={key} className="btn" aria-pressed={layers[key]} onClick={() => useInspector.getState().setLayer(key, !layers[key])}>
-            {layers[key] ? `Hide ${label}` : `Show ${label}`}
+      <div className="flex flex-col gap-2 text-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn" onClick={() => step(-1)}>Prev frame</button>
+          <button className="btn" onClick={() => step(1)}>Next frame</button>
+          <button className="btn" onClick={() => useInspector.getState().setOverlay(!overlay)}>{overlay ? "Hide boxes" : "Show boxes"}</button>
+          <button className="btn" aria-pressed={layers.confidence} onClick={() => useInspector.getState().setLayer("confidence", !layers.confidence)}>
+            {layers.confidence ? "Hide confidence" : "Show confidence"}
           </button>
-        ))}
-        <button
-          className="btn"
-          aria-pressed={seedMode}
-          disabled={zoom !== 1 || pan.x !== 0 || pan.y !== 0}
-          title="Reset zoom first. The click is mapped through the letterboxed frame."
-          onClick={() => useInspector.getState().setSeedMode(!seedMode)}
-        >
-          {seedMode ? "Click the object" : "Seed a track"}
-        </button>
-        <button className="btn" onClick={() => commitView({ zoom: 1, panX: 0, panY: 0 })}>Reset zoom</button>
-        <span className="mono text-[var(--muted)]">{time.toFixed(2)}s</span>
-        <span className="text-xs text-[var(--muted)]">Space play · arrows step · f fullscreen · scroll over a point to zoom · drag to pan</span>
+          <button className="btn" aria-pressed={layers.tracks} onClick={() => useInspector.getState().setLayer("tracks", !layers.tracks)}>
+            {layers.tracks ? "Hide tracks" : "Show tracks"}
+          </button>
+          {([
+            ["trajectory", "trajectory"],
+            ["uncertain", "uncertain tracks"],
+          ] as const).map(([key, label]) => (
+            <button key={key} className="btn" aria-pressed={layers[key]} onClick={() => useInspector.getState().setLayer(key, !layers[key])}>
+              {layers[key] ? `Hide ${label}` : `Show ${label}`}
+            </button>
+          ))}
+          <button
+            className="btn"
+            aria-pressed={seedMode}
+            disabled={zoom !== 1 || pan.x !== 0 || pan.y !== 0}
+            title="Reset zoom first. The click is mapped through the letterboxed frame."
+            onClick={() => useInspector.getState().setSeedMode(!seedMode)}
+          >
+            {seedMode ? "Click the object" : "Seed a track"}
+          </button>
+          <button className="btn" onClick={() => commitView({ zoom: 1, panX: 0, panY: 0 })}>Reset zoom</button>
+        </div>
+        <div className="flex items-center gap-2">
+          <button className="btn" onClick={() => setPlaying(!playing)}>{playing ? "Pause" : "Play"}</button>
+          <label className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
+            <span>Speed</span>
+            <select className="field w-auto text-[var(--text)]" value={speed} onChange={(event) => useInspector.getState().setSpeed(Number(event.target.value))}>
+              {[0.25, 0.5, 1, 1.5, 2].map((value) => <option key={value} value={value}>{value}×</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="mono text-[var(--muted)]">{time.toFixed(2)}s</span>
+          <span className="text-xs text-[var(--muted)]">Space play · arrows step · f fullscreen · scroll over a point to zoom · drag to pan</span>
+        </div>
       </div>
       {preview != null && stills[preview] && (
         <AssetPreview
           key={stills[preview].id}
-          images={stills.map((still) => ({ src: still.url, filename: still.label }))}
+          images={stills.map((still) => ({ src: still.url, filename: still.label, confidence: still.confidence }))}
           startIndex={preview}
           onClose={() => setPreview(null)}
         />

@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { AssetPreview } from "../components/AssetPreview";
+import { ShotFrame } from "../components/ShotFrame";
 import { BeforeAfter } from "../components/BeforeAfter";
 import { Bone } from "../components/Skeleton";
 import { PerceptionPanel } from "../components/PerceptionPanel";
@@ -576,12 +577,11 @@ export function ObjectsPage() {
                 aria-label={shotLabel(image)}
                 onClick={() => setPreview(index)}
               >
-                <span className="shot-frame">
-                  <img src={image.url} alt="" className="h-64 w-auto max-w-full rounded bg-black object-contain" />
-                  {image.confidence != null && (
-                    <span className="shot-score">{formatConfidence(image.confidence)}</span>
-                  )}
-                </span>
+                <ShotFrame
+                  src={image.url}
+                  confidence={image.confidence}
+                  imgClassName="h-64 w-auto max-w-full rounded bg-black object-contain"
+                />
                 <div className="mt-1 text-[10px] text-[var(--muted)]">{image.caption}</div>
               </button>
             ))}
@@ -592,6 +592,7 @@ export function ObjectsPage() {
               images={shots.map((image) => ({
                 src: image.url,
                 filename: image.caption,
+                confidence: image.confidence,
               }))}
               startIndex={preview}
               onClose={() => setPreview(null)}

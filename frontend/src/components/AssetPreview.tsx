@@ -1,8 +1,9 @@
 import { Download, ExternalLink, Search, X } from "lucide-react";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
+import { ShotFrame } from "./ShotFrame";
 
-export type PreviewImage = { src: string; filename: string };
+export type PreviewImage = { src: string; filename: string; confidence?: number | null };
 
 /**
  * Full-screen image preview from potheads-ceramics' admin image overlay:
@@ -125,12 +126,13 @@ export function AssetPreview({
         </button>
       </div>
       <div className="asset-preview-viewport">
-        <img
-          className="asset-preview-img"
+        <ShotFrame
           src={image.src}
           alt={image.filename}
+          confidence={image.confidence}
+          imgClassName="asset-preview-img"
           draggable={false}
-          style={{ transform: zoom === 1 ? undefined : `scale(${zoom})` }}
+          frameStyle={{ transform: zoom === 1 ? undefined : `scale(${zoom})` }}
         />
       </div>
       <div className="asset-preview-controls">
