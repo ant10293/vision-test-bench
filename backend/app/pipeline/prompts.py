@@ -31,6 +31,8 @@ For each object provide a stable local_id (Object_1, Object_2, ...), a cautious 
 visual characteristics, initial state, whether it is manipulated, and whether identity is uncertain.
 Avoid naming an object more precisely than the pictures support.
 Also list timestamped observations with normalized bounding boxes (x, y, w, h in 0..1, origin top-left).
+x and w are fractions of the frame width, and y and h are fractions of the frame height.
+A circle on a tall frame has a larger w than h.
 When an observation has a box, set confidence to your score from 0 to 1 that the box is this object and only this object. Leave confidence null when there is no box. The score is your judgment, not a measured probability.
 On every supplied frame, include one observation for each object that is even partly visible, with its own
 tight box around that object alone. A box around a larger object does not count for a smaller part that

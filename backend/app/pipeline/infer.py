@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -14,6 +15,7 @@ from app.perception.evidence import evidence_text
 from app.perception.ground import apply_perception
 from app.perception.roster import align_to_roster, drop_split_objects
 from app.perception.sam_fusion import prompt_prior, sam_evidence_block
+from app.pipeline.frame_boxes import frame_box_prompt, frame_boxes_usable, merge_frame_boxes
 from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
@@ -26,6 +28,8 @@ from app.services.credentials import load_secret
 from app.services.experiments import adopt_video_modality
 from app.services.storage import data_path, resolve_stored
 from app.video.sampling import budget_indices
+
+logger = logging.getLogger(__name__)
 
 
 class BudgetExceeded(RuntimeError):
@@ -171,6 +175,7 @@ async def produce_document(
             times,
             frames_attached=run.provider_id == "cursor",
         )
+        user += _displayed_frame_instruction(video)
         _note_video_coverage(coverage, timeline_frames=len(times) if run.provider_id == "cursor" else None)
     if user_extra:
         user += "\n\n" + user_extra
@@ -182,20 +187,19 @@ async def produce_document(
         if tracked:
             user += "\n\n" + tracked
     if video_file and run.provider_id != "cursor":
-        return _with_perception(
-            await _call(
-                session,
-                run,
-                stage,
-                system,
-                user,
-                [],
-                video,
-                schema,
-                attach_video=True,
-            ),
-            spatial_document,
+        document = await _call(
+            session,
+            run,
+            stage,
+            system,
+            user,
+            [],
+            video,
+            schema,
+            attach_video=True,
         )
+        document = await _reground_video_boxes(session, run, stage, document, frames, video)
+        return _with_perception(document, spatial_document)
     selected = _budget_frames(frames, int(config.get("max_frames") or 48))
     if not video_file:
         coverage.frames_submitted = len(selected)
@@ -245,7 +249,19 @@ def _with_perception(document: AnalysisDocument, spatial: AnalysisDocument | Non
     return apply_perception(document, spatial)
 
 
-async def _call(session, run, stage, system, user, frames, video, schema, *, attach_video: bool = False) -> AnalysisDocument:
+async def _call(
+    session,
+    run,
+    stage,
+    system,
+    user,
+    frames,
+    video,
+    schema,
+    *,
+    attach_video: bool = False,
+    modality: str | None = None,
+) -> AnalysisDocument:
     config = run.config_json or {}
     if run.input_tokens and False:
         pass
@@ -269,13 +285,14 @@ async def _call(session, run, stage, system, user, frames, video, schema, *, att
     # A video API sees the file itself. The Cursor CLI only reads images it is given,
     # so those calls keep the timeline frames beside the file.
     image_frames = [] if attach_video and run.provider_id != "cursor" else frames
+    sent_modality = modality or run.modality
     request = GenerationRequest(
         model_id=model_id,
         system_prompt=system,
         user_prompt=user,
         frames=[FrameInput(frame.timestamp, data_path(*Path(frame.path).parts)) for frame in image_frames],
         video_path=video_path,
-        modality=run.modality,
+        modality=sent_modality,
         json_schema=schema,
         temperature=config.get("temperature"),
         reasoning_effort=config.get("reasoning_effort"),
@@ -295,7 +312,7 @@ async def _call(session, run, stage, system, user, frames, video, schema, *, att
         stage=stage,
         provider_id=run.provider_id,
         model_id=model_id,
-        modality=run.modality,
+        modality=sent_modality,
         prompt_version_id=run.prompt_version_id,
         parameters={
             "temperature": request.temperature,
@@ -356,6 +373,70 @@ def _video_coverage_instruction(duration: float, times: list[float], *, frames_a
         f"{grid} "
         "Include moments when an object is still, hidden, or back in view."
     )
+
+
+def _displayed_frame_instruction(video: VideoAsset) -> str:
+    width = int(video.display_width or 0)
+    height = int(video.display_height or 0)
+    if width <= 0 or height <= 0:
+        return ""
+    return (
+        f" The displayed frame is {width} pixels wide and {height} pixels tall. "
+        f"In every box, x and w are fractions of {width}, and y and h are fractions of {height}. "
+        f"A square part has w/h = {height / width:.3f}."
+    )
+
+
+async def _reground_video_boxes(session, run, stage, document: AnalysisDocument, frames, video: VideoAsset):
+    """Measure boxes on the displayed frames.
+
+    A video answer can report the right width and height and still place the
+    corner in the model's own canvas. The still frames are the picture the
+    player shows, so those coordinates are the ones that land on the parts.
+    """
+    if not document.observations:
+        return document
+    width = int(video.display_width or 0)
+    height = int(video.display_height or 0)
+    config = run.config_json or {}
+    selected = _budget_frames(frames, int(config.get("max_frames") or 48))
+    if not selected:
+        return document
+    roster = "\n".join(f"{obj.local_id}: {obj.label}" for obj in document.objects)
+    system = frame_box_prompt(width, height)
+    merged = document
+    replaced = False
+    for window in _windows(selected, int(config.get("max_images_per_call") or 16)):
+        stamps = ", ".join(f"{_frame_time(frame):.3f}" for frame in window)
+        user = (
+            f"Objects:\n{roster}\n\n"
+            f"The attached images are the frames at these times, in seconds: {stamps}. "
+            "Use those times on the observations."
+        )
+        try:
+            fresh = await _call(
+                session,
+                run,
+                stage,
+                system,
+                user,
+                window,
+                video,
+                AnalysisDocument.model_json_schema(),
+                attach_video=False,
+                modality="sampled_frames",
+            )
+        except Exception:
+            logger.exception("frame box pass failed; the video boxes were kept")
+            break
+        if not frame_boxes_usable(fresh.observations, width, height):
+            logger.info("frame box pass was not in displayed-frame coordinates; those boxes were not copied")
+            continue
+        merged = merge_frame_boxes(merged, fresh)
+        replaced = True
+    if replaced:
+        logger.info("replaced video-file boxes with boxes measured on the displayed frames")
+    return merged
 
 
 def _note_video_coverage(coverage: Coverage, *, timeline_frames: int | None = None) -> None:
