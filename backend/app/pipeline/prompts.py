@@ -50,7 +50,9 @@ of it is covered. Do not leave it out because the view is end-on or because the 
 has a box.
 If that faceted part is seen face-on, surrounding an end and surrounded by the ring, it still gets
 its own box on the flats. The ring's box and the inner end's box do not count for it.
-When the edges are faint, keep the box tight on that part instead of growing it across the hand or a
+A separate loose part is its own object, including a second part that looks like one already listed and a small piece lying beside a larger one.
+The box covers that one part's entire visible extent, out to its outermost visible pixels. A box around only a piece of the part is the wrong box.
+When the edges are faint, keep the box on that part instead of growing it across the hand or a
 neighbor. A rotated or partly covered part is still that part: box the visible portion, even when the
 long side is no longer the side you saw before. Omit an object from a frame when it is fully out of
 view or fully hidden, and do not invent a box in that case. Do not keep its id by boxing a different

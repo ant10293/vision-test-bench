@@ -43,6 +43,10 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
     _warm_account_models(session, provider_id)
     modality = "native_video" if use_video_file(provider_id, model_id) else requested
     model_id = resolve_model_id(session, provider_id, model_id, modality)
+    if str(model_id).startswith("sam"):
+        raise UnsupportedMode(
+            "SAM is a segmentation model. Select it as the segmentation model, not the analysis model."
+        )
     caps = capabilities_for(provider_id, model_id)
     if caps.native_video:
         modality = "native_video"
@@ -98,13 +102,17 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "sampling_preset": payload.get("sampling_preset") or "standard",
         "custom_fps": payload.get("custom_fps"),
         "analysis_pass": payload.get("analysis_pass") or "single",
-        "segmentation_mode": payload.get("segmentation_mode") or "disabled",
-        "segmentation_model_id": payload.get("segmentation_model_id") or "",
+        "segmentation_mode": _segmentation_mode(session, payload),
+        "segmentation_model_id": _segmentation_model(payload),
         "temperature": temperature,
         "reasoning_effort": reasoning,
         "image_detail": payload.get("image_detail") or "high",
         "timeout_s": payload.get("timeout_s") or 180,
-        "max_requests": payload.get("max_requests") or 12,
+        "max_requests": payload.get("max_requests")
+        or (20 if (payload.get("segmentation_mode") or "") == "sam_video" else 12),
+        "sam_max_requests": int(payload.get("sam_max_requests") or 8),
+        "sam_max_frames": int(payload.get("sam_max_frames") or 1800),
+        "sam_chunk_frames": int(payload.get("sam_chunk_frames") or 300),
         "max_frames": payload.get("max_frames") or 48,
         "max_retries": payload.get("max_retries") or 2,
         "cost_ceiling_usd": payload.get("cost_ceiling_usd"),
@@ -264,6 +272,33 @@ def save_prompt(session: Session, key: str, name: str, body: str) -> PromptVersi
     session.commit()
     session.refresh(row)
     return row
+
+
+def _segmentation_mode(session: Session, payload: dict) -> str:
+    mode = payload.get("segmentation_mode") or "disabled"
+    allowed = {"disabled", "boxes_only", "local_grabcut", "sam", "sam_video"}
+    if mode not in allowed:
+        raise ValueError(f"unknown segmentation mode {mode}")
+    if mode in {"sam", "sam_video"}:
+        from app.services.credentials import load_secret
+
+        secret, _source = load_secret(session, "meta")
+        if not secret:
+            raise UnsupportedMode(
+                "SAM 3.1 was selected, but no Meta Model API key is configured. "
+                "Local segmentation was not substituted."
+            )
+    return mode
+
+
+def _segmentation_model(payload: dict) -> str:
+    mode = payload.get("segmentation_mode") or "disabled"
+    if mode not in {"sam", "sam_video"}:
+        return payload.get("segmentation_model_id") or ""
+    model_id = payload.get("segmentation_model_id") or "sam-3.1"
+    if not str(model_id).startswith("sam"):
+        raise UnsupportedMode(f"{model_id} is not a SAM model. sam-3.1 was not substituted.")
+    return str(model_id)
 
 
 def _warm_account_models(session: Session, provider_id: str) -> None:

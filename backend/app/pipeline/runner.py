@@ -17,8 +17,8 @@ from app.models.runs import AnalysisRevision, AnalysisRun, Job, PipelineStageRun
 from app.models.util import utcnow
 from app.perception.assembly import apply_assembly
 from app.perception.continuity import reconcile_identity
-from app.perception.roster import drop_contained_objects
 from app.perception.ground import apply_perception
+from app.perception.roster import drop_contained_objects
 from app.perception.types import TrackingCancelled
 from app.pipeline.actions import collapse_repeated_actions
 from app.pipeline.infer import (
@@ -117,7 +117,7 @@ async def execute_job(session: Session, job: Job) -> None:
                 stage.status = "failed"
                 stage.error = _error_text(exc)
                 stage.finished_at = utcnow()
-                if name in {"segmentation", "reinspection", "transcription", "audio_context"}:
+                if name in {"segmentation", "evidence_fusion", "reinspection", "transcription", "audio_context"}:
                     session.commit()
                     continue
                 raise
@@ -230,6 +230,9 @@ async def _dispatch(session, run: AnalysisRun, video: VideoAsset, stage: Pipelin
         return
     if name == "segmentation":
         await _segment(session, run, video, stage)
+        return
+    if name == "evidence_fusion":
+        await _evidence_fusion(session, run, video, stage)
         return
     if name == "validation":
         _validate(session, run, video, stage)
@@ -599,13 +602,24 @@ async def _segment(session, run, video, stage) -> None:
         )
     if not run.active_revision_id:
         raise StageSkipped("No analysis revision is available to segment.")
-    if mode == "sam":
+    if mode in {"sam", "sam_video"}:
         if not _has_meta_key(session):
             raise UnsupportedMode(
                 "SAM 3.1 was selected, but no Meta Model API key is configured. "
-                "Boxes and crops were kept. Add MODEL_API_KEY or switch segmentation to boxes or GrabCut."
+                "Local segmentation was not substituted. Add MODEL_API_KEY or choose a different segmentation mode."
             )
-        await _run_sam(session, run, stage)
+        from app.pipeline.sam_stage import run_image_segmentation, run_video_segmentation
+
+        if mode == "sam_video":
+            try:
+                result = await run_video_segmentation(session, run, video, stage)
+            finally:
+                document = load_working(run.id)
+                if any(item.source_model == "sam-3.1" for item in document.observations):
+                    _remember(session, run, document, "segmentation")
+            stage.checkpoint_json = {key: value for key, value in result.items() if key != "document"}
+            return
+        stage.checkpoint_json = await run_image_segmentation(session, run, stage)
         return
     if mode == "local_grabcut":
         _run_grabcut(session, run, stage)
@@ -620,142 +634,71 @@ def _has_meta_key(session) -> bool:
     return bool(secret)
 
 
-async def _run_sam(session, run, stage) -> None:
-    """One concept prompt per object label, on that object's clearest stored frame.
+async def _evidence_fusion(session, run, video, stage) -> None:
+    """Reconcile the primary analysis after SAM video tracking.
 
-    SAM track ids are matched to LearnLoop objects by box overlap. A weak overlap
-    is stored as an unassigned track instead of forcing the semantic id.
+    Single-pass runs make an additional recorded call. Multi-stage runs leave
+    the summary for the later reasoning stages. Neither path pretends the
+    original analysis already saw the tracks.
     """
-    from app.models.domain import DetectedObject, ObjectImage, ObjectObservation
-    from app.providers.catalog import lookup
-    from app.providers.sam import SamAdapter, sam_capabilities
-    from app.providers.types import ProviderResponse, Usage, estimate_cost
-    from app.schemas.analysis import BBox
-    from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
-    from app.services.credentials import load_secret
+    from app.perception.sam_fusion import merge_reconciliation, sam_evidence_block
 
-    secret, _source = load_secret(session, "meta")
-    adapter = SamAdapter(secret, timeout_s=float((run.config_json or {}).get("timeout_s") or 180))
-    objects = list(
-        session.scalars(select(DetectedObject).where(DetectedObject.revision_id == run.active_revision_id))
-    )
-    stored = 0
-    for obj in objects:
-        obs = session.scalar(
-            select(ObjectObservation)
-            .where(
-                ObjectObservation.object_id == obj.id,
-                ObjectObservation.bbox_json.is_not(None),
-                ObjectObservation.visibility == "visible",
-            )
-            .order_by(ObjectObservation.sharpness.desc())
+    if run.segmentation_mode != "sam_video":
+        raise StageSkipped("Evidence fusion runs when SAM video tracking is selected.")
+    segmentation = _stage(session, run.id, "segmentation")
+    if segmentation.status == "failed":
+        raise RuntimeError(
+            "SAM segmentation did not finish, so evidence fusion did not report success. "
+            "The primary analysis was kept."
         )
-        if obs is None or not obs.frame_id:
-            continue
-        frame = session.get(FrameAsset, obs.frame_id)
-        if frame is None:
-            continue
-        image_path = data_path(*Path(frame.path).parts)
-        call = open_provider_call(
-            session,
-            run,
-            stage="segmentation",
-            provider_id="meta",
-            model_id="sam-3.1",
-            modality="sampled_frames",
-            parameters={"concept": obj.label, "frame_id": frame.id},
-            frame_timestamps=[obs.timestamp],
-        )
-        session.commit()
-        try:
-            result = await adapter.segment_image(image_path, obj.label)
-        except Exception as exc:
-            fail_provider_call(call, exc)
-            session.commit()
-            raise
-        cost, known = estimate_cost(lookup("meta", "sam-3.1"), result.input_tokens, result.output_tokens)
-        finish_provider_call(
-            session,
-            run,
-            call,
-            ProviderResponse(
-                text=result.text,
-                raw={
-                    "id": result.request_id,
-                    "model": "sam-3.1",
-                    "usage": {
-                        "input_tokens": result.input_tokens,
-                        "output_tokens": result.output_tokens,
-                    },
-                },
-                usage=Usage(result.input_tokens, result.output_tokens, cost, known),
-                request_id=result.request_id,
-                latency_ms=result.latency_ms,
-                model_id="sam-3.1",
+    document = load_working(run.id)
+    summary = sam_evidence_block(run.id, "evidence_fusion")
+    if not summary:
+        raise StageSkipped("SAM did not write a tracking summary.")
+    local = run.provider_id in {"deterministic", "fixture", "manual_json"}
+    multi = (run.config_json or {}).get("analysis_pass", "single") != "single"
+    if local or multi:
+        stage.checkpoint_json = {
+            "reconciled": False,
+            "injected": multi,
+            "source": "geometry_only" if local else "later_stages",
+            "note": (
+                "SAM geometry is in the document. This stage did not issue another model call. "
+                "The original analysis pass did not see these tracks."
+                if local
+                else "Later reasoning stages receive the SAM summary. This stage did not call the model."
             ),
-        )
-        session.commit()
-        records = result.records
-        latency_ms = result.latency_ms
-        target = BBox.model_validate(obs.bbox_json)
-        best = None
-        best_iou = 0.0
-        for record in records:
-            iou = _iou_norm(target, record)
-            if iou > best_iou:
-                best_iou = iou
-                best = record
-        chosen = best if best is not None and best_iou >= 0.1 else (records[0] if records else None)
-        uncertain = chosen is None or best_iou < 0.3
-        if chosen is None:
-            continue
-        session.add(
-            SegmentationMask(
-                object_id=None if uncertain else obj.id,
-                revision_id=run.active_revision_id,
-                run_id=run.id,
-                frame_id=frame.id,
-                timestamp=obs.timestamp,
-                track_ref=chosen.track_id,
-                encoding=chosen.mask_encoding,
-                path="",
-                rle_json={"payload": chosen.mask_payload[:20000]},
-                bbox_json={
-                    "x": chosen.x1 / max(chosen.width, 1),
-                    "y": chosen.y1 / max(chosen.height, 1),
-                    "w": max(chosen.x2 - chosen.x1, 1) / max(chosen.width, 1),
-                    "h": max(chosen.y2 - chosen.y1, 1) / max(chosen.height, 1),
-                },
-                confidence=chosen.confidence,
-                source="sam-3.1",
-                width=chosen.width,
-                height=chosen.height,
-                identity_uncertain=uncertain,
-            )
-        )
-        if not uncertain:
-            session.add(
-                ObjectImage(
-                    object_id=obj.id,
-                    revision_id=run.active_revision_id,
-                    kind="cutout",
-                    path="",
-                    frame_id=frame.id,
-                    timestamp=obs.timestamp,
-                    width=chosen.width,
-                    height=chosen.height,
-                    score=best_iou,
-                )
-            )
-        stored += 1
-        stage.checkpoint_json = {"source": "sam-3.1", "latency_ms": latency_ms, "records": stored}
-    stage.progress_total = max(len(objects), 1)
-    stage.progress_current = stored
+        }
+        _remember(session, run, document, "evidence_fusion")
+        return
+    frames = list(
+        session.scalars(select(FrameAsset).where(FrameAsset.run_id == run.id).order_by(FrameAsset.timestamp))
+    )
+    proposed = await produce_document(
+        session,
+        run,
+        video,
+        frames,
+        "evidence_fusion",
+        Coverage.model_validate(run.coverage_json or {}),
+        None,
+        user_extra=(
+            "Revise actions, states, relationships, workflow steps, and ambiguities using the SAM evidence. "
+            "Keep object ids. Do not treat a gap as absence. Do not let SAM invent a completed step."
+        ),
+    )
+    merged = merge_reconciliation(document, proposed)
+    save_working(run.id, merged)
+    _remember(session, run, merged, "evidence_fusion")
     stage.checkpoint_json = {
-        "source": "sam-3.1",
-        "masks": stored,
-        "note": "SAM tracks were linked only when box overlap supported the semantic id.",
-        "capabilities": sam_capabilities(),
+        "reconciled": True,
+        "source": "evidence_fusion",
+        "provider": run.provider_id,
+        "model": run.model_id,
+        "note": (
+            "Single-pass analysis was reconciled after SAM tracking. "
+            "The original pass did not use this segmentation evidence."
+        ),
     }
 
 
@@ -961,19 +904,6 @@ def _artifacts(session, run, stage) -> None:
     stage.checkpoint_json = {"files": list(files)}
     stage.progress_total = len(files)
     stage.progress_current = len(files)
-
-
-def _iou_norm(target, record) -> float:
-    bx = record.x1 / max(record.width, 1)
-    by = record.y1 / max(record.height, 1)
-    bw = max(record.x2 - record.x1, 1) / max(record.width, 1)
-    bh = max(record.y2 - record.y1, 1) / max(record.height, 1)
-    x1, y1 = max(target.x, bx), max(target.y, by)
-    x2 = min(target.x + target.w, bx + bw)
-    y2 = min(target.y + target.h, by + bh)
-    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-    union = target.w * target.h + bw * bh - inter
-    return inter / union if union else 0.0
 
 
 def _human_active(session, run) -> bool:

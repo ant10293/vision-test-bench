@@ -36,7 +36,13 @@ COLUMN_UPGRADES = {
         ("association_score", "FLOAT"),
         ("detector_id", "VARCHAR(80) DEFAULT ''"),
     ],
-    "object_observations": [("confidence", "FLOAT")],
+    "object_observations": [
+        ("confidence", "FLOAT"),
+        ("association_status", "VARCHAR(32) DEFAULT ''"),
+        ("source_model", "VARCHAR(80) DEFAULT ''"),
+        ("request_id", "VARCHAR(120) DEFAULT ''"),
+        ("mask_ref", "VARCHAR(200) DEFAULT ''"),
+    ],
 }
 
 

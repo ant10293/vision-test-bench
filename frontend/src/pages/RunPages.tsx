@@ -14,7 +14,7 @@ import { api, evidenceClass, formatTime, formatUsd } from "../lib/api";
 import { formatConfidence } from "../lib/confidence";
 import { formatLogText } from "../lib/formatLog";
 import { actionPhrase, humanize, humanizeText, labeledId, nameObjects, objectLabels } from "../lib/humanize";
-import { objectFrameTimeline } from "../lib/analysis";
+import { datasetObservations, objectFrameTimeline } from "../lib/analysis";
 import { objectScene } from "../lib/sceneSlice";
 import { BundleContext, useOptionalBundle } from "../lib/bundleContext";
 import type { Bundle, Observation } from "../lib/types";
@@ -62,7 +62,7 @@ type ObjectShot = { id: string; url: string; caption: string; confidence: number
 
 /** Every boxed observation, as a zoomed crop. Named stills keep their labels when the time matches. */
 function objectShots(object: Bundle["objects"][number], observations: Observation[]): ObjectShot[] {
-  const owned = observations.filter((item) => item.object_local_id === object.local_id);
+  const owned = datasetObservations(observations).filter((item) => item.object_local_id === object.local_id);
   const boxed = owned
     .filter((item) => item.bbox && item.frame_id)
     .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
@@ -484,7 +484,7 @@ function ActionDetail({ bundle, action }: { bundle: Bundle | null; action: LabAc
   );
 }
 
-function ObjectTile({ object, onOpen }: { object: Bundle["objects"][number] | null; onOpen?: () => void }) {
+function ObjectTile({ object, sightings, onOpen }: { object: Bundle["objects"][number] | null; sightings?: number; onOpen?: () => void }) {
   const thumb = objectThumbnail(object);
   const media = thumb ? (
     <img src={thumb} alt="" className="max-h-48 w-auto max-w-full object-contain" />
@@ -501,7 +501,7 @@ function ObjectTile({ object, onOpen }: { object: Bundle["objects"][number] | nu
           <>
             <div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ background: object.color }} />{humanize(object.local_id)}</div>
             <div className="font-medium">{humanize(object.label)}</div>
-            <div className="text-xs text-[var(--muted)]">{object.observation_count} observations · {object.uncertain_identity ? "identity uncertain" : "identity stated"}</div>
+            <div className="text-xs text-[var(--muted)]">{sightings ?? object.observation_count} observations · {object.uncertain_identity ? "identity uncertain" : "identity stated"}</div>
           </>
         ) : (
           <>
@@ -548,7 +548,12 @@ export function ObjectsPage() {
       </div>
       <div className={OBJECT_GRID}>
         {objects.map((object, index) => (
-          <ObjectTile key={object?.id ?? `pending-${index}`} object={object} onOpen={object ? () => { setOpen(object.local_id); setPreview(null); } : undefined} />
+          <ObjectTile
+            key={object?.id ?? `pending-${index}`}
+            object={object}
+            sightings={object && bundle ? datasetObservations(bundle.observations).filter((item) => item.object_local_id === object.local_id).length : undefined}
+            onOpen={object ? () => { setOpen(object.local_id); setPreview(null); } : undefined}
+          />
         ))}
       </div>
       {bundle && selected && (
@@ -997,8 +1002,8 @@ function numberText(value: unknown) {
 
 function requestCost(row: Record<string, unknown>): string {
   if (row.status !== "completed") return "";
-  const usage = (row.usage ?? {}) as { cost_usd?: number; price_known?: boolean; input_tokens?: number; output_tokens?: number };
-  const money = formatUsd(Number(usage.cost_usd ?? 0), Boolean(usage.price_known));
+  const usage = (row.usage ?? {}) as { cost_usd?: number; price_known?: boolean; api_key?: boolean; input_tokens?: number; output_tokens?: number };
+  const money = formatUsd(Number(usage.cost_usd ?? 0), Boolean(usage.price_known), Boolean(usage.api_key));
   return ` · ${usage.input_tokens ?? 0} in / ${usage.output_tokens ?? 0} out · ${money}`;
 }
 

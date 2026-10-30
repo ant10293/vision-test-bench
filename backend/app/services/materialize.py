@@ -89,6 +89,10 @@ def materialize(
             camera_compensated=item.camera_compensated,
             track_ref=item.track_ref or "",
             accepted=item.accepted,
+            association_status=item.association_status or "",
+            source_model=item.source_model or "",
+            request_id=item.request_id or "",
+            mask_ref=item.mask_ref or "",
         )
         session.add(obs)
         observations[item.object_local_id].append(obs)

@@ -58,6 +58,10 @@ class ObjectObservation(Base):
     camera_compensated: Mapped[bool] = mapped_column(Boolean, default=False)
     track_ref: Mapped[str] = mapped_column(String(80), default="")
     accepted: Mapped[bool] = mapped_column(Boolean, default=True)
+    association_status: Mapped[str] = mapped_column(String(32), default="")
+    source_model: Mapped[str] = mapped_column(String(80), default="")
+    request_id: Mapped[str] = mapped_column(String(120), default="")
+    mask_ref: Mapped[str] = mapped_column(String(200), default="")
 
 
 class ObjectStateRow(Base):

@@ -52,7 +52,7 @@ beforeEach(() => {
     time: 1,
     playing: false,
     overlay: true,
-    layers: { tracks: false, trajectory: false, uncertain: false, confidence: true },
+    layers: { tracks: false, trajectory: false, uncertain: false, confidence: true, conflicts: false },
   });
 });
 

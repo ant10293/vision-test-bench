@@ -248,6 +248,27 @@ def test_action_dependency_is_dropped_and_unknown_type_is_kept():
     assert missing.severity == "error"
 
 
+def test_an_observation_timestamp_is_its_frame_reference():
+    document = AnalysisDocument.model_validate(
+        {
+            "objects": [{"local_id": "Object_1", "label": "part"}],
+            "observations": [
+                {
+                    "object_local_id": "Object_1",
+                    "timestamp": 1.25,
+                    "evidence": {
+                        "classification": "DIRECTLY_OBSERVED",
+                        "provenance": "AI_PREDICTION",
+                    },
+                }
+            ],
+        }
+    )
+    issues = validate_document(document, 10)
+    assert not any(issue.code == "observation_without_evidence" for issue in issues)
+    assert document.observations[0].evidence.frame_timestamps == [1.25]
+
+
 def test_a_step_that_depends_on_itself_is_dropped():
     document = AnalysisDocument.model_validate(
         {

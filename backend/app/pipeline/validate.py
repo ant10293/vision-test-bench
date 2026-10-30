@@ -60,18 +60,20 @@ def validate_document(document: AnalysisDocument, duration: float) -> list[Valid
             )
             obs.accepted = False
         time_ok(obs.timestamp, "observation", obs.object_local_id, "Observation time")
-        if obs.evidence.classification.value == "DIRECTLY_OBSERVED" and not (
-            obs.evidence.frame_timestamps or obs.evidence.time_start is not None
-        ):
-            issues.append(
-                ValidationIssue(
-                    severity="error",
-                    code="observation_without_evidence",
-                    message="A directly observed claim has no frame or interval reference.",
-                    entity_type="observation",
-                    entity_id=obs.object_local_id,
+        if obs.evidence.classification.value == "DIRECTLY_OBSERVED" and not _anchored(obs.evidence):
+            # The sighting time is the frame. Models often leave the evidence list empty.
+            if obs.timestamp is not None:
+                obs.evidence.frame_timestamps = [obs.timestamp]
+            else:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="observation_without_evidence",
+                        message="A directly observed claim has no frame or interval reference.",
+                        entity_type="observation",
+                        entity_id=obs.object_local_id,
+                    )
                 )
-            )
 
     for action in document.actions:
         time_ok(action.start, "action", action.local_id, "Action start")
@@ -299,6 +301,10 @@ def _cycles(graph: dict[str, list[str]]) -> list[list[str]]:
     for node in graph:
         walk(node, [])
     return found
+
+
+def _anchored(evidence) -> bool:
+    return bool(evidence.frame_timestamps) or evidence.time_start is not None
 
 
 def fatal(issues: list[ValidationIssue]) -> bool:

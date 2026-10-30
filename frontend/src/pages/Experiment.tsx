@@ -42,8 +42,10 @@ export function ExperimentPage() {
   const whisper = useQuery({ queryKey: ["audio-models"], queryFn: api.audioModels });
   const models = useMemo(() => {
     const provider = providers.data?.find((item) => item.id === providerId);
-    return provider?.models ?? [];
+    return (provider?.models ?? []).filter((model) => !model.model_id.startsWith("sam"));
   }, [providers.data, providerId]);
+  const meta = providers.data?.find((item) => item.id === "meta");
+  const samCaps = meta?.sam;
   const selected: Capability | undefined = models.find((item) => item.model_id === modelId) ?? models[0];
   const modality = selected?.native_video ? "native_video" : "sampled_frames";
   const codexRun = providerId === "openai" && providers.data?.find((item) => item.id === "openai")?.codex?.transport === "codex";
@@ -65,6 +67,7 @@ export function ExperimentPage() {
         sampling_preset: preset,
         analysis_pass: pass,
         segmentation_mode: segmentation,
+        segmentation_model_id: segmentation === "sam" || segmentation === "sam_video" ? "sam-3.1" : "",
         temperature: codexRun || temperature === "" ? null : Number(temperature),
         reasoning_effort: effort || null,
         prompt_key: "scene",
@@ -107,7 +110,7 @@ export function ExperimentPage() {
         </select>
       </Field>
       <div className="grid gap-3 md:grid-cols-2">
-        <Field label="Provider">
+        <Field label="Primary provider">
           {providersPending ? <FieldBone stretch /> : (
             <select className="field stretch" value={providerId} onChange={(event) => {
               const next = event.target.value;
@@ -119,7 +122,7 @@ export function ExperimentPage() {
             </select>
           )}
         </Field>
-        <Field label="Model">
+        <Field label="Primary model">
           {providersPending ? <FieldBone stretch /> : (
             <select className="field stretch" value={modelId} onChange={(event) => setModelId(event.target.value)}>
               {models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label || humanize(model.model_id)}</option>)}
@@ -150,7 +153,7 @@ export function ExperimentPage() {
             <div>This run uses the linked Cursor account through the CLI in ask mode. Spend counts against the plan, and the lab records the call as unpriced.</div>
           )}
           {providerId === "cursor" && providers.data?.find((item) => item.id === "cursor")?.cursor_cli?.transport === "api_key" && (
-            <div>This run uses the Cursor API key through the CLI in ask mode. The lab records the call as unpriced.</div>
+            <div>This run uses the Cursor API key through the CLI in ask mode. A cost is shown when the catalog has a list rate.</div>
           )}
             </>
           )}
@@ -183,7 +186,7 @@ export function ExperimentPage() {
             : "This model receives timestamped JPEG frames. Longer clips are split into windows."}
         </span>
       </Field>
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-2">
         <Field label="Sampling">
           <select className="field stretch" value={preset} onChange={(event) => setPreset(event.target.value)}>
             {["sparse", "standard", "detailed", "high_detail", "intensive", "adaptive"].map((item) => <option key={item} value={item}>{humanize(item)}</option>)}
@@ -196,15 +199,36 @@ export function ExperimentPage() {
             <option value="multi_reinspect">Multi-stage + reinspection</option>
           </select>
         </Field>
+      </div>
+      <SettingsFieldset legend="Segmentation and tracking">
+        <p className="text-xs text-[var(--muted)]">
+          The primary model interprets the scene, actions, and workflow. The segmentation model only supplies boxes, masks, and tracks. It does not decide whether a step was completed.
+        </p>
         <Field label="Segmentation">
-          <select className="field stretch" value={segmentation} onChange={(event) => setSegmentation(event.target.value)}>
+          <select className="field" value={segmentation} onChange={(event) => setSegmentation(event.target.value)}>
             <option value="disabled">Disabled</option>
-            <option value="boxes_only">Boxes and crops</option>
+            <option value="boxes_only">Boxes and crops only</option>
             <option value="local_grabcut">Local GrabCut</option>
-            <option value="sam">SAM 3.1 (requires Meta key)</option>
+            <option value="sam" disabled={samCaps ? !samCaps.image_segmentation : false}>SAM 3.1 image segmentation</option>
+            <option value="sam_video" disabled={samCaps ? !samCaps.video_tracking : false}>SAM 3.1 video tracking with evidence fusion</option>
           </select>
         </Field>
-      </div>
+        {(segmentation === "sam" || segmentation === "sam_video") && (
+          <p className="text-xs text-[var(--muted)]">
+            Secondary model: Meta · sam-3.1. Image segmentation and box prompts are {samCaps?.image_segmentation ? "available" : "not reported"}. Video tracking is {samCaps?.video_tracking ? "available" : "not reported"}.
+          </p>
+        )}
+        {(segmentation === "sam" || segmentation === "sam_video") && meta && !meta.configured && (
+          <p className="text-xs text-[var(--amber)]">
+            SAM 3.1 needs a Meta Model API key. This run will not switch to GrabCut or another model.
+          </p>
+        )}
+        {segmentation === "sam_video" && (
+          <p className="text-xs text-[var(--muted)]">
+            Short clips are tracked in one request. Longer recordings are split into chunks. A chunk boundary does not keep the same SAM id, and a frame with no detection is unobserved rather than absent. Unconstrained footage still treats a camera leaving the scene as a loss of view.
+          </p>
+        )}
+      </SettingsFieldset>
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Temperature">
           <input className="field stretch" disabled={codexRun || !selected?.supports_temperature} value={temperature} placeholder={codexRun || !selected?.supports_temperature ? "unsupported" : "model default"} onChange={(event) => setTemperature(event.target.value)} />

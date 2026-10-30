@@ -1,4 +1,4 @@
-import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, CodexSettings, CodexStatus, CursorCliSettings, CursorCliStatus, Dashboard, ProviderInfo, RunSummary, VideoInfo } from "./types";
+import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, CodexSettings, CodexStatus, CursorCliSettings, CursorCliStatus, Dashboard, ProviderInfo, RunSummary, SamMaskOverlay, VideoInfo } from "./types";
 import type { VerificationView, WorkflowTemplate } from "./verification";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -56,6 +56,7 @@ export interface ProviderCall {
   output_tokens: number;
   cost_usd: number;
   price_known: boolean;
+  api_key: boolean;
 }
 
 export interface ProjectCosts {
@@ -144,6 +145,8 @@ export const api = {
     return request<RunSummary[]>(`/api/runs${suffix}`);
   },
   run: (id: string) => request<Bundle>(`/api/runs/${id}`),
+  samMasks: (id: string, time: number) =>
+    request<SamMaskOverlay[]>(`/api/runs/${id}/sam-masks?t=${encodeURIComponent(time.toFixed(3))}`),
   createRun: (payload: Record<string, unknown>) =>
     request<RunSummary>("/api/runs", { method: "POST", body: JSON.stringify(payload) }),
   duplicateRun: (id: string) => request<RunSummary>(`/api/runs/${id}/duplicate`, { method: "POST", body: "{}" }),
@@ -440,8 +443,8 @@ export interface TaskClip {
   actions: { local_id: string; action_type: string; description: string; start: number; end: number; evidence_class: string }[];
 }
 
-export function formatUsd(amount: number, priceKnown = true): string {
-  if (!priceKnown) return "unpriced";
+export function formatUsd(amount: number, priceKnown = true, apiKey = false): string {
+  if (!priceKnown) return apiKey ? "—" : "unpriced";
   const value = Number.isFinite(amount) ? amount : 0;
   return `$${value.toFixed(4)}`;
 }

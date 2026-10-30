@@ -104,6 +104,11 @@ class ObservationPrediction(BaseModel):
     camera_compensated: bool = False
     track_ref: str | None = None
     accepted: bool = True
+    # SAM association is scoped to one tracking response. Empty on older documents.
+    association_status: str = ""
+    source_model: str = ""
+    request_id: str = ""
+    mask_ref: str = ""
 
 
 class StatePrediction(BaseModel):

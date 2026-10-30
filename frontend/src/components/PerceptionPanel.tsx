@@ -39,6 +39,11 @@ export function PerceptionPanel({ bundle }: { bundle: Bundle }) {
           {perception.segmenter_id ? ` · ${perception.segmenter_id}` : ""}. Scores are uncalibrated and are not probabilities.
         </p>
         {perception.encoder_detail && <p className="text-xs text-[var(--amber)]">{perception.encoder_detail}</p>}
+        {perception.segmenter_id === "sam-3.1" && (
+          <p className="text-xs text-[var(--muted)]">
+            SAM 3.1 supplies boxes, masks, and tracks. The primary model still owns actions, relations, and workflow judgments. A gap in a track is unobserved, not absence.
+          </p>
+        )}
         {perception.notes && <p className="text-xs text-[var(--muted)]">{perception.notes}</p>}
       </div>
       <div className="flex flex-wrap gap-3 text-xs text-[var(--muted)]">

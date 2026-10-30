@@ -85,6 +85,7 @@ class SegmentationMode(str, Enum):
     DISABLED = "disabled"
     BOXES_ONLY = "boxes_only"
     SAM = "sam"
+    SAM_VIDEO = "sam_video"
     LOCAL_GRABCUT = "local_grabcut"
 
 
@@ -215,6 +216,7 @@ PIPELINE_STAGES = [
     "action_analysis",
     "state_tracking",
     "segmentation",
+    "evidence_fusion",
     "workflow",
     "ambiguity",
     "validation",

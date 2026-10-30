@@ -22,7 +22,7 @@ from app.models.domain import (
     WorkflowStepRow,
 )
 from app.models.media import FrameAsset, VideoAsset
-from app.models.runs import AnalysisRevision, AnalysisRun, ModelResponseRow, PipelineStageRun
+from app.models.runs import AnalysisRevision, AnalysisRun, PipelineStageRun
 from app.services.storage import data_path
 
 
@@ -85,11 +85,9 @@ def run_summary(session: Session, run: AnalysisRun) -> dict:
     duration = None
     if run.started_at and run.finished_at:
         duration = (run.finished_at - run.started_at).total_seconds()
-    unpriced_calls = session.scalar(
-        select(func.count())
-        .select_from(ModelResponseRow)
-        .where(ModelResponseRow.run_id == run.id, ModelResponseRow.price_known.is_(False))
-    ) or 0
+    from app.services.costs import unpriced_call_count
+
+    unpriced_calls = unpriced_call_count(session, run.id)
     return {
         "id": run.id,
         "project_id": run.project_id,
@@ -192,6 +190,13 @@ def _perception(run: AnalysisRun, revision: AnalysisRevision | None) -> dict | N
     return payload.get("perception")
 
 
+def _note_value(note: str, key: str) -> str:
+    for part in (note or "").split(";"):
+        if part.startswith(f"{key}="):
+            return part.split("=", 1)[1]
+    return ""
+
+
 def _track_points(session: Session, run_id: str, limit: int = 4000) -> dict:
     rows = session.scalars(
         select(SpatialTrackPoint).where(SpatialTrackPoint.run_id == run_id).order_by(SpatialTrackPoint.timestamp)
@@ -211,6 +216,8 @@ def _track_points(session: Session, run_id: str, limit: int = 4000) -> dict:
                 "detector_id": row.detector_id or "",
                 "scene_chunk": row.scene_chunk,
                 "note": row.identity_note,
+                "object_local_id": _note_value(row.identity_note, "object"),
+                "association_status": _note_value(row.identity_note, "association"),
             }
             for row in clipped
         ],
@@ -365,6 +372,10 @@ def _observations(session, revision_id: str) -> list[dict]:
             "coordinate_frame": row.coordinate_frame,
             "camera_compensated": row.camera_compensated,
             "track_ref": row.track_ref,
+            "association_status": row.association_status or "",
+            "source_model": row.source_model or "",
+            "request_id": row.request_id or "",
+            "mask_ref": row.mask_ref or "",
         }
         for row in rows
     ]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { frameObjectStills, objectFrameTimeline, observationsAt, frameNear, tracksAt } from "../lib/analysis";
+import { coverageAt, frameObjectStills, objectFrameTimeline, observationsAt, frameNear, overlayObservations, tracksAt } from "../lib/analysis";
 import type { Bundle } from "../lib/types";
 
 const bundle = {
@@ -110,5 +110,18 @@ describe("analysis helpers", () => {
     ], 1.08);
     expect(hits.map((item) => item.track_ref)).toEqual(["track_1"]);
     expect(hits[0]?.timestamp).toBe(1.1);
+  });
+
+  it("keeps model boxes, SAM boxes, and conflicts on separate layers", () => {
+    const observations = [
+      { id: "vlm", object_local_id: "Object_1", timestamp: 1, bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, visibility: "visible", evidence_class: "DIRECTLY_OBSERVED", provenance: "AI_PREDICTION", evidence_note: "", continuity: "continuous", confidence: 0.4, coordinate_frame: "image", camera_compensated: false, frame_id: null },
+      { id: "sam", object_local_id: "Object_1", timestamp: 1, bbox: { x: 0.12, y: 0.1, w: 0.2, h: 0.2 }, visibility: "visible", evidence_class: "DIRECTLY_OBSERVED", provenance: "CV_DETECTION", evidence_note: "", continuity: "continuous", confidence: 0.9, coordinate_frame: "image", camera_compensated: false, frame_id: null, source_model: "sam-3.1", association_status: "associated" },
+      { id: "clash", object_local_id: "Object_1", timestamp: 1, bbox: { x: 0.6, y: 0.6, w: 0.2, h: 0.2 }, visibility: "visible", evidence_class: "DIRECTLY_OBSERVED", provenance: "CV_DETECTION", evidence_note: "", continuity: "uncertain", confidence: 0.2, coordinate_frame: "image", camera_compensated: false, frame_id: null, source_model: "sam-3.1", association_status: "conflict" },
+    ] as Bundle["observations"];
+    expect(overlayObservations(observations, 1, "vlm").map((item) => item.id)).toEqual(["vlm"]);
+    expect(overlayObservations(observations, 1, "sam").map((item) => item.id)).toEqual(["sam"]);
+    expect(overlayObservations(observations, 1, "conflict").map((item) => item.id)).toEqual(["clash"]);
+    expect(coverageAt(observations, "Object_1", 3)).toBe("unobserved");
+    expect(coverageAt(observations, "Object_1", 1)).toBe("conflict");
   });
 });

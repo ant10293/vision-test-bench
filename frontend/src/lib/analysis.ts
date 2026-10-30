@@ -50,6 +50,52 @@ export function observationsAt(bundle: Bundle, time: number, window = 0.45): Obs
   return chosen;
 }
 
+export type OverlayKind = "vlm" | "sam" | "inferred" | "conflict";
+
+export function observationKind(observation: Observation): OverlayKind {
+  if (observation.association_status === "conflict") return "conflict";
+  if (observation.evidence_class === "INFERRED") return "inferred";
+  if (observation.provenance === "CV_DETECTION" || observation.source_model === "sam-3.1") return "sam";
+  return "vlm";
+}
+
+/** Nearest box of each object or track. Inferred and conflicting boxes stay distinct from direct ones. */
+export function overlayObservations(
+  observations: Observation[],
+  time: number,
+  kind: OverlayKind,
+  window = 0.45,
+): Observation[] {
+  const pool = observations.filter((item) => item.bbox && observationKind(item) === kind);
+  const nearest = new Map<string, Observation>();
+  for (const item of pool) {
+    const gap = Math.abs(item.timestamp - time);
+    if (gap > window) continue;
+    const key = kind === "sam" || kind === "conflict"
+      ? `${item.object_local_id}:${item.track_ref || item.id}`
+      : item.object_local_id;
+    const current = nearest.get(key);
+    if (!current || gap < Math.abs(current.timestamp - time)) nearest.set(key, item);
+  }
+  return [...nearest.values()];
+}
+
+export type CoverageState = "observed" | "inferred" | "absent" | "unobserved" | "conflict" | "unassigned";
+
+/** What the playhead can claim. A missing sample is unobserved, not absence. */
+export function coverageAt(observations: Observation[], localId: string, time: number, window = 0.45): CoverageState {
+  const rows = observations.filter((item) => item.object_local_id === localId && Math.abs(item.timestamp - time) <= window);
+  if (!rows.length) return "unobserved";
+  if (rows.some((item) => item.association_status === "conflict")) return "conflict";
+  if (rows.some((item) => item.association_status === "unassigned")) return "unassigned";
+  if (rows.some((item) => item.evidence_class === "DIRECTLY_OBSERVED" && item.visibility === "absent")) return "absent";
+  if (rows.some((item) => item.evidence_class === "DIRECTLY_OBSERVED" && (item.visibility === "visible" || item.visibility === "partial"))) {
+    return "observed";
+  }
+  if (rows.some((item) => item.evidence_class === "INFERRED")) return "inferred";
+  return "unobserved";
+}
+
 export function tracksAt(points: TrackPointSample[], time: number, window = 0.2): TrackPointSample[] {
   const nearest = new Map<string, TrackPointSample>();
   for (const point of points) {
@@ -70,6 +116,11 @@ export type ObjectTimelineCell = {
   confidence: number | null;
 };
 
+/** Reasoning-model samples. Per-frame SAM rows stay on the track, not in this gallery. */
+export function datasetObservations(observations: Observation[]): Observation[] {
+  return observations.filter((item) => item.source_model !== "sam-3.1");
+}
+
 /** One square per sampled frame. A crop when this object is in the frame, otherwise an empty cell. */
 export function objectFrameTimeline(
   frames: { id: string; timestamp: number }[] | null | undefined,
@@ -79,7 +130,7 @@ export function objectFrameTimeline(
   const ordered = [...(frames ?? [])].sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
   if (!ordered.length) return [];
   const byId = new Map(ordered.map((frame) => [frame.id, frame]));
-  const present = observations.filter(
+  const present = datasetObservations(observations).filter(
     (item) => item.object_local_id === localId && item.bbox != null && item.visibility !== "absent",
   );
   const chosen = new Map<string, Observation>();

@@ -1,7 +1,7 @@
 """Static capability catalog.
 
 Prices are approximate public list rates stored so a run can record an estimate.
-They are not invoices. Unknown models stay unpriced.
+They are not invoices. A call with no API key stays unpriced. A keyed call without a list rate does not.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ _MUSE_NOTE = (
     "Reasoning effort 'none' is rejected. Audio input on 1.3 is degraded; this lab does not send audio."
 )
 _SAM_NOTE = (
-    "SAM 3.1 returns boxes and masks. It is not an action-recognition model and is never "
-    "substituted for a scene-understanding model."
+    "SAM 3.1 returns boxes, masks, and video tracks. It is not an action-recognition model "
+    "and is never substituted for a scene-understanding model. Select it as the segmentation model."
 )
 _OPENAI_NOTE = (
     "Public Responses API accepts images, not video files. Native video stays disabled "
@@ -282,12 +282,12 @@ def _default_manual(provider_id: str, model_id: str) -> ModelCapabilities:
     if provider_id == "cursor" and native:
         note = (
             "Cursor CLI ask mode. This model accepts the video file. "
-            "The call is recorded as unpriced plan usage. Temperature is not enabled."
+            "Linked-account usage is unpriced. An API key run is not. Temperature is not enabled."
         )
     elif provider_id == "cursor":
         note = (
-            "Manually added Cursor model. The CLI runs in ask mode and the call is recorded as "
-            "unpriced plan usage. Native video and temperature are not enabled."
+            "Manually added Cursor model. The CLI runs in ask mode. Linked-account usage is "
+            "unpriced. An API key run is not. Native video and temperature are not enabled."
         )
     else:
         note = (

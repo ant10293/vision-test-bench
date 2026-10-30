@@ -66,7 +66,7 @@ function CallRow({ call }: { call: ProviderCall | null }) {
     );
   }
   const when = formatWhen(call.created_at);
-  const money = call.status === "completed" ? formatUsd(call.cost_usd, call.price_known) : "—";
+  const money = call.status === "completed" ? formatUsd(call.cost_usd, call.price_known, call.api_key) : "—";
   return (
     <li>
       <Link to={`/runs/${call.run_id}/logs`} className="block rounded-md border border-transparent p-2 hover:border-[var(--line)]">
@@ -190,7 +190,7 @@ function CostBreakdown({
                   <>
                     {data.input_tokens.toLocaleString()} input tokens · {data.output_tokens.toLocaleString()} output tokens
                     {data.unpriced_calls > 0
-                      ? ` · ${data.unpriced_calls} ${data.unpriced_calls === 1 ? "call has" : "calls have"} no catalog price`
+                      ? ` · ${data.unpriced_calls} unpriced`
                       : ""}
                     {data.unitemized_usd > 0 ? ` · ${formatUsd(data.unitemized_usd)} stored on runs without a per-call record` : ""}
                   </>

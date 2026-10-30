@@ -98,6 +98,19 @@ export interface LabObject {
   images: { id: string; kind: string; timestamp: number; url: string; score: number }[];
 }
 
+export interface SamMaskOverlay {
+  id: string;
+  timestamp: number;
+  bbox: BBox | null;
+  track_ref: string;
+  confidence: number | null;
+  association_status: string;
+  object_local_id: string;
+  identity_uncertain: boolean;
+  decode: string;
+  url: string;
+}
+
 export interface TrackPointSample {
   track_ref: string;
   timestamp: number;
@@ -108,6 +121,8 @@ export interface TrackPointSample {
   detector_id: string;
   scene_chunk: number;
   note: string;
+  object_local_id?: string;
+  association_status?: string;
 }
 
 export interface PerceptionInstance {
@@ -175,6 +190,11 @@ export interface Observation {
   coordinate_frame: string;
   camera_compensated: boolean;
   frame_id: string | null;
+  track_ref?: string;
+  association_status?: string;
+  source_model?: string;
+  request_id?: string;
+  mask_ref?: string;
 }
 
 export interface LabAction {
@@ -411,6 +431,15 @@ export interface ProviderInfo {
   last_error: string;
   base_url: string;
   models: Capability[];
+  sam?: {
+    model_id: string;
+    provider_id: string;
+    image_segmentation: boolean;
+    video_tracking: boolean;
+    box_prompts: boolean;
+    point_prompts: boolean;
+    video_tracking_detail: string;
+  };
   codex?: CodexSettings;
   claude_code?: ClaudeCodeSettings;
   cursor_cli?: CursorCliSettings;

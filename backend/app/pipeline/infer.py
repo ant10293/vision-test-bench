@@ -13,16 +13,17 @@ from app.models.runs import AnalysisRun, ModelRequestRow
 from app.perception.evidence import evidence_text
 from app.perception.ground import apply_perception
 from app.perception.roster import align_to_roster, drop_split_objects
+from app.perception.sam_fusion import prompt_prior, sam_evidence_block
 from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
 from app.providers.model_list import capabilities_for, resolve_model_id
 from app.providers.registry import get_provider, needs_secret, run_transport
-from app.services.experiments import adopt_video_modality
 from app.providers.types import FrameInput, GenerationRequest, UnsupportedMode, rough_input_tokens
 from app.schemas.analysis import AnalysisDocument, Coverage
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
 from app.services.credentials import load_secret
+from app.services.experiments import adopt_video_modality
 from app.services.storage import data_path, resolve_stored
 from app.video.sampling import budget_indices
 
@@ -125,6 +126,7 @@ async def produce_document(
         "workflow": "workflow",
         "ambiguity": "ambiguity",
         "reinspection": "reinspect",
+        "evidence_fusion": "workflow",
     }.get(stage, "scene")
     if config.get("analysis_pass") == "single" and stage == "scene_analysis":
         extra = "\n\n".join(
@@ -138,7 +140,10 @@ async def produce_document(
         extra = ""
     if stage != "scene_analysis":
         prior = load_working(run.id)
-        extra += "\n\nPrior structured analysis JSON:\n" + prior.model_dump_json()
+        extra += (
+            "\n\nPrior structured analysis JSON. Per-frame SAM boxes are omitted; "
+            "the SAM summary is the geometric evidence:\n" + prompt_prior(prior)
+        )
         extra += "\n\nReturn JSON for this stage only. Keep object ids stable."
     system = config.get("prompt_snapshot") or compose(prompt_key, run.research_mode, extra)
     if config.get("analysis_pass") == "single" and stage == "scene_analysis":
@@ -169,6 +174,9 @@ async def produce_document(
         _note_video_coverage(coverage, timeline_frames=len(times) if run.provider_id == "cursor" else None)
     if user_extra:
         user += "\n\n" + user_extra
+    sam_block = sam_evidence_block(run.id, stage)
+    if sam_block:
+        user += "\n\n" + sam_block
     if spatial_document is not None:
         tracked = evidence_text(spatial_document)
         if tracked:

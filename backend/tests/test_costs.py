@@ -121,6 +121,27 @@ def test_each_provider_call_is_priced_on_the_project_and_dashboard(client: TestC
         modality="sampled_frames",
     )
     fail_provider_call(failed, RuntimeError("timeout"))
+    plan = open_provider_call(
+        session,
+        run,
+        stage="workflow",
+        provider_id="openai",
+        model_id="gpt-4.1",
+        modality="sampled_frames",
+        parameters={"openai_transport": "codex"},
+    )
+    finish_provider_call(
+        session,
+        run,
+        plan,
+        ProviderResponse(
+            text="{}",
+            raw={},
+            usage=Usage(10, 5, 0.0, False),
+            latency_ms=20,
+            model_id="gpt-4.1",
+        ),
+    )
     session.commit()
     project_id = project.id
     session.close()
@@ -132,26 +153,31 @@ def test_each_provider_call_is_priced_on_the_project_and_dashboard(client: TestC
     assert detail.status_code == 200, detail.text
     body = detail.json()
     assert body["cost_usd"] == priced
-    assert body["input_tokens"] == 1400
-    assert body["output_tokens"] == 540
+    assert body["input_tokens"] == 1410
+    assert body["output_tokens"] == 545
     assert body["unpriced_calls"] == 1
-    assert len(body["calls"]) == 3
-    by_model = {item["model_id"]: item for item in body["calls"]}
-    assert by_model["gpt-4.1"]["price_known"] is True
-    assert by_model["gpt-4.1"]["cost_usd"] == priced
-    assert by_model["gpt-4.1"]["video_filename"] == "clip.mp4"
-    assert by_model["gpt-4.1"]["stage"] == "scene_analysis"
-    assert by_model["muse-spark-1.3"]["price_known"] is False
-    assert by_model["muse-spark-1.3"]["cost_usd"] == 0
-    assert by_model["sam-3.1"]["status"] == "failed"
-    assert by_model["sam-3.1"]["cost_usd"] == 0
+    assert len(body["calls"]) == 4
+    by_stage = {item["stage"]: item for item in body["calls"]}
+    assert by_stage["scene_analysis"]["price_known"] is True
+    assert by_stage["scene_analysis"]["api_key"] is True
+    assert by_stage["scene_analysis"]["cost_usd"] == priced
+    assert by_stage["scene_analysis"]["video_filename"] == "clip.mp4"
+    assert by_stage["scene_analysis"]["model_id"] == "gpt-4.1"
+    assert by_stage["audio_context"]["price_known"] is False
+    assert by_stage["audio_context"]["api_key"] is True
+    assert by_stage["audio_context"]["cost_usd"] == 0
+    assert by_stage["workflow"]["api_key"] is False
+    assert by_stage["workflow"]["price_known"] is False
+    assert by_stage["segmentation"]["status"] == "failed"
+    assert by_stage["segmentation"]["cost_usd"] == 0
 
     dashboard = client.get("/api/dashboard").json()
     assert dashboard["cost_usd"] == priced
     assert dashboard["unpriced_calls"] == 1
     providers = {item["provider_id"]: item for item in dashboard["cost_by_provider"]}
     assert providers["openai"]["cost_usd"] == priced
-    assert providers["openai"]["calls"] == 1
+    assert providers["openai"]["calls"] == 2
+    assert providers["openai"]["unpriced_calls"] == 1
     assert providers["meta"]["cost_usd"] == 0
-    assert providers["meta"]["unpriced_calls"] == 1
+    assert providers["meta"]["unpriced_calls"] == 0
     assert providers["meta"]["calls"] == 1

@@ -5,7 +5,13 @@ interface InspectorState {
   playing: boolean;
   speed: number;
   overlay: boolean;
-  layers: { tracks: boolean; trajectory: boolean; uncertain: boolean; confidence: boolean };
+  layers: {
+    tracks: boolean;
+    trajectory: boolean;
+    uncertain: boolean;
+    confidence: boolean;
+    conflicts: boolean;
+  };
   seedMode: boolean;
   selectedObject: string | null;
   selectedAction: string | null;
@@ -28,7 +34,13 @@ export const useInspector = create<InspectorState>((set) => ({
   playing: false,
   speed: 1,
   overlay: true,
-  layers: { tracks: false, trajectory: false, uncertain: false, confidence: true },
+  layers: {
+    tracks: false,
+    trajectory: false,
+    uncertain: false,
+    confidence: true,
+    conflicts: false,
+  },
   seedMode: false,
   selectedObject: null,
   selectedAction: null,

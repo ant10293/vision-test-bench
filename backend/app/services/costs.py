@@ -43,6 +43,13 @@ def fail_provider_call(row: ModelRequestRow, exc: BaseException) -> None:
     row.error = str(exc)[:2000]
 
 
+def uses_api_key(provider_id: str, parameters: dict | None) -> bool:
+    """True when the call was sent with an API key rather than a linked plan."""
+    from app.providers.registry import needs_secret, run_transport
+
+    return needs_secret(provider_id, run_transport(provider_id, parameters or {}))
+
+
 def finish_provider_call(
     session: Session,
     run: AnalysisRun,
@@ -95,8 +102,9 @@ def project_costs(session: Session, project_id: str) -> dict | None:
         run = run_by_id[request.run_id]
         video = videos.get(run.video_id)
         known = bool(response.price_known) if response is not None else False
+        keyed = uses_api_key(request.provider_id, request.parameters_json)
         cost = float(response.cost_usd or 0) if response is not None and known else 0.0
-        if request.status == "completed" and response is not None and not known:
+        if request.status == "completed" and response is not None and not known and not keyed:
             unpriced += 1
         if known:
             itemized += cost
@@ -117,6 +125,7 @@ def project_costs(session: Session, project_id: str) -> dict | None:
                 "output_tokens": response.output_tokens if response else 0,
                 "cost_usd": round(cost, 6),
                 "price_known": known,
+                "api_key": keyed,
             }
         )
     calls.sort(key=lambda item: item["created_at"], reverse=True)
@@ -158,7 +167,7 @@ def aggregate_spend(session: Session, runs: list[AnalysisRun]) -> dict:
             cost = round(float(response.cost_usd or 0), 6)
             bucket["cost_usd"] = round(bucket["cost_usd"] + cost, 6)
             itemized += cost
-        else:
+        elif not uses_api_key(request.provider_id, request.parameters_json):
             bucket["unpriced_calls"] += 1
             unpriced += 1
     total = round(sum(float(run.cost_usd or 0) for run in runs), 6)
@@ -196,6 +205,24 @@ def _paired_calls(
         if current is None or response.created_at >= current.created_at:
             latest[response.request_id] = response
     return [(row, latest.get(row.id)) for row in requests]
+
+
+def unpriced_call_count(session: Session, run_id: str) -> int:
+    """Plan calls only. An API-key call with no catalog rate is not unpriced."""
+    return sum(
+        1
+        for request, response in _paired_calls(session, [run_id])
+        if _plan_usage(request, response)
+    )
+
+
+def _plan_usage(request: ModelRequestRow, response: ModelResponseRow | None) -> bool:
+    return (
+        response is not None
+        and request.status == "completed"
+        and not response.price_known
+        and not uses_api_key(request.provider_id, request.parameters_json)
+    )
 
 
 def _unitemized(total: float, itemized: float) -> float:

@@ -3,13 +3,13 @@ import { Eye, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { AssetPreview } from "./AssetPreview";
 import { api } from "../lib/api";
-import type { Bundle, TrackPointSample } from "../lib/types";
-import { frameObjectStills, observationsAt, tracksAt } from "../lib/analysis";
+import type { Bundle, Observation, TrackPointSample } from "../lib/types";
+import { coverageAt, frameObjectStills, overlayObservations, tracksAt } from "../lib/analysis";
 import { formatConfidence } from "../lib/confidence";
 import { humanize, labeledId } from "../lib/humanize";
 import { panStage, stageViewAt, stageZoomByWheel, clampStageView, MAX_STAGE_ZOOM, MIN_STAGE_ZOOM, type StageView } from "../lib/stageZoom";
 import { ZoomStepper } from "./ZoomStepper";
-import { labelSpan, wrapLines } from "../lib/wrapText";
+import { wrapLines } from "../lib/wrapText";
 import { useInspector } from "../stores/ui";
 
 const LABEL_SIZE = 14;
@@ -32,7 +32,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const client = useQueryClient();
-  const { time, setTime, playing, setPlaying, speed, overlay, layers, seedMode, loop } = useInspector();
+  const { time, setTime, playing, setPlaying, speed, overlay, layers, seedMode, loop, selectedObject } = useInspector();
   const [seedError, setSeedError] = useState("");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -121,11 +121,16 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
     };
   }, []);
 
-  const inFrame = observationsAt(bundle, time);
-  const visible = overlay ? inFrame : [];
+  const samBoxes = overlay ? overlayObservations(bundle.observations, time, "sam") : [];
+  const trackedIds = new Set(samBoxes.map((item) => item.object_local_id));
+  const vlmBoxes = overlay ? overlayObservations(bundle.observations, time, "vlm").filter((item) => !trackedIds.has(item.object_local_id)) : [];
+  const inferredBoxes = overlay ? overlayObservations(bundle.observations, time, "inferred") : [];
+  const conflictBoxes = overlay && layers.conflicts ? overlayObservations(bundle.observations, time, "conflict") : [];
   const stills = frameObjectStills(bundle, time);
-  const trackHits = tracksAt(bundle.tracks?.points ?? [], time);
+  const allPoints = bundle.tracks?.points ?? [];
+  const trackHits = tracksAt(allPoints, time);
   const showTracks = layers.tracks || layers.trajectory || layers.uncertain;
+  const selectedCoverage = selectedObject ? coverageAt(bundle.observations, selectedObject, time) : "";
   const src = bundle.video ? bundle.video.playback_url : "";
 
   useEffect(() => {
@@ -283,54 +288,24 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
           onPause={() => setPlaying(false)}
           onClick={(event) => void seedAt(event)}
         />
-        {overlay && (
+        {(vlmBoxes.length > 0 || inferredBoxes.length > 0 || samBoxes.length > 0 || conflictBoxes.length > 0) && (
           <svg
             className="pointer-events-none absolute"
             style={{ left: content.x, top: content.y, width: content.w, height: content.h, ...frameTransform }}
             viewBox={`0 0 ${content.vw} ${content.vh}`}
           >
-            {visible.map((obs) => {
-              if (!obs.bbox) return null;
-              const object = bundle.objects.find((item) => item.local_id === obs.object_local_id);
-              const color = object?.color ?? "#7EB6FF";
-              const x = obs.bbox.x * content.vw;
-              const y = obs.bbox.y * content.vh;
-              const w = obs.bbox.w * content.vw;
-              const h = obs.bbox.h * content.vh;
-              const others = visible.flatMap((item) => (
-                item.bbox && item.id !== obs.id ? [{ x: item.bbox.x * content.vw, width: item.bbox.w * content.vw }] : []
-              ));
-              const span = labelSpan(x, w, others, LABEL_SIZE);
-              const label = object ? labeledId(object.local_id, object.label) : "";
-              const lines = label ? wrapLines(label, span.width, labelWidth) : [];
-              const anchor = Math.max(LABEL_SIZE, y - 4);
-              const firstBaseline = Math.max(LABEL_SIZE, anchor - Math.max(0, lines.length - 1) * LABEL_LINE);
-              const score = layers.confidence && obs.confidence != null ? formatConfidence(obs.confidence) : "";
-              return (
-                <g key={`${obs.id}-${fontReady ? "font" : "fallback"}`}>
-                  <rect
-                    x={x}
-                    y={y}
-                    width={w}
-                    height={h}
-                    fill={color}
-                    fillOpacity={0.12}
-                    stroke={color}
-                    strokeWidth={2}
-                  />
-                  {lines.length > 0 && (
-                    <text x={span.x} y={firstBaseline} fill={color} fontSize={LABEL_SIZE} fontFamily="IBM Plex Sans, sans-serif">
-                      {lines.map((line, index) => (
-                        <tspan key={index} x={span.x} dy={index === 0 ? 0 : LABEL_LINE}>{line}</tspan>
-                      ))}
-                    </text>
-                  )}
-                  {score && (
-                    <text x={x + CONFIDENCE_INSET} y={y + 14} fill={color} fontSize={11} fontFamily="IBM Plex Sans, sans-serif">{score}</text>
-                  )}
-                </g>
-              );
-            })}
+            {vlmBoxes.map((obs) => (
+              <ObservationBox key={obs.id} obs={obs} bundle={bundle} content={content} fontReady={fontReady} showConfidence={layers.confidence} showId />
+            ))}
+            {inferredBoxes.map((obs) => (
+              <ObservationBox key={obs.id} obs={obs} bundle={bundle} content={content} fontReady={fontReady} showConfidence={layers.confidence} showId dashed />
+            ))}
+            {samBoxes.map((obs) => (
+              <ObservationBox key={obs.id} obs={obs} bundle={bundle} content={content} fontReady={fontReady} showConfidence={layers.confidence} showId dashed={false} />
+            ))}
+            {conflictBoxes.map((obs) => (
+              <ObservationBox key={obs.id} obs={obs} bundle={bundle} content={content} fontReady={fontReady} showConfidence={layers.confidence} showId dashed conflict />
+            ))}
           </svg>
         )}
         {stills.length > 0 && (
@@ -382,14 +357,14 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
             onZoomIn={() => stepZoom(1)}
           />
         </div>
-        {showTracks && (
+        {showTracks && trackHits.length > 0 && (
           <svg
             className="pointer-events-none absolute"
             style={{ left: content.x, top: content.y, width: content.w, height: content.h, ...frameTransform }}
             viewBox={`0 0 ${content.vw} ${content.vh}`}
           >
             {trackHits.map((point) => (
-              <TrackMark key={`${point.track_ref}-${point.timestamp}`} point={point} points={bundle.tracks?.points ?? []} time={time} content={content} layers={layers} />
+              <TrackMark key={`${point.detector_id}-${point.track_ref}-${point.timestamp}`} point={point} points={allPoints} time={time} content={content} layers={layers} />
             ))}
           </svg>
         )}
@@ -399,6 +374,9 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
           <button className="btn" onClick={() => step(-1)}>Prev frame</button>
           <button className="btn" onClick={() => step(1)}>Next frame</button>
           <button className="btn" onClick={() => useInspector.getState().setOverlay(!overlay)}>{overlay ? "Hide boxes" : "Show boxes"}</button>
+          <button className="btn" aria-pressed={layers.conflicts} onClick={() => useInspector.getState().setLayer("conflicts", !layers.conflicts)}>
+            {layers.conflicts ? "Hide conflicts" : "Show conflicts"}
+          </button>
           <button className="btn" aria-pressed={layers.confidence} onClick={() => useInspector.getState().setLayer("confidence", !layers.confidence)}>
             {layers.confidence ? "Hide confidence" : "Show confidence"}
           </button>
@@ -436,6 +414,11 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
         <div className="flex flex-col gap-0.5">
           <span className="mono text-[var(--muted)]">{time.toFixed(2)}s</span>
           <span className="text-xs text-[var(--muted)]">Space play · arrows step · f fullscreen · scroll over a point to zoom · drag to pan</span>
+          {selectedObject && (
+            <span className="text-xs text-[var(--muted)]">
+              {humanize(selectedObject)} at this time: {coverageLabel(selectedCoverage)}. A drawn trail uses stored points and is not a filled-in location.
+            </span>
+          )}
         </div>
       </div>
       {preview != null && stills[preview] && (
@@ -467,6 +450,72 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
       .then(() => useInspector.getState().setSeedMode(false))
       .catch((err: unknown) => setSeedError(err instanceof Error ? err.message : "The seed was not saved."));
   }
+}
+
+function coverageLabel(state: string) {
+  if (state === "observed") return "directly observed";
+  if (state === "inferred") return "inferred between observations";
+  if (state === "absent") return "explicitly absent";
+  if (state === "conflict") return "model and SAM disagree";
+  if (state === "unassigned") return "SAM track was not linked to this object";
+  return "unobserved";
+}
+
+function ObservationBox({
+  obs,
+  bundle,
+  content,
+  fontReady,
+  showConfidence,
+  showId,
+  dashed = false,
+  conflict = false,
+}: {
+  obs: Observation;
+  bundle: Bundle;
+  content: { vw: number; vh: number };
+  fontReady: boolean;
+  showConfidence: boolean;
+  showId: boolean;
+  dashed?: boolean;
+  conflict?: boolean;
+}) {
+  if (!obs.bbox) return null;
+  const object = bundle.objects.find((item) => item.local_id === obs.object_local_id);
+  const color = conflict ? "#e07070" : object?.color ?? "#7EB6FF";
+  const x = obs.bbox.x * content.vw;
+  const y = obs.bbox.y * content.vh;
+  const w = obs.bbox.w * content.vw;
+  const h = obs.bbox.h * content.vh;
+  const label = showId && object ? labeledId(object.local_id, object.label) : "";
+  const lines = label ? wrapLines(label, w, labelWidth) : [];
+  const score = showConfidence && obs.confidence != null ? formatConfidence(obs.confidence) : "";
+  const uncertain = obs.association_status === "ambiguous" || obs.continuity === "uncertain";
+  return (
+    <g key={`${obs.id}-${fontReady ? "font" : "fallback"}`}>
+      <rect
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        fill={color}
+        fillOpacity={dashed ? 0.04 : 0.12}
+        stroke={color}
+        strokeWidth={conflict ? 2.5 : 2}
+        strokeDasharray={dashed || uncertain ? "6 4" : undefined}
+      />
+      {lines.length > 0 && (
+        <text x={x} y={Math.max(LABEL_SIZE, y - 4)} fill={color} fontSize={LABEL_SIZE} fontFamily="IBM Plex Sans, sans-serif">
+          {lines.map((line, index) => (
+            <tspan key={index} x={x} dy={index === 0 ? 0 : LABEL_LINE}>{line}</tspan>
+          ))}
+        </text>
+      )}
+      {score && (
+        <text x={x + CONFIDENCE_INSET} y={y + 14} fill={color} fontSize={11} fontFamily="IBM Plex Sans, sans-serif">{score}</text>
+      )}
+    </g>
+  );
 }
 
 function TrackMark({

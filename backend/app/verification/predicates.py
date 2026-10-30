@@ -302,16 +302,28 @@ def _is_visible(observation, object_ids: set[str], window: tuple[float, float]) 
 
 
 def _subject_absent(execution, subject_ids: set[str], window) -> bool:
+    """An unresolved role can still be a missing component.
+
+    A mapped object is absent only when a direct observation says so. A gap,
+    an occlusion, or a detector that returned nothing is not that observation.
+    """
     if not subject_ids:
         return True
+    explicit = False
     for observation in execution.observations:
         if observation.object_local_id not in subject_ids:
             continue
-        if observation.timestamp < window[0]:
+        if observation.timestamp < window[0] - 1e-6 or observation.timestamp > window[1] + 1e-6:
             continue
-        if enum_value(observation.visibility) in {"visible", "partial"}:
+        visibility = enum_value(observation.visibility)
+        if visibility in {"visible", "partial"}:
             return False
-    return True
+        if visibility == "absent" and evidence_class(observation) == "DIRECTLY_OBSERVED":
+            note = (observation.evidence.note or "").lower()
+            if any(token in note for token in ("not detected", "unobserved", "no sam", "empty detection")):
+                continue
+            explicit = True
+    return explicit
 
 
 def _visible_evidence(execution, object_ids: set[str], window, video_id: str) -> list[EvidenceRef]:

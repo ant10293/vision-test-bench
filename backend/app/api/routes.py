@@ -87,7 +87,7 @@ from app.services.corrections import (
     update_object,
     update_step,
 )
-from app.services.costs import aggregate_spend, project_costs
+from app.services.costs import aggregate_spend, project_costs, uses_api_key
 from app.services.credentials import (
     delete_secret,
     load_secret,
@@ -591,6 +591,56 @@ def media_frame(frame_id: str, session: Session = Depends(db)) -> FileResponse:
     return FileResponse(path)
 
 
+@router.get("/runs/{run_id}/sam-masks")
+def sam_masks(run_id: str, t: float = 0, session: Session = Depends(db)) -> list[dict]:
+    """Boxes and mask URLs near one timestamp. Full rasters are not inlined."""
+    rows = session.scalars(
+        select(SegmentationMask).where(
+            SegmentationMask.run_id == run_id,
+            SegmentationMask.source == "sam-3.1",
+        )
+    ).all()
+    if not rows:
+        return []
+    nearest = min(rows, key=lambda row: abs(row.timestamp - t))
+    if abs(nearest.timestamp - t) > 0.5:
+        return []
+    chosen = [row for row in rows if abs(row.timestamp - nearest.timestamp) < 1e-3]
+    objects = {
+        obj.id: obj.local_id
+        for obj in session.scalars(select(DetectedObject).where(DetectedObject.run_id == run_id))
+    }
+    payload = []
+    for row in chosen:
+        meta = row.rle_json or {}
+        payload.append(
+            {
+                "id": row.id,
+                "timestamp": row.timestamp,
+                "bbox": row.bbox_json,
+                "track_ref": row.track_ref,
+                "confidence": row.confidence,
+                "association_status": meta.get("association_status") or "",
+                "object_local_id": objects.get(row.object_id or "", "") or meta.get("object_local_id") or "",
+                "identity_uncertain": row.identity_uncertain,
+                "decode": meta.get("decode") or "",
+                "url": f"/api/media/masks/{row.id}" if row.path else "",
+            }
+        )
+    return payload
+
+
+@router.get("/media/masks/{mask_id}")
+def media_mask(mask_id: str, session: Session = Depends(db)) -> FileResponse:
+    row = session.get(SegmentationMask, mask_id)
+    if row is None or not row.path:
+        raise HTTPException(404, "mask not found")
+    path = resolve_stored(row.path)
+    if not path.exists():
+        raise HTTPException(404, "mask file missing")
+    return FileResponse(path)
+
+
 @router.get("/media/object-images/{image_id}")
 def media_object_image(image_id: str, session: Session = Depends(db)) -> FileResponse:
     image = session.get(ObjectImage, image_id)
@@ -668,8 +718,7 @@ def list_providers(session: Session = Depends(db)) -> list[dict]:
         provider_id = item["id"]
         status = item["status"]
         models = with_manual_models(provider_id, models, added.get(provider_id, []))
-        payload.append(
-            {
+        entry = {
                 "id": provider_id,
                 "configured": item["configured"],
                 "secret_source": item["source"],
@@ -682,8 +731,12 @@ def list_providers(session: Session = Depends(db)) -> list[dict]:
                 **({"codex": load_codex()} if provider_id == "openai" else {}),
                 **({"claude_code": load_claude_code()} if provider_id == "anthropic" else {}),
                 **({"cursor_cli": load_cursor_cli()} if provider_id == "cursor" else {}),
-            }
-        )
+        }
+        if provider_id == "meta":
+            from app.providers.sam import sam_capabilities
+
+            entry["sam"] = sam_capabilities()
+        payload.append(entry)
     return payload
 
 
@@ -948,6 +1001,7 @@ def run_requests(run_id: str, session: Session = Depends(db)) -> list[dict]:
                     "output_tokens": response.output_tokens if response else 0,
                     "cost_usd": response.cost_usd if response else 0,
                     "price_known": bool(response.price_known) if response else False,
+                    "api_key": uses_api_key(row.provider_id, row.parameters_json),
                 },
             }
         )
