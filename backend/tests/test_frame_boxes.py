@@ -1,4 +1,10 @@
-from app.pipeline.frame_boxes import frame_boxes_usable, merge_frame_boxes, square_normalized
+from app.pipeline.frame_boxes import (
+    frame_box_rejection,
+    frame_boxes_usable,
+    merge_frame_boxes,
+    parse_frame_boxes,
+    square_normalized,
+)
 from app.schemas.analysis import AnalysisDocument, BBox, Evidence, ObservationPrediction
 from app.schemas.enums import EvidenceClass, Provenance
 
@@ -34,6 +40,20 @@ def test_a_short_square_answer_is_not_copied_onto_a_tall_frame():
 def test_a_square_frame_can_have_square_boxes():
     boxes = [_obs("Object_1", float(index), 0.05, 0.05) for index in range(8)]
     assert square_normalized(boxes, 1000, 1000) is False
+
+
+def test_pixel_corners_become_fractions_of_the_frame():
+    text = '{"observations":[{"object_local_id":"Object_1","timestamp":0,"bbox":{"x":940,"y":1318,"w":442,"h":250}}]}'
+    document = parse_frame_boxes(text, 2160, 3840)
+    box = document.observations[0].bbox
+    assert box is not None
+    assert round(box.x, 3) == round(940 / 2160, 3)
+    assert round(box.y, 3) == round(1318 / 3840, 3)
+
+
+def test_a_box_shared_by_three_parts_is_not_copied():
+    boxes = [_obs(f"Object_{index}", 0.0, 0.08, 0.045, x=0.4, y=0.3) for index in range(1, 4)]
+    assert frame_box_rejection(boxes, 2160, 3840, {item.object_local_id for item in boxes})
 
 
 def test_frame_boxes_replace_the_same_moment_only():

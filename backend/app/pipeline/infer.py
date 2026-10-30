@@ -15,7 +15,14 @@ from app.perception.evidence import evidence_text
 from app.perception.ground import apply_perception
 from app.perception.roster import align_to_roster, drop_split_objects
 from app.perception.sam_fusion import prompt_prior, sam_evidence_block
-from app.pipeline.frame_boxes import frame_box_prompt, frame_boxes_usable, merge_frame_boxes
+from app.pipeline.frame_boxes import (
+    FRAME_BOX_SCHEMA,
+    FRAME_BOX_WINDOW,
+    frame_box_prompt,
+    frame_box_rejection,
+    merge_frame_boxes,
+    parse_frame_boxes,
+)
 from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import parse_analysis
 from app.pipeline.prompts import compose
@@ -261,6 +268,7 @@ async def _call(
     *,
     attach_video: bool = False,
     modality: str | None = None,
+    parser=None,
 ) -> AnalysisDocument:
     config = run.config_json or {}
     if run.input_tokens and False:
@@ -336,7 +344,7 @@ async def _call(
         raise
     finish_provider_call(session, run, row, response)
     session.commit()
-    return parse_analysis(response.text)
+    return (parser or parse_analysis)(response.text)
 
 
 def _video_file(video: VideoAsset):
@@ -402,16 +410,17 @@ async def _reground_video_boxes(session, run, stage, document: AnalysisDocument,
     selected = _budget_frames(frames, int(config.get("max_frames") or 48))
     if not selected:
         return document
+    roster_ids = {obj.local_id for obj in document.objects}
     roster = "\n".join(f"{obj.local_id}: {obj.label}" for obj in document.objects)
     system = frame_box_prompt(width, height)
     merged = document
     replaced = False
-    for window in _windows(selected, int(config.get("max_images_per_call") or 16)):
+    for window in _windows(selected, FRAME_BOX_WINDOW, overlap=0):
         stamps = ", ".join(f"{_frame_time(frame):.3f}" for frame in window)
         user = (
             f"Objects:\n{roster}\n\n"
-            f"The attached images are the frames at these times, in seconds: {stamps}. "
-            "Use those times on the observations."
+            f"The attached images are the frames at these times, in seconds, in order: {stamps}. "
+            "Use those times on the observations. Box only the named parts."
         )
         try:
             fresh = await _call(
@@ -422,15 +431,17 @@ async def _reground_video_boxes(session, run, stage, document: AnalysisDocument,
                 user,
                 window,
                 video,
-                AnalysisDocument.model_json_schema(),
+                FRAME_BOX_SCHEMA,
                 attach_video=False,
                 modality="sampled_frames",
+                parser=lambda text, frame_w=width, frame_h=height: parse_frame_boxes(text, frame_w, frame_h),
             )
         except Exception:
             logger.exception("frame box pass failed; the video boxes were kept")
             break
-        if not frame_boxes_usable(fresh.observations, width, height):
-            logger.info("frame box pass was not in displayed-frame coordinates; those boxes were not copied")
+        reason = frame_box_rejection(fresh.observations, width, height, roster_ids)
+        if reason:
+            logger.info("frame box pass skipped: %s", reason)
             continue
         merged = merge_frame_boxes(merged, fresh)
         replaced = True
