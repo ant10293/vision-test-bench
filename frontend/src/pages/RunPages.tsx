@@ -1000,21 +1000,49 @@ function numberText(value: unknown) {
   return typeof value === "number" ? value.toFixed(2) : "—";
 }
 
+const LOG_COLUMNS: { label: string; className?: string }[] = [
+  { label: "Stage" },
+  { label: "Model" },
+  { label: "Status" },
+  { label: "Latency", className: "num" },
+  { label: "Tokens in", className: "num" },
+  { label: "Tokens out", className: "num" },
+  { label: "Cost", className: "num" },
+];
+
+const LOG_BONES = ["7rem", "8rem", "5rem", "4rem", "4rem", "4rem", "5rem"];
+
+type LogUsage = {
+  cost_usd?: number;
+  price_known?: boolean;
+  api_key?: boolean;
+  input_tokens?: number;
+  output_tokens?: number;
+};
+
+function logUsage(row: Record<string, unknown>): LogUsage {
+  return (row.usage ?? {}) as LogUsage;
+}
+
 function requestCost(row: Record<string, unknown>): string {
   if (row.status !== "completed") return "";
-  const usage = (row.usage ?? {}) as { cost_usd?: number; price_known?: boolean; api_key?: boolean; input_tokens?: number; output_tokens?: number };
+  const usage = logUsage(row);
   const money = formatUsd(Number(usage.cost_usd ?? 0), Boolean(usage.price_known), Boolean(usage.api_key));
   return ` · ${usage.input_tokens ?? 0} in / ${usage.output_tokens ?? 0} out · ${money}`;
+}
 }
 
 export function LogsPage() {
   const bundle = useOptionalBundle();
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   const rows = useQuery({
     queryKey: ["requests", bundle?.run.id ?? "pending"],
     queryFn: () => api.requests(bundle?.run.id ?? ""),
     enabled: Boolean(bundle),
   });
   const requestsPending = rows.data === undefined && !rows.isError;
+  const requests = rows.data ?? [];
+  const showTable = requestsPending || requests.length > 0;
   return (
     <div className="space-y-3" aria-busy={!bundle || requestsPending || undefined}>
       {(!bundle || requestsPending) && <p className="sr-only">Loading logs</p>}
@@ -1027,37 +1055,101 @@ export function LogsPage() {
         </ul>
       ) : <p className="text-sm text-[var(--muted)]">No validation issues on the active document.</p>}
       {rows.isError && <p className="text-sm text-[var(--rose)]">{(rows.error as Error).message}</p>}
-      {requestsPending ? (
-        <ul className="min-w-0 space-y-3" aria-hidden="true">
-          {Array.from({ length: REQUEST_PLACEHOLDERS }, (_, index) => (
-            <li key={index}><div className="panel p-3 text-sm"><Bone width="72%" /></div></li>
-          ))}
-        </ul>
-      ) : rows.isError || !rows.data?.length ? (
-        rows.isError ? null : <p className="text-sm text-[var(--muted)]">This run has not recorded a model request. Fixture and deterministic analyses are stored as documents, not provider calls.</p>
-      ) : (
-        <ul className="min-w-0 space-y-3">
-          {rows.data.map((row) => {
-            const lines = formatLogText(String(row.response_text || row.error || "")).split("\n");
-            return (
-              <li key={String(row.id)} className="min-w-0">
-                <details className="panel min-w-0 p-3 text-sm">
-                  <summary className="cursor-pointer">{humanize(String(row.stage))} · {humanize(String(row.model_id))} · {humanize(String(row.status))} · {String(row.latency_ms)} ms{requestCost(row)}</summary>
-                  {lines.length === 1 && lines[0] === "" ? (
-                    <p className="mt-2 text-xs text-[var(--muted)]">No response body.</p>
-                  ) : (
-                    <div className="log-body mono" role="log">
-                      {lines.map((line, index) => (
-                        <div key={index}>{line || "\u00a0"}</div>
-                      ))}
-                    </div>
-                  )}
-                </details>
-              </li>
-            );
-          })}
-        </ul>
+      {!requestsPending && !rows.isError && !requests.length && (
+        <p className="text-sm text-[var(--muted)]">This run has not recorded a model request. Fixture and deterministic analyses are stored as documents, not provider calls.</p>
       )}
+      {showTable && (
+        <div className="panel overflow-x-auto" aria-busy={requestsPending || undefined}>
+          <table className="runs-table">
+            <thead>
+              <tr>
+                {LOG_COLUMNS.map((column) => (
+                  <th key={column.label} className={column.className} scope="col">{column.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {requestsPending ? Array.from({ length: REQUEST_PLACEHOLDERS }, (_, index) => (
+                <tr key={index}>
+                  {LOG_BONES.map((width, cell) => (
+                    <td key={cell} className={LOG_COLUMNS[cell]?.className} aria-hidden="true"><Bone width={width} /></td>
+                  ))}
+                </tr>
+              )) : requests.map((row) => {
+                const id = String(row.id);
+                const expanded = Boolean(open[id]);
+                const usage = logUsage(row);
+                const completed = row.status === "completed";
+                return (
+                  <LogRequest
+                    key={id}
+                    row={row}
+                    expanded={expanded}
+                    completed={completed}
+                    usage={usage}
+                    onToggle={() => setOpen((current) => ({ ...current, [id]: !current[id] }))}
+                  />
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LogRequest({
+  row,
+  expanded,
+  completed,
+  usage,
+  onToggle,
+}: {
+  row: Record<string, unknown>;
+  expanded: boolean;
+  completed: boolean;
+  usage: LogUsage;
+  onToggle: () => void;
+}) {
+  const id = String(row.id);
+  const bodyId = `log-body-${id}`;
+  return (
+    <>
+      <tr>
+        <th scope="row">
+          <button type="button" className="run-link" aria-expanded={expanded} aria-controls={bodyId} onClick={onToggle}>
+            {humanize(String(row.stage))}
+          </button>
+        </th>
+        <td>{humanize(String(row.model_id))}</td>
+        <td><span className="tag">{humanize(String(row.status))}</span></td>
+        <td className="num mono">{String(row.latency_ms)} ms</td>
+        <td className="num mono">{completed ? usage.input_tokens ?? 0 : "—"}</td>
+        <td className="num mono">{completed ? usage.output_tokens ?? 0 : "—"}</td>
+        <td className="num mono">{completed ? formatUsd(Number(usage.cost_usd ?? 0), Boolean(usage.price_known)) : "—"}</td>
+      </tr>
+      {expanded && (
+        <tr>
+          <td id={bodyId} className="log-cell" colSpan={LOG_COLUMNS.length}>
+            <LogBody row={row} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function LogBody({ row }: { row: Record<string, unknown> }) {
+  const lines = formatLogText(String(row.response_text || row.error || "")).split("\n");
+  if (lines.length === 1 && lines[0] === "") {
+    return <p className="text-xs text-[var(--muted)]">No response body.</p>;
+  }
+  return (
+    <div className="log-body mono" role="log">
+      {lines.map((line, index) => (
+        <div key={index}>{line || "\u00a0"}</div>
+      ))}
     </div>
   );
 }

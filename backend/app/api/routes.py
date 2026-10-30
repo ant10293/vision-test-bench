@@ -72,7 +72,7 @@ from app.providers.cursor_cli import begin_login as begin_cursor_login
 from app.providers.cursor_cli import load_cursor_cli, save_cursor_cli
 from app.providers.cursor_cli import probe as probe_cursor
 from app.providers.model_list import options_for
-from app.providers.registry import get_provider, provider_ids
+from app.providers.registry import get_provider, is_local, provider_ids
 from app.providers.types import ProviderError, UnsupportedMode
 from app.schemas.analysis import AnalysisDocument
 from app.services.corrections import (
@@ -681,6 +681,11 @@ def create_prompt(payload: dict, session: Session = Depends(db)) -> dict:
     return {"id": row.id, "key": row.key, "version": row.version}
 
 
+@router.get("/providers/ids")
+def list_provider_ids() -> list[dict]:
+    return [{"id": provider_id, "local": is_local(provider_id)} for provider_id in provider_ids()]
+
+
 @router.get("/providers")
 def list_providers(session: Session = Depends(db)) -> list[dict]:
     from concurrent.futures import ThreadPoolExecutor
@@ -691,7 +696,7 @@ def list_providers(session: Session = Depends(db)) -> list[dict]:
         added.setdefault(row.provider_id, []).append(row.model_id)
     prepared = []
     for provider_id in provider_ids():
-        local = provider_id in {"deterministic", "fixture", "manual_json"}
+        local = is_local(provider_id)
         configured, source, hint = (True, "local", "") if local else secret_hint(session, provider_id)
         status = provider_status(session, provider_id)
         secret = "" if local else load_secret(session, provider_id)[0]
@@ -727,6 +732,7 @@ def list_providers(session: Session = Depends(db)) -> list[dict]:
                 "last_error": "" if not status else status.last_error,
                 "last_validated_at": status.last_validated_at.isoformat() if status and status.last_validated_at else None,
                 "base_url": status.extra_base_url if status else "",
+                "local": is_local(provider_id),
                 "models": models,
                 **({"codex": load_codex()} if provider_id == "openai" else {}),
                 **({"claude_code": load_claude_code()} if provider_id == "anthropic" else {}),
@@ -817,7 +823,7 @@ async def link_cursor_cli(payload: dict | None = Body(default=None)) -> dict:
 
 @router.post("/providers/{provider_id}/credentials")
 def put_credentials(provider_id: str, payload: dict, session: Session = Depends(db)) -> dict:
-    if provider_id in {"deterministic", "fixture", "manual_json"}:
+    if is_local(provider_id):
         raise HTTPException(400, "this provider does not use an API key")
     secret = payload.get("api_key") or ""
     if not secret:
@@ -839,7 +845,7 @@ def remove_credentials(provider_id: str, session: Session = Depends(db)) -> dict
 
 @router.post("/providers/{provider_id}/validate")
 async def validate_provider(provider_id: str, session: Session = Depends(db)) -> dict:
-    if provider_id in {"deterministic", "fixture", "manual_json"}:
+    if is_local(provider_id):
         record_validation(session, provider_id, True, "")
         return {"ok": True, "provider_id": provider_id, "detail": "local provider"}
     secret, source = load_secret(session, provider_id)

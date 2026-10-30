@@ -424,6 +424,7 @@ export interface CursorCliStatus extends CursorCliSettings, CliLinkStatus {}
 
 export interface ProviderInfo {
   id: string;
+  local: boolean;
   configured: boolean;
   secret_source: string;
   hint: string;
