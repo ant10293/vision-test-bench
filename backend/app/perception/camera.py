@@ -6,24 +6,47 @@ import cv2
 import numpy as np
 
 
+def camera_motion(
+    previous_gray: np.ndarray,
+    current_gray: np.ndarray,
+    *,
+    max_corners: int = 80,
+    reprojection: float = 3.0,
+    min_inliers: int = 6,
+    min_share: float = 0.0,
+) -> np.ndarray | None:
+    """Partial affine between two grayscale frames.
+
+    None when fewer than min_inliers features, or less than min_share of the
+    features found, agree. A large moving hand can outvote a thin background.
+    """
+    features = cv2.goodFeaturesToTrack(previous_gray, maxCorners=max_corners, qualityLevel=0.01, minDistance=7)
+    if features is None or len(features) < min_inliers:
+        return None
+    nxt, status, _err = cv2.calcOpticalFlowPyrLK(previous_gray, current_gray, features, None)
+    if nxt is None or status is None:
+        return None
+    good_previous = features[status.flatten() == 1]
+    good_next = nxt[status.flatten() == 1]
+    if len(good_previous) < min_inliers:
+        return None
+    matrix, inliers = cv2.estimateAffinePartial2D(
+        good_previous, good_next, method=cv2.RANSAC, ransacReprojThreshold=reprojection
+    )
+    if matrix is None:
+        return None
+    agreeing = int(inliers.sum()) if inliers is not None else len(good_previous)
+    if agreeing < min_inliers or agreeing < min_share * len(features):
+        return None
+    return matrix
+
+
 def compensate(previous: np.ndarray, current: np.ndarray) -> tuple[np.ndarray, bool]:
     """Warp the previous frame toward the current one with a partial affine model."""
     previous_gray = cv2.cvtColor(previous, cv2.COLOR_BGR2GRAY)
     current_gray = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
-    features = cv2.goodFeaturesToTrack(previous_gray, maxCorners=80, qualityLevel=0.01, minDistance=7)
-    if features is None or len(features) < 6:
-        return current, False
-    nxt, status, _err = cv2.calcOpticalFlowPyrLK(previous_gray, current_gray, features, None)
-    if nxt is None or status is None:
-        return current, False
-    good_previous = features[status.flatten() == 1]
-    good_next = nxt[status.flatten() == 1]
-    if len(good_previous) < 6:
-        return current, False
-    matrix, inliers = cv2.estimateAffinePartial2D(good_previous, good_next, method=cv2.RANSAC)
+    matrix = camera_motion(previous_gray, current_gray)
     if matrix is None:
-        return current, False
-    if inliers is not None and int(inliers.sum()) < 6:
         return current, False
     height, width = current.shape[:2]
     warped = cv2.warpAffine(previous, matrix, (width, height))

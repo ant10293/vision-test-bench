@@ -7,7 +7,13 @@ anchor is visibly observed and the learned context of that view is present.
 from __future__ import annotations
 
 from app.schemas.analysis import AnalysisDocument
-from app.verification.read import STRONG_RELATIONS, enum_value, evidence_class
+from app.verification.read import (
+    IMAGE_PLANE_STATES,
+    MEASURED_RELATIONS,
+    STRONG_RELATIONS,
+    enum_value,
+    evidence_class,
+)
 from app.verification.schema import (
     CompletionPredicate,
     EvidenceRef,
@@ -63,6 +69,11 @@ def _relation(predicate, execution, subject, target, roles, video_id: str) -> Pr
             support_onsets=[item.time_start for item in supports],
             error_category="TEMPORARY_ERROR_CORRECTED" if corrected else "",
         )
+    if predicate.relation in MEASURED_RELATIONS:
+        return _cannot(
+            predicate,
+            "No clear depth order between these instances was measured, so the condition was not decided.",
+        )
     occupants = _occupants(execution, predicate.relation, target_ids, subject_ids)
     if occupants and _visible(execution, target_ids, window):
         return PredicateJudgement(
@@ -116,6 +127,8 @@ def _state(predicate, execution, subject, video_id: str, attempted: bool) -> Pre
         return _cannot(predicate, "The object role is unresolved, so the state was not judged.")
     expected = (predicate.state_label or predicate.to_state or "").strip().lower()
     object_ids = set(subject.object_local_ids)
+    if expected in IMAGE_PLANE_STATES:
+        return _image_plane(predicate, execution, object_ids, expected, video_id)
     window = _final_window(execution)
     latest = _latest_state(execution, object_ids)
     if (
@@ -192,6 +205,51 @@ def _state(predicate, execution, subject, video_id: str, attempted: bool) -> Pre
             support_onsets=onsets,
         )
     return _cannot(predicate, "No directly observed state establishes this completion condition.")
+
+
+def _image_plane(predicate, execution, object_ids: set[str], expected: str, video_id: str) -> PredicateJudgement:
+    """A turn is read only from turn records. Other states describe something else about the part."""
+    turns = sorted(
+        (
+            transition
+            for transition in execution.transitions
+            if transition.object_local_id in object_ids
+            and evidence_class(transition) == "DIRECTLY_OBSERVED"
+            and (transition.to_state or "").strip().lower() in IMAGE_PLANE_STATES
+        ),
+        key=lambda item: item.timestamp,
+    )
+    if not turns:
+        return _cannot(
+            predicate,
+            "No held image-plane turn was measured for this part. A turn about its own axis, "
+            "a partial view, or an unestimated camera motion leaves this undecided.",
+        )
+    latest = turns[-1]
+    evidence = [
+        EvidenceRef(
+            video_id=video_id,
+            timestamp=latest.timestamp,
+            observation=f"Image-plane state became {latest.to_state}",
+            evidence_class="DIRECTLY_OBSERVED",
+            object_local_ids=[latest.object_local_id],
+        )
+    ]
+    if (latest.to_state or "").strip().lower() == expected:
+        return PredicateJudgement(
+            predicate_id=predicate.id,
+            status="pass",
+            note="A held image-plane turn matches the learned turn. This is not a 3D pose.",
+            evidence=evidence,
+            support_onsets=[item.timestamp for item in turns if (item.to_state or "").strip().lower() == expected],
+        )
+    return PredicateJudgement(
+        predicate_id=predicate.id,
+        status="fail",
+        error_category="INCORRECT_PHYSICAL_STATE",
+        note=f"The latest held image-plane state is {latest.to_state}, not {expected}.",
+        evidence=evidence,
+    )
 
 
 def _relations(execution, kind: str, subject_ids: set[str], target_ids: set[str], direct_only: bool):

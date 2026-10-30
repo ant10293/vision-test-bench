@@ -5,10 +5,15 @@ from __future__ import annotations
 import re
 
 from app.schemas.analysis import AnalysisDocument
+from app.schemas.enums import IMAGE_PLANE_STATES
 
 INCIDENTAL_ACTIONS = frozenset(
     {"adjust", "inspect", "hold", "motion", "approach", "put_down", "release"}
 )
+# Steps whose completion can be an image-plane turn.
+ROTATION_ACTIONS = frozenset({"rotate", "align", "twist", "turn"})
+# Image measurements, not physical placements. They do not identify a role or a view.
+MEASURED_RELATIONS = frozenset({"in_front_of"})
 STRONG_RELATIONS = frozenset(
     {
         "touching",
@@ -86,6 +91,8 @@ def signature(document: AnalysisDocument, object_id: str) -> set[str]:
             continue
         partner = relation.other_local_id if relation.subject_local_id == object_id else relation.subject_local_id
         kind = enum_value(relation.kind)
+        if kind in MEASURED_RELATIONS:
+            continue
         found.add(f"{kind}|{labels.get(partner, '')}")
     return found
 
@@ -98,8 +105,9 @@ def state_labels(document: AnalysisDocument, object_id: str) -> set[str]:
     for transition in document.transitions:
         if transition.object_local_id != object_id:
             continue
-        if transition.to_state:
-            found.add(transition.to_state.strip().lower())
+        label = (transition.to_state or "").strip().lower()
+        if label and label not in IMAGE_PLANE_STATES:
+            found.add(label)
     return found
 
 

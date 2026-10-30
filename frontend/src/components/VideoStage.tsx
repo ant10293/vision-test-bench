@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import type { Bundle, TrackPointSample } from "../lib/types";
 import { frameObjectStills, observationsAt, tracksAt } from "../lib/analysis";
 import { formatConfidence } from "../lib/confidence";
+import { boxGeometries, trackGeometry, type BoxGeometry } from "../lib/geometry";
 import { humanize, labeledId } from "../lib/humanize";
 import { panStage, stageViewAt, stageZoomByWheel, clampStageView, MAX_STAGE_ZOOM, MIN_STAGE_ZOOM, type StageView } from "../lib/stageZoom";
 import { ZoomStepper } from "./ZoomStepper";
@@ -17,14 +18,18 @@ const STAGE_ZOOM_STEP = 0.25;
 const LABEL_LINE = LABEL_SIZE * 1.2;
 const LABEL_FONT = `${LABEL_SIZE}px "IBM Plex Sans", sans-serif`;
 const CONFIDENCE_INSET = 4;
+const GEOMETRY_SIZE = 12;
+const GEOMETRY_FONT = `${GEOMETRY_SIZE}px "IBM Plex Sans", sans-serif`;
+const BADGE_PAD = 4;
+const BADGE_GAP = 6;
 
 let labelCanvas: HTMLCanvasElement | null = null;
 
-function labelWidth(text: string): number {
+function labelWidth(text: string, font = LABEL_FONT, size = LABEL_SIZE): number {
   labelCanvas ??= document.createElement("canvas");
   const context = labelCanvas.getContext("2d");
-  if (!context) return text.length * LABEL_SIZE * 0.5;
-  context.font = LABEL_FONT;
+  if (!context) return text.length * size * 0.5;
+  context.font = font;
   return context.measureText(text).width;
 }
 
@@ -123,6 +128,8 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
 
   const inFrame = observationsAt(bundle, time);
   const visible = overlay ? inFrame : [];
+  const geometries = boxGeometries(bundle, visible);
+  const screenUnit = content.h > 1 ? content.vh / (content.h * zoom) : 1;
   const stills = frameObjectStills(bundle, time);
   const trackHits = tracksAt(bundle.tracks?.points ?? [], time);
   const showTracks = layers.tracks || layers.trajectory || layers.uncertain;
@@ -306,6 +313,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
               const anchor = Math.max(LABEL_SIZE, y - 4);
               const firstBaseline = Math.max(LABEL_SIZE, anchor - Math.max(0, lines.length - 1) * LABEL_LINE);
               const score = layers.confidence && obs.confidence != null ? formatConfidence(obs.confidence) : "";
+              const geometry = geometries.get(obs.id);
               return (
                 <g key={`${obs.id}-${fontReady ? "font" : "fallback"}`}>
                   <rect
@@ -328,6 +336,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
                   {score && (
                     <text x={x + CONFIDENCE_INSET} y={y + 14} fill={color} fontSize={11} fontFamily="IBM Plex Sans, sans-serif">{score}</text>
                   )}
+                  {geometry && <GeometryLabel geometry={geometry} x={x} below={y + h} frameHeight={content.vh} unit={screenUnit} color={color} />}
                 </g>
               );
             })}
@@ -389,7 +398,16 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
             viewBox={`0 0 ${content.vw} ${content.vh}`}
           >
             {trackHits.map((point) => (
-              <TrackMark key={`${point.track_ref}-${point.timestamp}`} point={point} points={bundle.tracks?.points ?? []} time={time} content={content} layers={layers} />
+              <TrackMark
+                key={`${point.track_ref}-${point.timestamp}`}
+                point={point}
+                points={bundle.tracks?.points ?? []}
+                time={time}
+                content={content}
+                layers={layers}
+                geometry={trackGeometry(bundle, point, new Set(trackHits.map((item) => item.track_ref)))}
+                unit={screenUnit}
+              />
             ))}
           </svg>
         )}
@@ -469,18 +487,62 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
   }
 }
 
+/** Scale and turn text with an optional "front" badge, starting at `below` under a box.
+ *  `unit` is video pixels per screen pixel, so the label stays the same size on screen. */
+function GeometryLabel({
+  geometry,
+  x,
+  below,
+  frameHeight,
+  unit,
+  color,
+}: {
+  geometry: BoxGeometry;
+  x: number;
+  below: number;
+  frameHeight: number;
+  unit: number;
+  color: string;
+}) {
+  if (!geometry.text && !geometry.front) return null;
+  const size = GEOMETRY_SIZE * unit;
+  const pad = BADGE_PAD * unit;
+  // Just inside the box's bottom edge when there is no room under it.
+  const baseline = below + size + 2 * unit <= frameHeight ? below + size + 2 * unit : below - 4 * unit;
+  const textWidth = geometry.text ? labelWidth(geometry.text, GEOMETRY_FONT, GEOMETRY_SIZE) * unit : 0;
+  const badgeX = x + (geometry.text ? textWidth + BADGE_GAP * unit : 0);
+  const badgeWidth = labelWidth("front", GEOMETRY_FONT, GEOMETRY_SIZE) * unit + pad * 2;
+  return (
+    <g>
+      {geometry.text && (
+        <text x={x} y={baseline} fill={color} fontSize={size} fontFamily="IBM Plex Sans, sans-serif">{geometry.text}</text>
+      )}
+      {geometry.front && (
+        <>
+          <rect x={badgeX} y={baseline - size} width={badgeWidth} height={size + pad} rx={3 * unit} fill={color} />
+          <text x={badgeX + pad} y={baseline - pad / 4} fill="#090b10" fontSize={size} fontFamily="IBM Plex Sans, sans-serif">front</text>
+        </>
+      )}
+    </g>
+  );
+}
+
 function TrackMark({
   point,
   points,
   time,
   content,
   layers,
+  geometry,
+  unit,
 }: {
   point: TrackPointSample;
   points: TrackPointSample[];
   time: number;
   content: { vw: number; vh: number };
   layers: { tracks: boolean; trajectory: boolean; uncertain: boolean };
+  geometry: BoxGeometry;
+  unit: number;
 }) {
   if (!point.bbox) return null;
   const uncertain = layers.uncertain && (point.continuity === "uncertain" || point.status === "ambiguous" || point.continuity === "reassociated");
@@ -511,6 +573,7 @@ function TrackMark({
           <rect x={x} y={y} width={w} height={h} fill={color} fillOpacity={0.08} stroke={color} strokeWidth={2} strokeDasharray={uncertain ? "6 4" : undefined} />
           <text x={x} y={Math.max(14, y - 4)} fill={color} fontSize={14} fontFamily="IBM Plex Sans, sans-serif">{humanize(point.track_ref)}</text>
           <text x={x} y={y + h + 14} fill={color} fontSize={12} fontFamily="IBM Plex Sans, sans-serif">{point.status || point.continuity}</text>
+          <GeometryLabel geometry={geometry} x={x} below={y + h + 16} frameHeight={content.vh} unit={unit} color={color} />
         </>
       )}
     </g>

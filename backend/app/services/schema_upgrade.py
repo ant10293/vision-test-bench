@@ -35,6 +35,8 @@ COLUMN_UPGRADES = {
         ("track_status", "VARCHAR(32) DEFAULT ''"),
         ("association_score", "FLOAT"),
         ("detector_id", "VARCHAR(80) DEFAULT ''"),
+        ("relative_scale", "FLOAT"),
+        ("angle_deg", "FLOAT"),
     ],
     "object_observations": [("confidence", "FLOAT")],
 }

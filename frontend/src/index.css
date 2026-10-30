@@ -760,15 +760,17 @@ body.is-sorting * { cursor: grabbing; }
   padding: 3rem 4rem;
 }
 .asset-preview-viewport .shot-frame {
+  flex: 0 0 auto;
+  width: fit-content;
+  height: fit-content;
   transition: transform 0.15s ease;
 }
 .asset-preview-img {
+  display: block;
+  width: auto;
+  height: auto;
   max-width: 90vw;
   max-height: 85vh;
-  min-width: min(512px, 90vw);
-  min-height: min(512px, 70vh);
-  object-fit: contain;
-  transition: transform 0.15s ease;
   user-select: none;
 }
 .asset-preview-nav {

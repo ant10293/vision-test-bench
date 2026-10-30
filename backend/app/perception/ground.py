@@ -74,3 +74,36 @@ def apply_perception(document: AnalysisDocument, spatial: AnalysisDocument | Non
         else:
             objects.append(obj.model_copy(update={"identity_relation": obj.identity_relation or "semantic_label"}))
     return document.model_copy(update={"perception": perception, "objects": objects, "ambiguities": ambiguities})
+
+
+def apply_geometry(document: AnalysisDocument, spatial: AnalysisDocument | None) -> AnalysisDocument:
+    """Copy held image-plane turns and depth order from the tracks onto a model document.
+
+    Records are matched through the tracked instance id. A model object that
+    does not carry a tracked id gets none. Earlier copies are replaced, so a
+    later stage does not duplicate them.
+    """
+    if spatial is None or spatial.perception is None or not spatial.perception.used_for_identity:
+        return document
+    from app.perception.geometry import is_geometry_record
+
+    instance_of = {obj.local_id: obj.instance_id for obj in spatial.objects if obj.instance_id}
+    target = {obj.instance_id: obj.local_id for obj in document.objects if obj.instance_id}
+    mapping = {
+        local_id: target[instance_id] for local_id, instance_id in instance_of.items() if instance_id in target
+    }
+    transitions = [item for item in document.transitions if not is_geometry_record(item)]
+    relationships = [item for item in document.relationships if not is_geometry_record(item)]
+    for item in spatial.transitions:
+        if is_geometry_record(item) and item.object_local_id in mapping:
+            transitions.append(item.model_copy(update={"object_local_id": mapping[item.object_local_id]}))
+    for item in spatial.relationships:
+        if not is_geometry_record(item):
+            continue
+        subject = mapping.get(item.subject_local_id)
+        other = mapping.get(item.other_local_id or "")
+        if subject and other and subject != other:
+            relationships.append(item.model_copy(update={"subject_local_id": subject, "other_local_id": other}))
+    if transitions == list(document.transitions) and relationships == list(document.relationships):
+        return document
+    return document.model_copy(update={"transitions": transitions, "relationships": relationships})

@@ -59,6 +59,7 @@ def analyze_sequence(
     encoder=None,
     cache_dir: Path | None = None,
     should_stop=None,
+    depth=None,
 ) -> SpatialReport:
     """Track one frame at a time. Images are not retained after each step."""
     resolved = config if isinstance(config, PerceptionConfig) else config_from_mapping(config if isinstance(config, dict) else None)
@@ -66,9 +67,11 @@ def analyze_sequence(
     if resolved.strategy in {"legacy_motion", "vlm_only"} and detector is None:
         frames = list(_views(paths, timestamps, signals))
         points, compensated, chunks = run_legacy(frames, profile["research_mode"])
+        del frames
         notes = _legacy_notes(profile, compensated, resolved.strategy)
-        perception = _legacy_perception(points, resolved, len(frames), notes)
-        return _report(profile, compensated, "affine_partial" if compensated else "none", notes, points, chunks, perception)
+        perception = _legacy_perception(points, resolved, len(paths), notes)
+        report = _report(profile, compensated, "affine_partial" if compensated else "none", notes, points, chunks, perception)
+        return _with_geometry(report, paths, timestamps, resolved, depth, should_stop)
     from app.perception.detect import build_detector
 
     if detector is None:
@@ -100,7 +103,52 @@ def analyze_sequence(
     if profile["source"] == "auto":
         notes += " Research mode was characterized automatically and can be overridden."
     model = "affine_partial" if result.compensated else "none"
-    return _report(profile, result.compensated, model, notes.strip(), result.points, chunks, result.perception)
+    report = _report(profile, result.compensated, model, notes.strip(), result.points, chunks, result.perception)
+    return _with_geometry(report, paths, timestamps, resolved, depth, should_stop)
+
+
+def _with_geometry(report: SpatialReport, paths, timestamps, config: PerceptionConfig, depth, should_stop) -> SpatialReport:
+    """Add image-plane scale, turn, and fixed-camera depth order. Tracking is unchanged."""
+    from app.perception.depth import load_depth
+    from app.perception.geometry import annotate_geometry
+    from app.perception.types import DepthUnavailable
+
+    status, detail = "not_requested", ""
+    if report.viewpoint != "fixed":
+        depth = None
+        if config.depth:
+            status, detail = "skipped", "Depth order is only estimated for a fixed camera."
+    elif depth is None and config.depth:
+        try:
+            depth = load_depth(config.depth)
+        except DepthUnavailable as exc:
+            status, detail = "unavailable", str(exc)
+    geometry = annotate_geometry(
+        report.tracks,
+        paths,
+        timestamps,
+        report.viewpoint,
+        depth=depth,
+        depth_status=status,
+        depth_detail=detail,
+        should_stop=should_stop,
+    )
+    report.geometry = geometry
+    if report.perception is not None:
+        diagnostics = dict(report.perception.diagnostics)
+        diagnostics["geometry"] = {
+            "coordinate_frame": "image",
+            "scale_samples": geometry.scale_samples,
+            "angle_samples": geometry.angle_samples,
+            "held_turns": len(geometry.turns),
+            "depth_id": geometry.depth_id,
+            "depth_status": geometry.depth_status,
+            "depth_detail": geometry.depth_detail,
+            "depth_frames": geometry.depth_frames,
+            "depth_orders": len(geometry.orders),
+        }
+        report.perception.diagnostics = diagnostics
+    return report
 
 
 class _UnavailableEncoder:

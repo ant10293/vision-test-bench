@@ -49,6 +49,8 @@ class PerceptionConfig:
     max_candidate_references: int = 4
     weights: AssociationWeights = field(default_factory=AssociationWeights)
     manual_regions: list[dict] = field(default_factory=list)
+    # Relative depth for overlapping boxes on a fixed camera. None turns it off.
+    depth: str | None = "midas_small"
 
     def to_dict(self) -> dict:
         payload = asdict(self)
@@ -140,6 +142,8 @@ def config_from_mapping(data: dict | None) -> PerceptionConfig:
             setattr(base, key, data[key])
     if data.get("manual_regions"):
         base.manual_regions = list(data["manual_regions"])
+    if "depth" in data:
+        base.depth = data["depth"] or None
     if base.strategy == "appearance" and not base.encoder:
         base.encoder = "dinov2_vits14"
     if base.strategy == "appearance_segmented":

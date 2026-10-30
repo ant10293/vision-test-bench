@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from app.schemas.analysis import AnalysisDocument
 from app.verification.read import (
+    IMAGE_PLANE_STATES,
     INCIDENTAL_ACTIONS,
+    MEASURED_RELATIONS,
+    ROTATION_ACTIONS,
     as_document,
     enum_value,
     evidence_class,
@@ -133,7 +136,7 @@ def _step(demo: AnalysisDocument, item, role_of: dict[str, str]) -> TemplateStep
                 objects.append(object_id)
     start = item.time_start if item.time_start is not None else (actions[0].start if actions else None)
     end = item.time_end if item.time_end is not None else (actions[-1].end if actions else None)
-    predicates = _predicates(demo, objects, role_of, start, end)
+    predicates = _predicates(demo, objects, role_of, start, end, action_type)
     classification = evidence_class(item)
     notes = []
     if incidental:
@@ -175,7 +178,7 @@ def _steps_from_actions(demo: AnalysisDocument, role_of: dict[str, str]) -> list
         if action_type in INCIDENTAL_ACTIONS:
             continue
         objects = list(action.object_local_ids)
-        predicates = _predicates(demo, objects, role_of, action.start, action.end)
+        predicates = _predicates(demo, objects, role_of, action.start, action.end, action_type)
         steps.append(
             TemplateStep(
                 step_id=f"step_from_{action.local_id}" if not action.local_id.startswith("Step") else action.local_id,
@@ -199,7 +202,7 @@ def _steps_from_actions(demo: AnalysisDocument, role_of: dict[str, str]) -> list
     return steps
 
 
-def _predicates(demo, objects, role_of, start, end) -> list[CompletionPredicate]:
+def _predicates(demo, objects, role_of, start, end, action_type: str = "") -> list[CompletionPredicate]:
     predicates: list[CompletionPredicate] = []
     window = _window(demo, start, end)
     object_ids = set(objects)
@@ -223,7 +226,7 @@ def _predicates(demo, objects, role_of, start, end) -> list[CompletionPredicate]
         for other in involved:
             if other is relation:
                 continue
-            if evidence_class(other) != "DIRECTLY_OBSERVED":
+            if evidence_class(other) != "DIRECTLY_OBSERVED" or enum_value(other.kind) in MEASURED_RELATIONS:
                 continue
             other_subject = role_of.get(other.subject_local_id)
             other_target = role_of.get(other.other_local_id or "")
@@ -263,6 +266,9 @@ def _predicates(demo, objects, role_of, start, end) -> list[CompletionPredicate]
         if not role or not transition.to_state:
             continue
         classification = evidence_class(transition)
+        required = classification == "DIRECTLY_OBSERVED"
+        if transition.to_state in IMAGE_PLANE_STATES:
+            required = required and action_type in ROTATION_ACTIONS
         predicates.append(
             CompletionPredicate(
                 id=f"transition:{index}",
@@ -271,7 +277,7 @@ def _predicates(demo, objects, role_of, start, end) -> list[CompletionPredicate]
                 from_state=transition.from_state or "",
                 to_state=transition.to_state,
                 state_label=transition.to_state,
-                evidence_requirement="required" if classification == "DIRECTLY_OBSERVED" else "optional",
+                evidence_requirement="required" if required else "optional",
                 source_evidence_class=classification,
             )
         )

@@ -108,6 +108,10 @@ export interface TrackPointSample {
   detector_id: string;
   scene_chunk: number;
   note: string;
+  /** Box area over the first full views of this id. Not a distance. */
+  relative_scale?: number | null;
+  /** In-plane turn from the first full view, positive clockwise, camera rotation removed. Not a 3D pose. */
+  angle_deg?: number | null;
 }
 
 export interface PerceptionInstance {
@@ -308,6 +312,18 @@ export interface Bundle {
   summary: string;
   perception?: PerceptionSummary | null;
   tracks?: { total: number; truncated: boolean; points: TrackPointSample[] };
+  /** Tracked instance ids for each object local id. */
+  object_tracks?: Record<string, string[]>;
+  /** Fixed-camera relative depth order between tracks. Not a distance. */
+  track_depth_orders?: { nearer: string; farther: string; time_start: number; time_end: number }[];
+  /** Scale, turn, and depth order measured on the object boxes themselves. Image measures only. */
+  object_geometry?: {
+    boxes: { object_local_id: string; timestamp: number; relative_scale: number | null; angle_deg: number | null }[];
+    orders: { nearer: string; farther: string; time_start: number; time_end: number }[];
+    status: string;
+    depth_status?: string;
+    depth_detail?: string;
+  };
   camera: {
     viewpoint?: string;
     task_constraint?: string;

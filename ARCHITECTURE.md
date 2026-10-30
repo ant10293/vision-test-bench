@@ -58,6 +58,8 @@ Tracking frames are a separate ffmpeg sample from the frames sent to a model. Th
 
 Detectors are `motion`, `proposals`, and `manual`. An unknown detector name fails. A click seed is an added manual region, not a substitute algorithm. Embeddings are cached as `.npy` files under the run data directory, keyed by encoder id, version, preprocessing version, crop, and mask. They are not written into the analysis JSON.
 
+After tracking, `perception/geometry.py` re-reads the tracking frames and adds image-frame measurements to each track point: `relative_scale` (box area over the first full views) and `angle_deg` (in-plane turn since the first full view, camera rotation removed). Held turns become `image_plane_*` transitions (inferred on a head-mounted camera, since the camera roll is itself an estimate) and fixed-camera depth order becomes `in_front_of` relationships. A model run copies those records onto its document after assembly, matched by tracked instance id. `config_json.perception.depth` names the depth model (`midas_small` by default, `null` to turn it off). Its status is stored under `diagnostics.geometry`. See the geometry limits in `RESEARCH_METHODOLOGY.md`.
+
 Open-world discovery without a downloaded detector is region proposals. Those regions are not class names. Unknown objects are valid instances. DINOv2 weights download only when an appearance preset encodes a crop. If torch or the weights are missing, the encoder status is `unavailable`, appearance scores stay absent, and temporal association continues. Histogram features are a separate explicit descriptor used by the legacy color check and by tests. They are not substituted for DINOv2.
 
 ## Providers

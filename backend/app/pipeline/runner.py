@@ -18,7 +18,7 @@ from app.models.util import utcnow
 from app.perception.assembly import apply_assembly
 from app.perception.continuity import reconcile_identity
 from app.perception.roster import drop_contained_objects
-from app.perception.ground import apply_perception
+from app.perception.ground import apply_geometry, apply_perception
 from app.perception.types import TrackingCancelled
 from app.pipeline.actions import collapse_repeated_actions
 from app.pipeline.infer import (
@@ -503,6 +503,7 @@ async def _model_stage(session, run, video, stage) -> None:
     document, locate_info = await _ground(session, run, stage, document, frames)
     if document.perception is None and spatial is not None and spatial.perception is not None:
         document = apply_perception(document, spatial)
+    document = apply_geometry(document, spatial)
     if run.provider_id == "fixture":
         run.fixture = True
         run.fixture_label = document.fixture_label

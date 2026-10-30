@@ -331,6 +331,8 @@ class SpatialTrackPoint(Base):
     track_status: Mapped[str] = mapped_column(String(32), default="")
     association_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     detector_id: Mapped[str] = mapped_column(String(80), default="")
+    relative_scale: Mapped[float | None] = mapped_column(Float, nullable=True)
+    angle_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class SceneChunk(Base):

@@ -69,6 +69,8 @@ def run_spatial_stage(session: Session, run: AnalysisRun, video: VideoAsset, sta
                 track_status=point.status,
                 association_score=point.association_score,
                 detector_id=point.detector_id,
+                relative_scale=point.relative_scale,
+                angle_deg=point.angle_deg,
             )
         )
     for chunk in report.chunks:

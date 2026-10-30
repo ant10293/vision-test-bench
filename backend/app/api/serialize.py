@@ -23,6 +23,7 @@ from app.models.domain import (
 )
 from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRevision, AnalysisRun, ModelResponseRow, PipelineStageRun
+from app.perception.object_geometry import ObjectBox, object_geometry
 from app.services.storage import data_path
 
 
@@ -174,6 +175,9 @@ def bundle(session: Session, run: AnalysisRun) -> dict:
         "camera": (revision.document_json or {}).get("camera") if revision else None,
         "perception": _perception(run, revision),
         "tracks": _track_points(session, run.id),
+        "object_tracks": _object_tracks(revision),
+        "track_depth_orders": _track_depth_orders(run),
+        "object_geometry": _object_geometry(session, run, revision, frames),
         "transcripts": _transcripts(session, run.id),
         "alignments": _alignments(session, run.id),
     }
@@ -190,6 +194,73 @@ def _perception(run: AnalysisRun, revision: AnalysisRevision | None) -> dict | N
     except json.JSONDecodeError:
         return None
     return payload.get("perception")
+
+
+def _object_tracks(revision: AnalysisRevision | None) -> dict[str, list[str]]:
+    """Tracked instance ids for each object, from its own id and the boxes it was given."""
+    document = (revision.document_json or {}) if revision else {}
+    found: dict[str, list[str]] = {}
+    for obj in document.get("objects") or []:
+        if obj.get("instance_id") and obj.get("local_id"):
+            found.setdefault(obj["local_id"], []).append(obj["instance_id"])
+    for observation in document.get("observations") or []:
+        local_id, ref = observation.get("object_local_id"), observation.get("track_ref")
+        if local_id and ref and ref not in found.setdefault(local_id, []):
+            found[local_id].append(ref)
+    return {key: value for key, value in found.items() if value}
+
+
+def _object_geometry(session: Session, run: AnalysisRun, revision: AnalysisRevision | None, frames) -> dict:
+    """Scale, turn, and depth order on the object boxes themselves, measured once per set of boxes."""
+    if revision is None or not frames:
+        return {"boxes": [], "orders": [], "status": "no_boxes"}
+    objects = {
+        obj.id: obj.local_id
+        for obj in session.scalars(select(DetectedObject).where(DetectedObject.revision_id == revision.id))
+    }
+    rows = session.scalars(select(ObjectObservation).where(ObjectObservation.revision_id == revision.id)).all()
+    boxes = [
+        ObjectBox(objects[row.object_id], row.timestamp, row.bbox_json, row.visibility or "visible")
+        for row in rows
+        if row.bbox_json and row.object_id in objects
+    ]
+    if not boxes:
+        return {"boxes": [], "orders": [], "status": "no_boxes"}
+    viewpoint = run.viewpoint
+    if viewpoint not in {"fixed", "head_mounted"}:
+        viewpoint = ((revision.document_json or {}).get("camera") or {}).get("viewpoint") or ""
+    return object_geometry(run.id, boxes, [(frame.timestamp, frame.path) for frame in frames], viewpoint, run.config_json)
+
+
+def _track_depth_orders(run: AnalysisRun) -> list[dict]:
+    """in_front_of intervals from the spatial document, keyed by track id.
+
+    A model document keeps them only when its objects are linked to tracks, so the
+    overlay reads them here and matches them to boxes itself.
+    """
+    path = data_path("runs", run.id, "spatial.json")
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return []
+    tracks = {obj.get("local_id"): obj.get("instance_id") for obj in payload.get("objects") or []}
+    orders = []
+    for relation in payload.get("relationships") or []:
+        if relation.get("kind") != "in_front_of":
+            continue
+        nearer, farther = tracks.get(relation.get("subject_local_id")), tracks.get(relation.get("other_local_id"))
+        if nearer and farther:
+            orders.append(
+                {
+                    "nearer": nearer,
+                    "farther": farther,
+                    "time_start": relation.get("time_start"),
+                    "time_end": relation.get("time_end"),
+                }
+            )
+    return orders
 
 
 def _track_points(session: Session, run_id: str, limit: int = 4000) -> dict:
@@ -211,6 +282,8 @@ def _track_points(session: Session, run_id: str, limit: int = 4000) -> dict:
                 "detector_id": row.detector_id or "",
                 "scene_chunk": row.scene_chunk,
                 "note": row.identity_note,
+                "relative_scale": row.relative_scale,
+                "angle_deg": row.angle_deg,
             }
             for row in clipped
         ],

@@ -59,6 +59,43 @@ class TrackPoint:
     association_score: float | None = None
     detector_id: str = ""
     visibility: str = "visible"
+    # Box area over the first full views of this id. Not a distance.
+    relative_scale: float | None = None
+    # In-plane turn from the first full view, camera rotation removed. Not a 3D pose.
+    angle_deg: float | None = None
+
+
+@dataclass
+class DepthOrder:
+    """One frame where one overlapping box was nearer the camera than another."""
+
+    timestamp: float
+    nearer: str
+    farther: str
+    margin: float
+
+
+@dataclass
+class TurnEvent:
+    track_ref: str
+    timestamp: float
+    from_state: str
+    to_state: str
+    angle_deg: float
+    # An estimated camera roll was subtracted, so the turn is inferred.
+    camera_removed: bool = False
+
+
+@dataclass
+class GeometryReport:
+    orders: list[DepthOrder] = field(default_factory=list)
+    turns: list[TurnEvent] = field(default_factory=list)
+    depth_id: str | None = None
+    depth_status: str = "not_requested"
+    depth_detail: str = ""
+    depth_frames: int = 0
+    angle_samples: int = 0
+    scale_samples: int = 0
 
 
 @dataclass
@@ -76,10 +113,15 @@ class SpatialReport:
     tracks: list[TrackPoint] = field(default_factory=list)
     chunks: list[dict] = field(default_factory=list)
     perception: PerceptionRecord | None = None
+    geometry: GeometryReport | None = None
 
 
 class EncoderUnavailable(RuntimeError):
     """The requested encoder did not run. Callers must not substitute another model."""
+
+
+class DepthUnavailable(RuntimeError):
+    """The requested depth model did not run. No other depth source is substituted."""
 
 
 class DetectorUnavailable(RuntimeError):

@@ -122,7 +122,15 @@ class RelationKind(str, Enum):
     LEFT_OF = "left_of"
     RIGHT_OF = "right_of"
     OCCLUDED_BY = "occluded_by"
+    # Relative monocular depth on a fixed camera. Not contact and not attachment.
+    IN_FRONT_OF = "in_front_of"
     UNKNOWN = "unknown"
+
+
+# State labels for a held in-plane turn of a tracked instance. Not a 3D pose.
+IMAGE_PLANE_INITIAL = "image_plane_initial"
+IMAGE_PLANE_TURNED = "image_plane_turned"
+IMAGE_PLANE_STATES = frozenset({IMAGE_PLANE_INITIAL, IMAGE_PLANE_TURNED})
 
 
 class Continuity(str, Enum):

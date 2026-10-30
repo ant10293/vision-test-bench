@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from app.perception.geometry import geometry_records
 from app.perception.relations import geometric_relationships
 from app.schemas.analysis import (
     ActionPrediction,
@@ -251,6 +252,9 @@ def document_from_spatial(report: SpatialReport, coverage: Coverage) -> Analysis
         if not subject or not other:
             continue
         relationships.append(relation.model_copy(update={"subject_local_id": subject, "other_local_id": other}))
+    turned, in_front = geometry_records(report.geometry, track_to_object)
+    transitions.extend(turned)
+    relationships.extend(in_front)
     summary = (
         "Deterministic motion baseline. Regions are not named objects, and motion intervals "
         "are not verified physical actions."
