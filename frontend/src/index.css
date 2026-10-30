@@ -99,17 +99,33 @@ a { color: inherit; text-decoration: none; }
 .runs-table tbody tr:focus-within td {
   background: var(--panel-2);
 }
-.runs-table a.run-link {
+.runs-table a.run-link,
+.runs-table button.run-link {
   color: inherit;
   font-weight: 500;
 }
-.runs-table a.run-link::after {
+.runs-table button.run-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+}
+.runs-table a.run-link::after,
+.runs-table button.run-link::after {
   content: "";
   position: absolute;
   inset: 0;
 }
-.runs-table a.run-link:focus-visible {
+.runs-table a.run-link:focus-visible,
+.runs-table button.run-link:focus-visible {
   outline: none;
+}
+.runs-table td.log-cell {
+  white-space: normal;
+  max-width: 0;
+}
+.runs-table td.log-cell .log-body {
+  margin-top: 0;
 }
 .runs-table tbody tr:focus-within {
   outline: 2px solid var(--teal);

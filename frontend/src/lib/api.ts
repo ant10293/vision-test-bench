@@ -191,6 +191,7 @@ export const api = {
     request<Bundle>(`/api/runs/${id}/dependencies`, { method: "POST", body: JSON.stringify(payload) }),
   removeDependency: (id: string, fromStep: string, toStep: string) =>
     request<Bundle>(`/api/runs/${id}/dependencies?from_step=${fromStep}&to_step=${toStep}`, { method: "DELETE" }),
+  providerIds: () => request<{ id: string; local: boolean }[]>("/api/providers/ids"),
   providers: () => request<ProviderInfo[]>("/api/providers"),
   saveKey: (providerId: string, apiKey: string, baseUrl = "") =>
     request(`/api/providers/${providerId}/credentials`, {

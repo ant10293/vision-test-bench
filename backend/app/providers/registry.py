@@ -14,20 +14,21 @@ from app.providers.openai_provider import OpenAIProvider
 from app.providers.types import ProviderError
 
 PROVIDERS = {
-    "openai": OpenAIProvider,
-    "anthropic": AnthropicProvider,
-    "cursor": CursorProvider,
-    "gemini": GeminiProvider,
-    "meta": MetaProvider,
-    "deterministic": DeterministicProvider,
-    "fixture": FixtureProvider,
+    OpenAIProvider.id: OpenAIProvider,
+    AnthropicProvider.id: AnthropicProvider,
+    CursorProvider.id: CursorProvider,
+    GeminiProvider.id: GeminiProvider,
+    MetaProvider.id: MetaProvider,
+    DeterministicProvider.id: DeterministicProvider,
+    FixtureProvider.id: FixtureProvider,
 }
 
-_LOCAL = {"deterministic", "fixture", "manual_json"}
+_MANUAL_JSON = "manual_json"
+_LOCAL = {DeterministicProvider.id, FixtureProvider.id, _MANUAL_JSON}
 
 
 def get_provider(provider_id: str, session: Session | None = None):
-    if provider_id == "openai_compatible":
+    if provider_id == CompatibleProvider.id:
         base = compatible_base_url(session) if session is not None else ""
         return CompatibleProvider(base)
     cls = PROVIDERS.get(provider_id)
@@ -37,7 +38,11 @@ def get_provider(provider_id: str, session: Session | None = None):
 
 
 def provider_ids() -> list[str]:
-    return [*PROVIDERS.keys(), "openai_compatible", "manual_json"]
+    return [*PROVIDERS.keys(), CompatibleProvider.id, _MANUAL_JSON]
+
+
+def is_local(provider_id: str) -> bool:
+    return provider_id in _LOCAL
 
 
 def run_transport(provider_id: str, config: dict | None) -> str:

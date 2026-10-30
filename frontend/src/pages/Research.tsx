@@ -342,8 +342,6 @@ function CursorCliPanel({ settings }: { settings: CursorCliSettings }) {
   );
 }
 
-const LOCAL_PROVIDERS = ["deterministic", "fixture", "manual_json"];
-const PROVIDER_PLACEHOLDERS = 4;
 const MODEL_PLACEHOLDERS = 2;
 
 function ProviderCard({
@@ -359,6 +357,8 @@ function ProviderCard({
   onReady,
   onAddModel,
   onDiscover,
+  pendingId,
+  pendingLocal,
 }: {
   provider: ProviderInfo | null;
   apiKey: string;
@@ -372,13 +372,16 @@ function ProviderCard({
   onReady: () => void;
   onAddModel: () => void;
   onDiscover: () => void;
+  pendingId?: string;
+  pendingLocal?: boolean;
 }) {
   const pending = provider == null;
-  const local = provider != null && LOCAL_PROVIDERS.includes(provider.id);
+  const id = provider?.id ?? pendingId ?? "";
+  const local = provider?.local ?? pendingLocal ?? false;
   return (
     <section className="panel space-y-2 p-4" aria-hidden={pending || undefined}>
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg">{provider ? humanize(provider.id) : <Bone width="8rem" />}</h2>
+        <h2 className="text-lg">{id ? humanize(id) : <Bone width="8rem" />}</h2>
         {provider ? (
           <span className={`tag ${provider.validated ? "observed" : "unknown"}`}>{provider.validated ? "validated" : "not validated"}</span>
         ) : (
@@ -397,7 +400,7 @@ function ProviderCard({
       {provider?.id === "cursor" && (
         <p className="text-sm text-[var(--muted)]">API key. Analysis runs use it when Cursor runs is set to API key.</p>
       )}
-      {(pending || (provider && !local)) && (
+      {!local && (pending || provider) && (
         <div className="flex flex-wrap items-center gap-2">
           {provider ? (
             <>
@@ -411,7 +414,7 @@ function ProviderCard({
           ) : (
             <>
               <FieldBone input />
-              <FieldBone input />
+              {id !== "cursor" && <FieldBone input />}
               <span className="btn">Save key</span>
               <span className="btn">Validate</span>
             </>
@@ -456,6 +459,7 @@ function ProviderCard({
 export function ProvidersPage() {
   const client = useQueryClient();
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
+  const providerIds = useQuery({ queryKey: ["provider-ids"], queryFn: api.providerIds, staleTime: Infinity });
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [bases, setBases] = useState<Record<string, string>>({});
   const [models, setModels] = useState<Record<string, string>>({});
@@ -470,9 +474,8 @@ export function ProvidersPage() {
     onError: (error: Error) => setMessage(error.message),
   });
   const pending = providers.data === undefined && !providers.isError;
-  const rows: (ProviderInfo | null)[] = pending
-    ? Array.from({ length: PROVIDER_PLACEHOLDERS }, () => null)
-    : providers.data ?? [];
+  const catalog = pending ? providerIds.data ?? [] : [];
+  const rows: (ProviderInfo | null)[] = pending ? catalog.map(() => null) : providers.data ?? [];
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-medium">Providers</h1>
@@ -484,10 +487,12 @@ export function ProvidersPage() {
       {providers.isError && <p className="text-sm text-[var(--rose)]">{(providers.error as Error).message}</p>}
       <div className="space-y-3" aria-busy={pending || undefined}>
         {pending && <p className="sr-only">Loading providers</p>}
-        {rows.map((provider, index) => (
+        {rows.map((provider, row) => (
           <ProviderCard
-            key={provider?.id ?? `pending-${index}`}
+            key={provider?.id ?? catalog[row]?.id ?? `pending-${row}`}
             provider={provider}
+            pendingId={catalog[row]?.id}
+            pendingLocal={catalog[row]?.local}
             apiKey={provider ? keys[provider.id] ?? "" : ""}
             base={provider ? bases[provider.id] ?? provider.base_url : ""}
             modelDraft={provider ? models[provider.id] ?? "" : ""}
