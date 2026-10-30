@@ -489,6 +489,7 @@ function ObservationBox({
   const h = obs.bbox.h * content.vh;
   const label = showId && object ? labeledId(object.local_id, object.label) : "";
   const lines = label ? wrapLines(label, w, labelWidth) : [];
+  const labelBaseY = Math.max(LABEL_SIZE, y - 4 - (lines.length - 1) * LABEL_LINE);
   const score = showConfidence && obs.confidence != null ? formatConfidence(obs.confidence) : "";
   const uncertain = obs.association_status === "ambiguous" || obs.continuity === "uncertain";
   return (
@@ -505,7 +506,7 @@ function ObservationBox({
         strokeDasharray={dashed || uncertain ? "6 4" : undefined}
       />
       {lines.length > 0 && (
-        <text x={x} y={Math.max(LABEL_SIZE, y - 4)} fill={color} fontSize={LABEL_SIZE} fontFamily="IBM Plex Sans, sans-serif">
+        <text x={x} y={labelBaseY} fill={color} fontSize={LABEL_SIZE} fontFamily="IBM Plex Sans, sans-serif">
           {lines.map((line, index) => (
             <tspan key={index} x={x} dy={index === 0 ? 0 : LABEL_LINE}>{line}</tspan>
           ))}
