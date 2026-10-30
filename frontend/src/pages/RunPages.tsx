@@ -1024,14 +1024,6 @@ function logUsage(row: Record<string, unknown>): LogUsage {
   return (row.usage ?? {}) as LogUsage;
 }
 
-function requestCost(row: Record<string, unknown>): string {
-  if (row.status !== "completed") return "";
-  const usage = logUsage(row);
-  const money = formatUsd(Number(usage.cost_usd ?? 0), Boolean(usage.price_known), Boolean(usage.api_key));
-  return ` · ${usage.input_tokens ?? 0} in / ${usage.output_tokens ?? 0} out · ${money}`;
-}
-}
-
 export function LogsPage() {
   const bundle = useOptionalBundle();
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -1127,7 +1119,7 @@ function LogRequest({
         <td className="num mono">{String(row.latency_ms)} ms</td>
         <td className="num mono">{completed ? usage.input_tokens ?? 0 : "—"}</td>
         <td className="num mono">{completed ? usage.output_tokens ?? 0 : "—"}</td>
-        <td className="num mono">{completed ? formatUsd(Number(usage.cost_usd ?? 0), Boolean(usage.price_known)) : "—"}</td>
+        <td className="num mono">{completed ? formatUsd(Number(usage.cost_usd ?? 0), Boolean(usage.price_known), Boolean(usage.api_key)) : "—"}</td>
       </tr>
       {expanded && (
         <tr>
