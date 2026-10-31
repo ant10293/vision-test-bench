@@ -228,7 +228,8 @@ def test_step_window_named_start_time_keeps_three_moments():
         "outcome": "completed",
         "evidence_note": "hands lift the grey part",
         "classification": "DIRECTLY_OBSERVED",
-        "provenance": "AI_PREDICTION"
+        "provenance": "AI_PREDICTION",
+        "uncertainty_estimate": 0.25
       }],
       "workflow_steps_structured": [{
         "local_id": "Step_1",
@@ -239,6 +240,14 @@ def test_step_window_named_start_time_keeps_three_moments():
         "expected_action": "The hands grasp and lift the grey part.",
         "completion_condition": "The grey part is lifted off the surface.",
         "observed_result": "By about 2s the grey part was held above the surface."
+      }],
+      "dependencies_structured": [{
+        "from_step_local_id": "Step_1",
+        "to_step_local_id": "Step_2",
+        "dependency_type": "observed_temporal",
+        "classification": "INFERRED",
+        "provenance": "AI_PREDICTION",
+        "rationale": "The clear part was handled after the grey part was lifted."
       }]
     }
     """
@@ -247,11 +256,21 @@ def test_step_window_named_start_time_keeps_three_moments():
     assert action.local_id == "Action_1"
     assert action.action_type == "pick_up"
     assert action.description == "hands lift the grey part"
+    assert action.evidence.classification.value == "DIRECTLY_OBSERVED"
+    assert action.evidence.time_start == 0.5
+    assert action.evidence.time_end == 2.0
+    assert action.uncertainty == 0.25
     step = document.workflow_steps[0]
     assert step.time_start == 0.5
     assert step.time_end == 2.0
     assert step.required_objects == ["Object_1"]
     assert step.action_local_ids == ["Action_1"]
+    dependency = document.dependencies[0]
+    assert dependency.from_step == "Step_1"
+    assert dependency.to_step == "Step_2"
+    assert dependency.category.value == "observed_temporal"
+    assert dependency.evidence.classification.value == "INFERRED"
+    assert "clear part" in dependency.rationale
 
 
 def test_a_combined_step_description_fills_expected_and_the_detail_line():

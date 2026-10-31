@@ -160,7 +160,12 @@ def align_payload(payload: dict[str, Any]) -> dict[str, Any]:
     _fill_alias(data, "observations", (), _align_observation)
     _fill_alias(data, "actions", ("actions_detailed", "detailed_actions", "actions_structured"), _align_action)
     _fill_alias(data, "workflow_steps", ("workflow", "workflow_steps_structured"), _align_step)
-    _fill_alias(data, "dependencies", ("dependencies_if_any", "workflow_dependencies"), _align_dependency)
+    _fill_alias(
+        data,
+        "dependencies",
+        ("dependencies_if_any", "workflow_dependencies", "dependencies_structured"),
+        _align_dependency,
+    )
     _bind_step_names(data)
     if not _present(data.get("relationships")):
         pairs = _pair_relationships(data.get("relationships_at_intervals"))
@@ -330,12 +335,26 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         ids.append(target)
     row["object_local_ids"] = ids
     evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+    if not evidence.get("classification") and row.get("classification") in _EVIDENCE_CLASS:
+        evidence = {
+            **evidence,
+            "classification": row["classification"],
+            "provenance": evidence.get("provenance") or row.get("provenance") or "AI_PREDICTION",
+        }
     if not row.get("description"):
         row["description"] = str(evidence.get("note") or row.get("evidence_note") or row.get("name") or row.get("action_type") or "")
     if row.get("outcome") not in _OUTCOMES:
         result = str(row.get("result") or "").lower()
         row["outcome"] = result if result in _OUTCOMES else "unknown"
-    row["evidence"] = _evidence(evidence, row["description"])
+    estimate = row.get("uncertainty_estimate")
+    if row.get("uncertainty") is None and _number(estimate) and 0 <= float(estimate) <= 1:
+        row["uncertainty"] = float(estimate)
+    anchored = _evidence(evidence, row["description"])
+    if anchored.get("time_start") is None and _number(row.get("start")):
+        anchored["time_start"] = float(row["start"])
+        if _number(row.get("end")):
+            anchored["time_end"] = float(row["end"])
+    row["evidence"] = anchored
     return _accepted(ActionPrediction, row)
 
 
@@ -407,8 +426,15 @@ def _align_dependency(item: dict[str, Any], index: int) -> dict[str, Any] | None
         row["category"] = "unknown"
     if not row.get("from_step") or not row.get("to_step"):
         return None
-    note = f"{row['from_step']} to {row['to_step']}"
-    row["evidence"] = _evidence(row.get("evidence") if isinstance(row.get("evidence"), dict) else {}, note)
+    evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+    if not evidence.get("classification") and row.get("classification") in _EVIDENCE_CLASS:
+        evidence = {
+            **evidence,
+            "classification": row["classification"],
+            "provenance": evidence.get("provenance") or row.get("provenance") or "AI_PREDICTION",
+        }
+    note = str(row.get("rationale") or f"{row['from_step']} to {row['to_step']}")
+    row["evidence"] = _evidence(evidence, note)
     return _accepted(DependencyPrediction, row)
 
 
