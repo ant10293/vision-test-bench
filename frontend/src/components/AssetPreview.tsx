@@ -6,6 +6,32 @@ import { ShotFrame } from "./ShotFrame";
 
 export type PreviewImage = { src: string; filename: string; confidence?: number | null };
 
+/** Round previous/next control shared by the full-screen preview and the inspect frame. */
+export function PreviewNav({
+  direction,
+  label,
+  onClick,
+}: {
+  direction: "prev" | "next";
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`asset-preview-nav is-${direction}`}
+      title={label}
+      aria-label={label}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={onClick}
+    >
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <polyline points={direction === "prev" ? "15 18 9 12 15 6" : "9 6 15 12 9 18"} />
+      </svg>
+    </button>
+  );
+}
+
 /**
  * Full-screen image preview from potheads-ceramics' admin image overlay:
  * zoom, previous/next, download, and an explicit new-tab action.
@@ -122,16 +148,8 @@ export function AssetPreview({
       </div>
       {images.length > 1 && (
         <>
-          <button type="button" className="asset-preview-nav is-prev" title="Previous" aria-label="Previous" onClick={() => go(-1)}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </button>
-          <button type="button" className="asset-preview-nav is-next" title="Next" aria-label="Next" onClick={() => go(1)}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="9 6 15 12 9 18" />
-            </svg>
-          </button>
+          <PreviewNav direction="prev" label="Previous" onClick={() => go(-1)} />
+          <PreviewNav direction="next" label="Next" onClick={() => go(1)} />
         </>
       )}
       <div className="asset-preview-actions">

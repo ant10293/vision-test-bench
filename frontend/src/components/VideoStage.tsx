@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
-import { AssetPreview } from "./AssetPreview";
+import { AssetPreview, PreviewNav } from "./AssetPreview";
 import { api } from "../lib/api";
 import type { Bundle, Observation, TrackPointSample } from "../lib/types";
 import { coverageAt, frameObjectStills, overlayObservations, tracksAt } from "../lib/analysis";
@@ -368,11 +368,11 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
             ))}
           </svg>
         )}
+        <PreviewNav direction="prev" label="Previous frame" onClick={() => step(-1)} />
+        <PreviewNav direction="next" label="Next frame" onClick={() => step(1)} />
       </div>
       <div className="flex flex-col gap-2 text-sm">
         <div className="flex flex-wrap items-center gap-2">
-          <button className="btn" onClick={() => step(-1)}>Prev frame</button>
-          <button className="btn" onClick={() => step(1)}>Next frame</button>
           <button className="btn" onClick={() => useInspector.getState().setOverlay(!overlay)}>{overlay ? "Hide boxes" : "Show boxes"}</button>
           <button className="btn" aria-pressed={layers.conflicts} onClick={() => useInspector.getState().setLayer("conflicts", !layers.conflicts)}>
             {layers.conflicts ? "Hide conflicts" : "Show conflicts"}

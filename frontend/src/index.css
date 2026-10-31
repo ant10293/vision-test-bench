@@ -833,6 +833,9 @@ body.is-sorting * { cursor: grabbing; }
   height: min(64dvh, calc(100dvh - 16rem));
   overflow: hidden;
 }
+.stage-frame > .asset-preview-nav {
+  z-index: 5;
+}
 .stage-frame video {
   position: absolute;
   inset: 0;

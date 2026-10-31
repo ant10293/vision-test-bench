@@ -204,6 +204,11 @@ function closerObservation(next: Observation, current: Observation, frameTime: n
   return next.id.localeCompare(current.id) < 0;
 }
 
+/** The playhead still sits in the action. Slack covers timestamp rounding, not the next frame. */
+export function actionCoversTime(action: { start: number; end: number }, time: number, slack = 0.01): boolean {
+  return time >= action.start - slack && time <= action.end + slack;
+}
+
 export function frameNear(bundle: Bundle, time: number) {
   if (!bundle.frames.length) return undefined;
   return bundle.frames.reduce((best, frame) =>

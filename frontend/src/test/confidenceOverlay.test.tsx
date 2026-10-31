@@ -139,3 +139,20 @@ describe("objects in the current frame", () => {
     expect(frame.getByRole("img", { name: "Rod" })).toBeInTheDocument();
   });
 });
+
+describe("frame stepping on the picture", () => {
+  it("uses the preview chevrons and leaves them off the button row", () => {
+    const view = stage();
+    const frame = within(view.container);
+    const previous = frame.getByRole("button", { name: "Previous frame" });
+    const next = frame.getByRole("button", { name: "Next frame" });
+    expect(previous).toHaveClass("asset-preview-nav", "is-prev");
+    expect(next).toHaveClass("asset-preview-nav", "is-next");
+    expect(previous.closest(".stage-frame")).not.toBeNull();
+    expect(view.container.querySelector(".flex-wrap")).not.toContainElement(previous);
+    expect(frame.queryByRole("button", { name: "Prev frame" })).not.toBeInTheDocument();
+
+    fireEvent.click(next);
+    expect(useInspector.getState().time).toBeCloseTo(1.1);
+  });
+});

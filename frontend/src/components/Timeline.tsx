@@ -71,7 +71,7 @@ function Track({
   bundle: Bundle;
   selectedStep: string | null;
   onSeek: (time: number) => void;
-  onAction: (id: string) => void;
+  onAction: (id: string, span: { start: number; end: number }) => void;
   onStep: (id: string) => void;
   onObject: (id: string) => void;
 }) {
@@ -91,7 +91,9 @@ function Track({
             }}
             onClick={() => {
               onSeek(item.start);
-              if (item.actionId) onAction(item.actionId);
+              if (item.actionId != null && item.actionStart != null && item.actionEnd != null) {
+                onAction(item.actionId, { start: item.actionStart, end: item.actionEnd });
+              }
               if (item.stepId) onStep(item.stepId);
               if (item.objectId) onObject(item.objectId);
             }}
@@ -113,6 +115,8 @@ interface Segment {
   label: string;
   color: string;
   actionId?: string;
+  actionStart?: number;
+  actionEnd?: number;
   stepId?: string;
   objectId?: string;
 }
@@ -137,6 +141,8 @@ function segments(name: (typeof TRACKS)[number], bundle: Bundle): Segment[] {
       label: `${actionPhrase(action, labels)} · ${humanize(action.outcome)}`,
       color: action.outcome === "completed" ? "#1f6b4a" : action.outcome === "attempted" ? "#8a6a22" : "#5c3a55",
       actionId: action.local_id,
+      actionStart: action.start,
+      actionEnd: action.end,
     }));
   }
   if (name === "objects") {

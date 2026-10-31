@@ -357,7 +357,11 @@ export function InspectPage() {
   const bundle = useOptionalBundle();
   const labels = objectLabels(bundle?.objects ?? []);
   const actionId = useInspector((state) => state.selectedAction);
-  const action = bundle?.actions.find((item) => item.local_id === actionId) ?? bundle?.actions[0] ?? null;
+  const action = bundle?.actions.find((item) => item.local_id === actionId) ?? null;
+  useEffect(() => {
+    if (!bundle || !actionId || action) return;
+    useInspector.getState().selectAction(null);
+  }, [bundle, actionId, action]);
   const actions: (LabAction | null)[] = bundle ? bundle.actions : Array.from({ length: ACTION_PLACEHOLDERS }, () => null);
   return (
     <div className={INSPECT_LAYOUT}>
@@ -379,7 +383,7 @@ export function InspectPage() {
         )}
       </section>
       <section className={INSPECT_DETAIL}>
-        {bundle && !action ? <p className="text-[var(--muted)]">No actions yet.</p> : <ActionDetail bundle={bundle} action={action} />}
+        {bundle && bundle.actions.length === 0 ? <p className="text-[var(--muted)]">No actions yet.</p> : <ActionDetail bundle={bundle} action={action} />}
       </section>
     </div>
   );
@@ -408,9 +412,10 @@ function ActionRow({
     <button
       className={`block w-full rounded-md px-2 py-1 text-left text-sm ${selected ? "bg-[#1a221d]" : ""}`}
       onClick={() => {
-        useInspector.getState().selectAction(item.local_id);
-        useInspector.getState().setTime(item.start);
-        useInspector.getState().setLoop({ start: item.start, end: item.end });
+        const inspector = useInspector.getState();
+        inspector.setTime(item.start);
+        inspector.selectAction(item.local_id, { start: item.start, end: item.end });
+        inspector.setLoop({ start: item.start, end: item.end });
       }}
     >
       <div>{index + 1}. {actionPhrase(item, labels)} <span className="text-[var(--muted)]">{humanize(item.outcome)}</span></div>
@@ -422,6 +427,7 @@ function ActionRow({
 function ActionDetail({ bundle, action }: { bundle: Bundle | null; action: LabAction | null }) {
   const [label, setLabel] = useState("");
   const client = useQueryClient();
+  if (bundle && !action) return <UnselectedAction />;
   const pending = action == null;
   return (
     <div className="space-y-2" aria-hidden={pending || undefined}>
@@ -480,6 +486,17 @@ function ActionDetail({ bundle, action }: { bundle: Bundle | null; action: LabAc
       ) : (
         <span className="btn">Save correction</span>
       )}
+    </div>
+  );
+}
+
+function UnselectedAction() {
+  const time = useInspector((state) => state.time);
+  return (
+    <div className="space-y-2">
+      <h2 className="text-base">No action selected</h2>
+      <p className="text-xs text-[var(--muted)]">{formatTime(time)}</p>
+      <p className="text-[var(--muted)]">Choose an action from the list. A frame outside its range clears the selection.</p>
     </div>
   );
 }
@@ -864,10 +881,11 @@ export function StepsPage() {
         const inspector = useInspector.getState();
         const linked = bundle.actions.find((item) => step.action_local_ids.includes(item.local_id));
         const covering = bundle.actions.find((item) => item.start <= end && item.end >= start);
+        const chosen = linked ?? covering ?? null;
         inspector.setPlaying(false);
         inspector.setTime(start);
         inspector.selectStep(step.local_id);
-        inspector.selectAction((linked ?? covering)?.local_id ?? null);
+        inspector.selectAction(chosen?.local_id ?? null, chosen ? { start: chosen.start, end: chosen.end } : undefined);
         inspector.setLoop(end > start ? { start, end } : null);
         openInspect();
       }}>Show on timeline</button>

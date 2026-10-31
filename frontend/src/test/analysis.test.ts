@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coverageAt, frameObjectStills, objectFrameTimeline, observationsAt, frameNear, overlayObservations, sightingCount, tracksAt } from "../lib/analysis";
+import { actionCoversTime, coverageAt, frameObjectStills, objectFrameTimeline, observationsAt, frameNear, overlayObservations, sightingCount, tracksAt } from "../lib/analysis";
 import type { Bundle } from "../lib/types";
 
 const bundle = {
@@ -28,6 +28,14 @@ describe("analysis helpers", () => {
 
   it("seeks the nearest extracted frame", () => {
     expect(frameNear(bundle, 3.5)?.id).toBe("f2");
+  });
+
+  it("keeps a frame inside an action and drops one outside it", () => {
+    const action = { start: 6, end: 18 };
+    expect(actionCoversTime(action, 6)).toBe(true);
+    expect(actionCoversTime(action, 18)).toBe(true);
+    expect(actionCoversTime(action, 5.5)).toBe(false);
+    expect(actionCoversTime(action, 18.2)).toBe(false);
   });
 
   it("lists a crop and label for each object in the frame", () => {
