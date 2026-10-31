@@ -283,16 +283,27 @@ def _number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _first_number(row: dict[str, Any], window: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for source in (row, window):
+        for key in keys:
+            value = source.get(key)
+            if _number(value):
+                return float(value)
+    return None
+
+
 def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     from app.schemas.analysis import ActionPrediction
 
     row = dict(item)
     if not row.get("local_id") and row.get("action_id"):
         row["local_id"] = str(row["action_id"])
+    if not row.get("local_id") and row.get("action_local_id"):
+        row["local_id"] = str(row["action_local_id"])
     if not row.get("local_id"):
         row["local_id"] = f"Action_{index}"
     if not row.get("action_type"):
-        kind = row.get("action_kind") or row.get("name")
+        kind = row.get("action_kind") or row.get("name") or row.get("verb")
         if kind:
             row["action_type"] = str(kind)
     if row.get("start") is None and row.get("duration_start") is not None:
@@ -320,7 +331,7 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     row["object_local_ids"] = ids
     evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
     if not row.get("description"):
-        row["description"] = str(evidence.get("note") or row.get("name") or row.get("action_type") or "")
+        row["description"] = str(evidence.get("note") or row.get("evidence_note") or row.get("name") or row.get("action_type") or "")
     if row.get("outcome") not in _OUTCOMES:
         result = str(row.get("result") or "").lower()
         row["outcome"] = result if result in _OUTCOMES else "unknown"
@@ -337,10 +348,10 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     if not row.get("local_id"):
         row["local_id"] = f"Step_{index}"
     window = row.get("time_window") if isinstance(row.get("time_window"), dict) else {}
-    if row.get("time_start") is None and "start" in window:
-        row["time_start"] = window.get("start")
-    if row.get("time_end") is None and "end" in window:
-        row["time_end"] = window.get("end")
+    if row.get("time_start") is None:
+        row["time_start"] = _first_number(row, window, ("start", "start_time", "from"))
+    if row.get("time_end") is None:
+        row["time_end"] = _first_number(row, window, ("end", "end_time", "to"))
     if not row.get("name") and row.get("label"):
         row["name"] = str(row["label"])
     if not row.get("name") and row.get("description"):
@@ -357,10 +368,13 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["required_objects"] = row["objects_involved_local_ids"]
     if not row.get("required_objects") and isinstance(row.get("objects"), list):
         row["required_objects"] = row["objects"]
-    if not row.get("action_local_ids") and isinstance(row.get("supporting_action_local_ids"), list):
-        row["action_local_ids"] = row["supporting_action_local_ids"]
-    if not row.get("action_local_ids") and isinstance(row.get("action_ids"), list):
-        row["action_local_ids"] = row["action_ids"]
+    if not row.get("required_objects") and isinstance(row.get("object_local_ids"), list):
+        row["required_objects"] = row["object_local_ids"]
+    for key in ("supporting_action_local_ids", "action_ids", "support_action_ids_or_numbers", "supporting_action_ids"):
+        if row.get("action_local_ids"):
+            break
+        if isinstance(row.get(key), list):
+            row["action_local_ids"] = [str(item) for item in row[key]]
     if not row.get("observed_result") and row.get("observed_outcome"):
         row["observed_result"] = str(row["observed_outcome"])
     if not row.get("observed_result") and row.get("description") and row.get("name") != row.get("description"):

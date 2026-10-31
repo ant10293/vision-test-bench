@@ -101,7 +101,8 @@ Do not treat proximity as attachment.
 
 WORKFLOW = """
 Derive a structured procedure from the observed actions without assuming it is the correct procedure.
-Each step needs required objects, preconditions, supporting action ids, a time interval, and uncertainty.
+Each step needs required objects, preconditions, supporting action ids in action_local_ids, a time interval, and uncertainty.
+time_start and time_end are seconds on the recording. A step that spans the work has those two times apart, so the page can show the beginning, middle, and end.
 Each step also has three different sentences, and none of them is a copy of the step name:
 expected_action says how the change is carried out.
 completion_condition says the visible end state that means the step is done. The page shows this after "Expected:".

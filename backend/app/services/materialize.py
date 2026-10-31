@@ -97,7 +97,11 @@ def materialize(
         session.add(obs)
         observations[item.object_local_id].append(obs)
     for obj in objects.values():
-        obj.observation_count = len(observations[obj.local_id])
+        obj.observation_count = sum(
+            1
+            for obs in observations[obj.local_id]
+            if obs.bbox_json and obs.visibility != "absent"
+        )
 
     for item in document.states:
         obj = objects.get(item.object_local_id)

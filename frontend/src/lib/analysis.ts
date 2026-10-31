@@ -121,6 +121,15 @@ export function datasetObservations(observations: Observation[]): Observation[] 
   return observations.filter((item) => item.source_model !== "sam-3.1");
 }
 
+/** Frames where this object was actually boxed. A missing or absent frame is not a sighting. */
+export function sightingCount(
+  frames: { id: string; timestamp: number }[] | null | undefined,
+  localId: string,
+  observations: Observation[],
+): number {
+  return objectFrameTimeline(frames, localId, observations).filter((cell) => cell.observationId).length;
+}
+
 /** One square per sampled frame. A crop when this object is in the frame, otherwise an empty cell. */
 export function objectFrameTimeline(
   frames: { id: string; timestamp: number }[] | null | undefined,

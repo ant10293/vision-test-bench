@@ -215,6 +215,45 @@ def test_flat_boxes_and_structured_procedure_are_kept():
     assert document.ambiguities[0].kind.value == "uncertain_identity"
 
 
+def test_step_window_named_start_time_keeps_three_moments():
+    text = """
+    {
+      "actions_structured": [{
+        "action_local_id": "Action_1",
+        "verb": "pick_up",
+        "actor": "both hands",
+        "object_local_ids": ["Object_1"],
+        "start": 0.5,
+        "end": 2.0,
+        "outcome": "completed",
+        "evidence_note": "hands lift the grey part",
+        "classification": "DIRECTLY_OBSERVED",
+        "provenance": "AI_PREDICTION"
+      }],
+      "workflow_steps_structured": [{
+        "local_id": "Step_1",
+        "name": "Pick up grey body part",
+        "object_local_ids": ["Object_1"],
+        "support_action_ids_or_numbers": ["Action_1"],
+        "time_window": {"start_time": 0.5, "end_time": 2.0},
+        "expected_action": "The hands grasp and lift the grey part.",
+        "completion_condition": "The grey part is lifted off the surface.",
+        "observed_result": "By about 2s the grey part was held above the surface."
+      }]
+    }
+    """
+    document = parse_analysis(text)
+    action = document.actions[0]
+    assert action.local_id == "Action_1"
+    assert action.action_type == "pick_up"
+    assert action.description == "hands lift the grey part"
+    step = document.workflow_steps[0]
+    assert step.time_start == 0.5
+    assert step.time_end == 2.0
+    assert step.required_objects == ["Object_1"]
+    assert step.action_local_ids == ["Action_1"]
+
+
 def test_a_combined_step_description_fills_expected_and_the_detail_line():
     text = """
     {

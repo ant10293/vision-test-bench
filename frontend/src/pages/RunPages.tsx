@@ -14,7 +14,7 @@ import { api, evidenceClass, formatTime, formatUsd } from "../lib/api";
 import { formatConfidence } from "../lib/confidence";
 import { formatLogText } from "../lib/formatLog";
 import { actionPhrase, humanize, humanizeText, labeledId, nameObjects, objectLabels } from "../lib/humanize";
-import { datasetObservations, objectFrameTimeline } from "../lib/analysis";
+import { datasetObservations, objectFrameTimeline, sightingCount } from "../lib/analysis";
 import { objectScene } from "../lib/sceneSlice";
 import { BundleContext, useOptionalBundle } from "../lib/bundleContext";
 import type { Bundle, Observation } from "../lib/types";
@@ -64,7 +64,7 @@ type ObjectShot = { id: string; url: string; caption: string; confidence: number
 function objectShots(object: Bundle["objects"][number], observations: Observation[]): ObjectShot[] {
   const owned = datasetObservations(observations).filter((item) => item.object_local_id === object.local_id);
   const boxed = owned
-    .filter((item) => item.bbox && item.frame_id)
+    .filter((item) => item.bbox && item.frame_id && item.visibility !== "absent")
     .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
   if (boxed.length) {
     return boxed.map((item) => ({
@@ -551,7 +551,7 @@ export function ObjectsPage() {
           <ObjectTile
             key={object?.id ?? `pending-${index}`}
             object={object}
-            sightings={object && bundle ? datasetObservations(bundle.observations).filter((item) => item.object_local_id === object.local_id).length : undefined}
+            sightings={object && bundle ? sightingCount(bundle.frames, object.local_id, bundle.observations) : undefined}
             onOpen={object ? () => { setOpen(object.local_id); setPreview(null); } : undefined}
           />
         ))}
