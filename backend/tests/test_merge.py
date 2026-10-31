@@ -3,7 +3,7 @@
 import json
 
 from app.perception.assignment import iou
-from app.pipeline.merge import restore_omitted_records
+from app.pipeline.merge import restore_omitted_records, retain_prior_records
 from app.schemas.analysis import AnalysisDocument
 from app.schemas.enums import AmbiguityKind, EvidenceClass, Provenance
 
@@ -490,3 +490,58 @@ def test_merge_only_observation_is_kept():
     kept = _at(restored)[("Object_1", 16.902)]
     assert kept.description == "later copy"
     assert (kept.bbox.x, kept.bbox.y, kept.bbox.w, kept.bbox.h) == (UPPER["x"], UPPER["y"], UPPER["w"], UPPER["h"])
+
+
+def _action(local_id: str = "Action_1") -> dict:
+    return {
+        "local_id": local_id,
+        "action_type": "pick_up",
+        "start": 1,
+        "end": 2,
+        "object_local_ids": ["Object_1"],
+        "evidence": _evidence(),
+    }
+
+
+def test_a_later_stage_keeps_objects_actions_and_boxes_it_omitted():
+    prior = _doc(
+        objects=[{"local_id": "Object_1", "label": "light-gray rod"}],
+        observations=[_observation(ROD, EvidenceClass.DIRECTLY_OBSERVED)],
+        actions=[_action()],
+    )
+    kept = retain_prior_records(_doc(), prior)
+    assert [item.local_id for item in kept.objects] == ["Object_1"]
+    assert [item.local_id for item in kept.actions] == ["Action_1"]
+    assert kept.observations[0].bbox.x == ROD["x"]
+
+
+def test_a_later_stage_keeps_scene_boxes_when_the_new_ids_do_not_match():
+    prior = _doc(
+        objects=[{"local_id": "Object_1", "label": "light-gray rod"}],
+        observations=[_observation(ROD, EvidenceClass.DIRECTLY_OBSERVED)],
+        actions=[_action()],
+    )
+    renamed = dict(_observation(UPPER, EvidenceClass.INFERRED))
+    renamed["object_local_id"] = "obj_body_gray"
+    incoming = _doc(
+        objects=[{"local_id": "obj_body_gray", "label": "light-gray elongated body"}],
+        observations=[renamed],
+        actions=[_action("Action_9")],
+    )
+    kept = retain_prior_records(incoming, prior)
+    assert [item.local_id for item in kept.objects] == ["Object_1"]
+    assert kept.observations[0].object_local_id == "Object_1"
+    assert kept.observations[0].bbox.x == ROD["x"]
+    assert [item.local_id for item in kept.actions] == ["Action_9"]
+
+
+def test_a_later_stage_keeps_a_slice_that_uses_the_scene_ids():
+    prior = _doc(
+        objects=[{"local_id": "Object_1", "label": "light-gray rod"}],
+        observations=[_observation(ROD, EvidenceClass.DIRECTLY_OBSERVED)],
+    )
+    incoming = _doc(actions=[_action()])
+    kept = retain_prior_records(incoming, prior)
+    assert [item.local_id for item in kept.objects] == ["Object_1"]
+    assert kept.observations[0].bbox.w == ROD["w"]
+    assert [item.local_id for item in kept.actions] == ["Action_1"]

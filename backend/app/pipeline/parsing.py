@@ -156,10 +156,17 @@ def align_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if not _present(data.get("dependencies")) and _present(workflow.get("dependencies")):
             data["dependencies"] = workflow["dependencies"]
         data["workflow"] = steps or []
-    _fill_alias(data, "objects", (), _align_object)
-    _fill_alias(data, "observations", (), _align_observation)
-    _fill_alias(data, "actions", ("actions_detailed", "detailed_actions", "actions_structured"), _align_action)
-    _fill_alias(data, "workflow_steps", ("workflow", "workflow_steps_structured"), _align_step)
+    _flatten_observation_groups(data)
+    _fill_alias(data, "objects", ("objects_list", "objects_definition"), _align_object)
+    _fill_alias(data, "observations", ("observations_list",), _align_observation)
+    _fill_alias(
+        data,
+        "actions",
+        ("actions_detailed", "detailed_actions", "actions_structured", "actions_list", "interactions"),
+        _align_action,
+    )
+    _bind_steps_named_only_by_id(data)
+    _fill_alias(data, "workflow_steps", ("workflow", "workflow_steps_structured", "steps"), _align_step)
     _fill_alias(
         data,
         "dependencies",
@@ -171,8 +178,8 @@ def align_payload(payload: dict[str, Any]) -> dict[str, Any]:
         pairs = _pair_relationships(data.get("relationships_at_intervals"))
         if pairs:
             data["relationships"] = pairs
-    _fill_alias(data, "relationships", ("relationships_structured",), _align_relationship)
-    _fill_alias(data, "ambiguities", ("ambiguities_structured",), _align_ambiguity)
+    _fill_alias(data, "relationships", ("relationships_structured", "relationships_list"), _align_relationship)
+    _fill_alias(data, "ambiguities", ("ambiguities_structured", "ambiguities_list"), _align_ambiguity)
     _fill_step_detail(data)
     return data
 
@@ -228,10 +235,47 @@ def _present(value: Any) -> bool:
     return isinstance(value, list) and len(value) > 0
 
 
+def _flatten_observation_groups(data: dict[str, Any]) -> None:
+    """Lift boxes grouped under a timestamp into the flat observations list.
+
+    Some answers put each frame in observations_timeline or observation_sets,
+    with the object id on the child and the time on the parent. An empty
+    observations list is not a reason to ignore that group.
+    """
+    if _present(data.get("observations")) or _present(data.get("observations_list")):
+        return
+    flat: list[dict[str, Any]] = []
+    for name in ("observations_timeline", "observation_sets"):
+        groups = data.get(name)
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            stamp = _first_number(group, {}, ("timestamp_s", "timestamp_sec", "timestamp"))
+            children = group.get("object_observations") or group.get("observations")
+            if not isinstance(children, list):
+                continue
+            for child in children:
+                if not isinstance(child, dict):
+                    continue
+                row = dict(child)
+                if stamp is not None and not any(
+                    _number(row.get(key)) for key in ("timestamp", "timestamp_sec", "timestamp_s")
+                ):
+                    row["timestamp"] = stamp
+                flat.append(row)
+        if flat:
+            data["observations"] = flat
+            return
+
+
 def _align_object(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     from app.schemas.analysis import ObjectPrediction
 
     row = dict(item)
+    if not row.get("local_id") and row.get("object_id"):
+        row["local_id"] = str(row["object_id"])
     if not row.get("visual_characteristics") and row.get("visual_characteristics_description"):
         row["visual_characteristics"] = str(row["visual_characteristics_description"])
     if not row.get("description"):
@@ -240,8 +284,14 @@ def _align_object(item: dict[str, Any], index: int) -> dict[str, Any] | None:
             row["description"] = str(text)
     if not row.get("initial_state") and row.get("initial_resting_position"):
         row["initial_state"] = str(row["initial_resting_position"])
-    if row.get("manipulated") is not True and row.get("manipulated_by_hands") is True:
+    if not row.get("initial_state") and row.get("initial_state_description"):
+        row["initial_state"] = str(row["initial_state_description"])
+    if row.get("manipulated") is not True and (
+        row.get("manipulated_by_hands") is True or row.get("is_manipulated") is True
+    ):
         row["manipulated"] = True
+    if row.get("confidence") is None and _number(row.get("confidence_as_prediction")):
+        row["confidence"] = float(row["confidence_as_prediction"])
     if row.get("uncertain_identity") is not True and row.get("identity_uncertain") is True:
         row["uncertain_identity"] = True
     if not row.get("instance_id") and row.get("instance_id_or_local_ref"):
@@ -253,13 +303,52 @@ def _align_observation(item: dict[str, Any], index: int) -> dict[str, Any] | Non
     from app.schemas.analysis import ObservationPrediction
 
     row = dict(item)
+    if not row.get("object_local_id"):
+        source = row.get("local_id") or row.get("object_id")
+        if source:
+            row["object_local_id"] = str(source)
+    if row.get("timestamp") is None:
+        stamp = _first_number(row, {}, ("timestamp_sec", "timestamp_s"))
+        if stamp is not None:
+            row["timestamp"] = stamp
+    visibility = _visibility_name(row)
+    if visibility is not None:
+        row["visibility"] = visibility
     box = _coerce_box(row)
     if box is not None:
         row["bbox"] = box
-    evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
-    note = str(evidence.get("note") or row.get("description") or "")
-    row["evidence"] = _evidence(evidence, note)
+    if not row.get("description") and row.get("note"):
+        row["description"] = str(row["note"])
+    note = str(row.get("description") or "")
+    row["evidence"] = _status_evidence(row, note)
     return _accepted(ObservationPrediction, row)
+
+
+_VISIBILITY = {
+    "visible": "visible",
+    "partial": "partial",
+    "partially_visible": "partial",
+    "partly_visible": "partial",
+    "partially_occluded": "partial",
+    "partly_occluded": "partial",
+    "occluded": "occluded",
+    "absent": "absent",
+    "hidden": "absent",
+    "not_visible": "absent",
+}
+
+
+def _visibility_name(row: dict[str, Any]) -> str | None:
+    raw = row.get("visibility")
+    if isinstance(raw, str):
+        key = raw.strip().lower().replace("-", "_").replace(" ", "_")
+        if key in _VISIBILITY:
+            return _VISIBILITY[key]
+    if row.get("visible") is False:
+        return "absent"
+    if row.get("occluded") is True:
+        return "partial"
+    return None
 
 
 def _coerce_box(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -267,6 +356,8 @@ def _coerce_box(row: dict[str, Any]) -> dict[str, Any] | None:
 
     candidate = None
     bbox = row.get("bbox")
+    if not isinstance(bbox, dict):
+        bbox = row.get("box")
     keys = ("x", "y", "w", "h")
     if isinstance(bbox, dict) and all(key in bbox for key in keys):
         candidate = {key: bbox[key] for key in keys}
@@ -309,6 +400,8 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["local_id"] = f"Action_{index}"
     if not row.get("action_type"):
         kind = row.get("action_kind") or row.get("name") or row.get("verb")
+        if not kind and isinstance(row.get("action_label"), str):
+            kind = _verb_from_phrase(row["action_label"])
         if kind:
             row["action_type"] = str(kind)
     if row.get("start") is None and row.get("duration_start") is not None:
@@ -319,6 +412,30 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["end"] = row["duration_end"]
     if row.get("end") is None and row.get("time_end") is not None:
         row["end"] = row["time_end"]
+    if row.get("start") is None and _number(row.get("start_sec")):
+        row["start"] = row["start_sec"]
+    if row.get("end") is None and _number(row.get("end_sec")):
+        row["end"] = row["end_sec"]
+    span = row.get("time_range_s") or row.get("interval_sec")
+    if isinstance(span, (list, tuple)) and len(span) >= 2:
+        if row.get("start") is None and _number(span[0]):
+            row["start"] = span[0]
+        if row.get("end") is None and _number(span[1]):
+            row["end"] = span[1]
+    # Some answers nest the clock times one level down, as
+    # duration_endpoints.start_time.timestamp, and otherwise the action is dropped.
+    window = row.get("duration_endpoints")
+    if isinstance(window, dict):
+        if row.get("start") is None:
+            start = _endpoint_time(window.get("start_time", window.get("start")))
+            if start is not None:
+                row["start"] = start
+        if row.get("end") is None:
+            end = _endpoint_time(window.get("end_time", window.get("end")))
+            if end is not None:
+                row["end"] = end
+    if not row.get("action_type") and row.get("description"):
+        row["action_type"] = "interaction"
     if not row.get("actor"):
         actor = row.get("actor_or_basis") or row.get("actor_or_hand")
         if actor:
@@ -334,28 +451,163 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     if isinstance(target, str) and target.startswith("Object_") and target not in ids:
         ids.append(target)
     row["object_local_ids"] = ids
-    evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
-    if not evidence.get("classification") and row.get("classification") in _EVIDENCE_CLASS:
-        evidence = {
-            **evidence,
-            "classification": row["classification"],
-            "provenance": evidence.get("provenance") or row.get("provenance") or "AI_PREDICTION",
-        }
     if not row.get("description"):
-        row["description"] = str(evidence.get("note") or row.get("evidence_note") or row.get("name") or row.get("action_type") or "")
+        raw_evidence = row.get("evidence")
+        if isinstance(raw_evidence, dict):
+            noted = raw_evidence.get("note") or ""
+        elif isinstance(raw_evidence, str):
+            noted = raw_evidence
+        else:
+            noted = ""
+        label = row.get("action_label")
+        label = label.strip() if isinstance(label, str) else ""
+        row["description"] = str(
+            label or noted or row.get("evidence_note") or row.get("name") or row.get("action_type") or ""
+        )
     if row.get("outcome") not in _OUTCOMES:
         result = str(row.get("result") or "").lower()
         row["outcome"] = result if result in _OUTCOMES else "unknown"
     estimate = row.get("uncertainty_estimate")
     if row.get("uncertainty") is None and _number(estimate) and 0 <= float(estimate) <= 1:
         row["uncertainty"] = float(estimate)
-    anchored = _evidence(evidence, row["description"])
+    anchored = _status_evidence(row, row["description"])
     if anchored.get("time_start") is None and _number(row.get("start")):
         anchored["time_start"] = float(row["start"])
         if _number(row.get("end")):
             anchored["time_end"] = float(row["end"])
     row["evidence"] = anchored
     return _accepted(ActionPrediction, row)
+
+
+def _verb_from_phrase(text: str) -> str | None:
+    from app.schemas.enums import RECOGNIZED_ACTIONS
+
+    lowered = " ".join(text.strip().lower().replace("_", " ").replace("-", " ").split())
+    phrases = sorted(
+        ((verb.replace("_", " "), verb) for verb in RECOGNIZED_ACTIONS),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+    for phrase, verb in phrases:
+        if lowered == phrase or lowered.startswith(phrase + " "):
+            return verb
+    return None
+
+
+def _endpoint_time(value: Any) -> float | None:
+    if _number(value):
+        return float(value)
+    if isinstance(value, dict):
+        for key in ("timestamp", "time", "sec", "seconds", "time_sec"):
+            if _number(value.get(key)):
+                return float(value[key])
+    return None
+
+
+def _bind_steps_named_only_by_id(data: dict[str, Any]) -> None:
+    """A dependency can name Step_1 while the step list is only those ids.
+
+    The action pair on the dependency is the work of the source step and the
+    work of the destination step. Those actions become the missing steps, so
+    the edge is not left pointing at an id that was never stored.
+    """
+    if _has_step_dicts(data):
+        return
+    actions = data.get("actions")
+    deps = _raw_list(
+        data,
+        ("dependencies", "dependencies_if_any", "workflow_dependencies", "dependencies_structured"),
+    )
+    if not isinstance(actions, list) or not deps:
+        return
+    by_id = {
+        str(item.get("local_id")): item
+        for item in actions
+        if isinstance(item, dict) and item.get("local_id")
+    }
+    bound: dict[str, str] = {}
+    for dep in deps:
+        if not isinstance(dep, dict):
+            continue
+        ids = dep.get("action_ids") or dep.get("supporting_action_local_ids")
+        if not isinstance(ids, list) or len(ids) < 2:
+            continue
+        _bind_endpoint(bound, by_id, dep, ("from_step", "from_step_id", "from_step_local_id"), ids[0])
+        _bind_endpoint(bound, by_id, dep, ("to_step", "to_step_id", "to_step_local_id"), ids[-1])
+    if not bound:
+        return
+    steps = []
+    for step_id, action_id in sorted(bound.items(), key=_step_sort):
+        action = by_id[action_id]
+        evidence = action.get("evidence") if isinstance(action.get("evidence"), dict) else {}
+        note = str(evidence.get("note") or "")
+        description = str(action.get("description") or action.get("action_type") or step_id)
+        steps.append(
+            {
+                "local_id": step_id,
+                "name": description,
+                "action_local_ids": [action_id],
+                "required_objects": list(action.get("object_local_ids") or []),
+                "time_start": action.get("start"),
+                "time_end": action.get("end"),
+                "expected_action": description,
+                "observed_result": note or description,
+                "evidence": evidence,
+            }
+        )
+    data["workflow_steps"] = steps
+
+
+def _bind_endpoint(
+    bound: dict[str, str],
+    by_id: dict[str, dict[str, Any]],
+    dep: dict[str, Any],
+    keys: tuple[str, ...],
+    action_id: Any,
+) -> None:
+    step_id = ""
+    for key in keys:
+        if dep.get(key):
+            step_id = str(dep[key])
+            break
+    action_key = str(action_id)
+    if not step_id or step_id in bound or step_id in by_id or action_key not in by_id:
+        return
+    if step_id.lower().startswith("action_"):
+        return
+    bound[step_id] = action_key
+
+
+def _step_sort(item: tuple[str, str]) -> tuple[int, int | str]:
+    match = re.fullmatch(r"Step_(\d+)", item[0])
+    if match:
+        return (0, int(match.group(1)))
+    return (1, item[0])
+
+
+def _has_step_dicts(data: dict[str, Any]) -> bool:
+    found: list[Any] = []
+    for name in ("workflow_steps", "workflow_steps_structured", "steps"):
+        value = data.get(name)
+        if isinstance(value, list):
+            found.extend(value)
+    workflow = data.get("workflow")
+    if isinstance(workflow, dict):
+        for name in ("steps", "workflow_steps"):
+            value = workflow.get(name)
+            if isinstance(value, list):
+                found.extend(value)
+    elif isinstance(workflow, list):
+        found.extend(workflow)
+    return any(isinstance(item, dict) for item in found)
+
+
+def _raw_list(data: dict[str, Any], names: tuple[str, ...]) -> list[Any]:
+    for name in names:
+        value = data.get(name)
+        if isinstance(value, list) and value:
+            return value
+    return []
 
 
 def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
@@ -367,16 +619,24 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     if not row.get("local_id"):
         row["local_id"] = f"Step_{index}"
     window = row.get("time_window") if isinstance(row.get("time_window"), dict) else {}
+    span = row.get("time_window_sec")
+    if isinstance(span, (list, tuple)) and len(span) >= 2:
+        if row.get("time_start") is None and _number(span[0]):
+            row["time_start"] = float(span[0])
+        if row.get("time_end") is None and _number(span[1]):
+            row["time_end"] = float(span[1])
     if row.get("time_start") is None:
         row["time_start"] = _first_number(row, window, ("start", "start_time", "from"))
     if row.get("time_end") is None:
         row["time_end"] = _first_number(row, window, ("end", "end_time", "to"))
     if not row.get("name") and row.get("label"):
         row["name"] = str(row["label"])
+    if not row.get("name") and row.get("action"):
+        row["name"] = str(row["action"])
     if not row.get("name") and row.get("description"):
         row["name"] = str(row["description"])
     if not row.get("expected_action"):
-        action = row.get("step_kind") or row.get("expected_physical_action") or row.get("how")
+        action = row.get("step_kind") or row.get("expected_physical_action") or row.get("how") or row.get("action")
         if action:
             row["expected_action"] = str(action)
     if not row.get("completion_condition"):
@@ -389,6 +649,8 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["required_objects"] = row["objects"]
     if not row.get("required_objects") and isinstance(row.get("object_local_ids"), list):
         row["required_objects"] = row["object_local_ids"]
+    if not row.get("required_objects") and isinstance(row.get("target_objects"), list):
+        row["required_objects"] = row["target_objects"]
     for key in ("supporting_action_local_ids", "action_ids", "support_action_ids_or_numbers", "supporting_action_ids"):
         if row.get("action_local_ids"):
             break
@@ -396,13 +658,15 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
             row["action_local_ids"] = [str(item) for item in row[key]]
     if not row.get("observed_result") and row.get("observed_outcome"):
         row["observed_result"] = str(row["observed_outcome"])
+    if not row.get("observed_result") and row.get("unclear_reason"):
+        row["observed_result"] = str(row["unclear_reason"])
     if not row.get("observed_result") and row.get("description") and row.get("name") != row.get("description"):
         row["observed_result"] = str(row["description"])
     preconditions = row.get("preconditions")
     if isinstance(preconditions, str):
         row["preconditions"] = [preconditions] if preconditions else []
     note = str(row.get("observed_result") or row.get("name") or "")
-    row["evidence"] = _evidence(row.get("evidence") if isinstance(row.get("evidence"), dict) else {}, note)
+    row["evidence"] = _status_evidence(row, note)
     return _accepted(WorkflowStepPrediction, row)
 
 
@@ -536,8 +800,12 @@ def _bind_step_names(data: dict[str, Any]) -> None:
 
 _RELATION_ALIAS = {
     "attached_to": "attached",
+    "attached_or_joined_to": "attached",
+    "attached_or_joined_to_assembly": "attached",
     "inside_or_seated_in": "inside",
     "seated_in": "inside",
+    "seated_at_end_of": "attached",
+    "inserted_into_or_hidden_within_assembly": "inside",
     "holding": "held_by",
     "held": "held_by",
 }
@@ -552,23 +820,35 @@ def _align_relationship(item: dict[str, Any], index: int) -> dict[str, Any] | No
         if subject:
             row["subject_local_id"] = str(subject)
     if not row.get("other_local_id"):
-        other = row.get("object_b") or row.get("other")
-        if other:
-            row["other_local_id"] = str(other)
+        other = row.get("object_b") or row.get("other") or row.get("object")
+        if isinstance(other, str) and other:
+            row["other_local_id"] = other
     kind = str(row.get("kind") or row.get("relation") or row.get("label") or "unknown")
     kind = _RELATION_ALIAS.get(kind, kind)
     if kind not in _RELATIONS:
+        lowered = kind.lower()
+        if "insert" in lowered or "inside" in lowered:
+            kind = "inside"
+        elif "attach" in lowered or "seated" in lowered or "joined" in lowered:
+            kind = "attached"
+    if kind not in _RELATIONS:
         return None
+    if row.get("time_start") is None and _number(row.get("from_sec")):
+        row["time_start"] = float(row["from_sec"])
+    if row.get("time_end") is None and _number(row.get("to_sec")):
+        row["time_end"] = float(row["to_sec"])
+    if row.get("time_end") is None and _number(row.get("time_start")):
+        row["time_end"] = float(row["time_start"])
+    if row.get("time_start") is None and _number(row.get("time_end")):
+        row["time_start"] = float(row["time_end"])
     row["kind"] = kind
     if not row.get("description"):
         row["description"] = str(row.get("label") or kind)
-    evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
-    if not evidence and row.get("evidence_classification"):
-        evidence = {
-            "classification": row["evidence_classification"],
-            "provenance": row.get("provenance") or "AI_PREDICTION",
-        }
-    row["evidence"] = _evidence(evidence, str(row.get("description") or kind))
+    if not row.get("classification") and row.get("evidence_classification"):
+        row["classification"] = row["evidence_classification"]
+    if not row.get("epistemic_status") and row.get("classification"):
+        row["epistemic_status"] = row["classification"]
+    row["evidence"] = _status_evidence(row, str(row.get("description") or kind))
     return _accepted(RelationshipPrediction, row)
 
 
@@ -579,12 +859,16 @@ def _align_ambiguity(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     row = dict(item)
     if not row.get("local_id"):
         row["local_id"] = f"Ambiguity_{index}"
-    if not row.get("description") and row.get("label"):
-        row["description"] = str(row["label"])
+    if not row.get("description"):
+        issue = str(row.get("issue") or row.get("label") or "").strip()
+        detail = str(row.get("detail") or "").strip()
+        if issue and detail and detail not in issue:
+            row["description"] = f"{issue}: {detail}"
+        elif issue or detail:
+            row["description"] = issue or detail
     if row.get("kind") not in {kind.value for kind in AmbiguityKind}:
         row["kind"] = _ambiguity_kind(str(row.get("label") or ""), str(row.get("description") or ""))
-    evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
-    row["evidence"] = _evidence(evidence, str(row.get("description") or ""))
+    row["evidence"] = _status_evidence(row, str(row.get("description") or ""))
     return _accepted(AmbiguityPrediction, row)
 
 
@@ -643,11 +927,40 @@ def _pair_relationships(raw: Any) -> list[dict[str, Any]]:
     return kept
 
 
+def _status_evidence(row: dict[str, Any], note: str) -> dict[str, Any]:
+    evidence = row.get("evidence")
+    if isinstance(evidence, str):
+        evidence = {"note": evidence}
+    elif not isinstance(evidence, dict):
+        evidence = {}
+    status = row.get("epistemic_status") or row.get("classification")
+    if isinstance(status, str) and not evidence.get("classification"):
+        evidence = {**evidence, "classification": status}
+    if not evidence.get("provenance") and row.get("provenance"):
+        evidence = {**evidence, "provenance": row["provenance"]}
+    return _evidence(evidence, note)
+
+
 def _evidence(raw: dict[str, Any], note: str) -> dict[str, Any]:
     classification = raw.get("classification")
-    provenance = raw.get("provenance")
+    if isinstance(classification, str):
+        classification = classification.strip().upper()
+    provenance = raw.get("provenance") or "AI_PREDICTION"
+    if isinstance(provenance, str):
+        provenance = provenance.strip().upper()
     if classification in _EVIDENCE_CLASS and provenance in _PROVENANCE:
-        return raw
+        kept = {
+            "classification": classification,
+            "provenance": provenance,
+            "note": str(raw.get("note") or note or ""),
+        }
+        if isinstance(raw.get("frame_timestamps"), list):
+            kept["frame_timestamps"] = raw["frame_timestamps"]
+        if _number(raw.get("time_start")):
+            kept["time_start"] = float(raw["time_start"])
+        if _number(raw.get("time_end")):
+            kept["time_end"] = float(raw["time_end"])
+        return kept
     return {
         "classification": "INFERRED",
         "provenance": "AI_PREDICTION",

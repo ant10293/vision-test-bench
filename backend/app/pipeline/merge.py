@@ -40,6 +40,52 @@ _EVIDENCE_RANK = {
 }
 
 
+_STAGE_LISTS = (
+    "objects",
+    "observations",
+    "states",
+    "transitions",
+    "relationships",
+    "actions",
+    "workflow_steps",
+    "dependencies",
+    "ambiguities",
+)
+
+
+def retain_prior_records(incoming: AnalysisDocument, prior: AnalysisDocument) -> AnalysisDocument:
+    """Keep records a later stage left out.
+
+    Action, state, workflow, and ambiguity calls are asked for one slice.
+    An empty objects, actions, or observations list is that slice being absent,
+    not a decision to delete the scene. A roster that shares no ids with the
+    scene is a renamed copy, so the scene ids and their boxes stay.
+    """
+    update: dict[str, object] = {}
+    for name in _STAGE_LISTS:
+        current = getattr(incoming, name)
+        previous = getattr(prior, name)
+        if not current and previous:
+            update[name] = list(previous)
+    objects = list(update.get("objects", incoming.objects))
+    if incoming.objects and prior.objects:
+        incoming_ids = {item.local_id for item in incoming.objects}
+        prior_ids = {item.local_id for item in prior.objects}
+        if incoming_ids.isdisjoint(prior_ids):
+            objects = list(prior.objects)
+            update["objects"] = objects
+            if prior.observations:
+                update["observations"] = list(prior.observations)
+    known = {item.local_id for item in objects}
+    observations = update.get("observations", incoming.observations)
+    if observations and prior.observations and known:
+        if not any(item.object_local_id in known for item in observations):
+            update["observations"] = list(prior.observations)
+    if not update:
+        return incoming
+    return incoming.model_copy(update=update)
+
+
 def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDocument]) -> AnalysisDocument:
     if len(partials) < 2:
         return merged

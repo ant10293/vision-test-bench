@@ -32,6 +32,7 @@ from app.pipeline.infer import (
     save_working,
 )
 from app.pipeline.locate_pass import locate_missing
+from app.pipeline.merge import retain_prior_records
 from app.pipeline.perception_stage import load_spatial_document, run_spatial_stage
 from app.pipeline.prompts import compose
 from app.pipeline.validate import validate_document
@@ -527,22 +528,8 @@ async def _model_stage(session, run, video, stage) -> None:
 
 async def _ground(session, run, stage, document: AnalysisDocument, frames: list[FrameAsset]):
     """Keep ids on the part they belong to, find that part again, then read insertions."""
-    if stage.stage != "scene_analysis" and not document.observations:
-        prior = load_working(run.id)
-        if prior.observations:
-            document = document.model_copy(
-                update={
-                    "objects": document.objects or prior.objects,
-                    "observations": prior.observations,
-                    "states": document.states or prior.states,
-                    "transitions": document.transitions or prior.transitions,
-                    "relationships": document.relationships or prior.relationships,
-                    "ambiguities": list(document.ambiguities or prior.ambiguities),
-                    "workflow_steps": document.workflow_steps or prior.workflow_steps,
-                    "dependencies": document.dependencies or prior.dependencies,
-                    "actions": document.actions or prior.actions,
-                }
-            )
+    if stage.stage != "scene_analysis":
+        document = retain_prior_records(document, load_working(run.id))
     locate_info = None
     if document.observations:
         document = reconcile_identity(document)
