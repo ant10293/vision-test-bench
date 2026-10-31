@@ -23,6 +23,7 @@ from app.models.domain import (
 )
 from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRevision, AnalysisRun, PipelineStageRun, PromptVersion
+from app.models.util import elapsed_seconds
 from app.services.storage import data_path
 
 
@@ -84,7 +85,7 @@ def run_summary(session: Session, run: AnalysisRun) -> dict:
         ) or 0
     duration = None
     if run.started_at and run.finished_at:
-        duration = (run.finished_at - run.started_at).total_seconds()
+        duration = elapsed_seconds(run.started_at, run.finished_at)
     from app.services.costs import unpriced_call_count
 
     unpriced_calls = unpriced_call_count(session, run.id)

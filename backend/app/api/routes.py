@@ -957,6 +957,14 @@ def cancel(run_id: str, session: Session = Depends(db)) -> dict:
     for job in session.scalars(select(Job).where(Job.run_id == run.id, Job.status.in_(["pending", "running"]))):
         job.status = "canceled"
         job.finished_at = utcnow()
+    for stage in session.scalars(
+        select(PipelineStageRun).where(
+            PipelineStageRun.run_id == run.id,
+            PipelineStageRun.status.in_(["pending", "running"]),
+        )
+    ):
+        stage.status = "canceled"
+        stage.finished_at = utcnow()
     session.commit()
     return run_summary(session, run)
 

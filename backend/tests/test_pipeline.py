@@ -439,3 +439,50 @@ def test_worker_keeps_the_server_loop_free_during_a_job(monkeypatch):
 
     ticks = asyncio.run(main())
     assert ticks >= 3
+
+
+def test_cancel_returns_a_duration_when_the_start_has_no_timezone(client):
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models.media import VideoAsset
+    from app.models.runs import AnalysisRun, Job, PipelineStageRun
+
+    session = SessionLocal()
+    video = VideoAsset(original_filename="clip.mp4", stored_path="external", checksum_sha256="b" * 64)
+    session.add(video)
+    session.flush()
+    run = AnalysisRun(
+        video_id=video.id,
+        name="In flight",
+        status="running",
+        research_mode="fixed_camera",
+        viewpoint="fixed",
+        task_constraint="constrained",
+        provider_id="meta",
+        model_id="muse-wonder-1.0",
+        modality="native_video",
+        sampling_preset="standard",
+        config_json={},
+        started_at=datetime(2026, 10, 31, 4, 52, 40),
+    )
+    session.add(run)
+    session.flush()
+    session.add(Job(run_id=run.id, status="running"))
+    session.add(PipelineStageRun(run_id=run.id, stage="scene_analysis", status="running", checkpoint_json={}))
+    session.commit()
+    run_id = run.id
+    session.close()
+
+    canceled = client.post(f"/api/runs/{run_id}/cancel")
+    assert canceled.status_code == 200, canceled.text
+    body = canceled.json()
+    assert body["status"] == "canceled"
+    assert body["duration_sec"] > 0
+
+    session = SessionLocal()
+    stage = session.scalar(select(PipelineStageRun).where(PipelineStageRun.run_id == run_id))
+    assert stage.status == "canceled"
+    session.close()

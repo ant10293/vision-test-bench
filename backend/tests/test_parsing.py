@@ -441,6 +441,49 @@ def test_list_suffixed_records_keep_objects_actions_and_boxes():
     assert step.observed_result == "Fingers cover the meeting end."
 
 
+def test_time_range_list_is_kept():
+    text = """
+    {
+      "actions_structured": [{
+        "action_id": "Action_1",
+        "actor": "both_hands",
+        "description": "Pick up the light body piece and the small translucent piece.",
+        "evidence": {
+          "classification": "DIRECTLY_OBSERVED",
+          "note": "Both loose pieces leave the surface in the hands.",
+          "provenance": "AI_PREDICTION"
+        },
+        "object_local_ids": ["Object_1", "Object_6"],
+        "time_range": [0.8, 2.0],
+        "uncertainty": 0.25,
+        "verb": "pick_up"
+      }, {
+        "action_id": "Action_11",
+        "actor": "both_hands",
+        "description": "Rotate the finished assembly.",
+        "evidence": {
+          "classification": "DIRECTLY_OBSERVED",
+          "note": "The hands turn the assembly.",
+          "provenance": "AI_PREDICTION"
+        },
+        "object_local_ids": ["Object_1"],
+        "time_range": [18.0, 21.935],
+        "verb": "rotate"
+      }]
+    }
+    """
+    document = parse_analysis(text)
+    assert [(item.local_id, item.action_type, item.start, item.end) for item in document.actions] == [
+        ("Action_1", "pick_up", 0.8, 2.0),
+        ("Action_11", "rotate", 18.0, 21.935),
+    ]
+    assert document.actions[0].object_local_ids == ["Object_1", "Object_6"]
+    assert document.actions[0].evidence.classification.value == "DIRECTLY_OBSERVED"
+    assert document.actions[0].evidence.time_start == 0.8
+    assert document.actions[0].evidence.time_end == 2.0
+    assert document.actions[0].uncertainty == 0.25
+
+
 def test_labeled_actions_with_nested_times_and_step_ids_are_kept():
     text = """
     {

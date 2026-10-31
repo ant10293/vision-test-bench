@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.evaluation.metrics import evaluate_documents
 from app.models.domain import GroundTruthDataset
 from app.models.runs import AnalysisRevision, AnalysisRun
+from app.models.util import elapsed_seconds
 from app.schemas.analysis import AnalysisDocument
 
 
@@ -85,5 +86,5 @@ def _diff(left: set[str], right: set[str]) -> dict:
 
 def _elapsed(run: AnalysisRun) -> float | None:
     if run.started_at and run.finished_at:
-        return round((run.finished_at - run.started_at).total_seconds(), 3)
+        return round(elapsed_seconds(run.started_at, run.finished_at), 3)
     return None

@@ -416,7 +416,9 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["start"] = row["start_sec"]
     if row.get("end") is None and _number(row.get("end_sec")):
         row["end"] = row["end_sec"]
-    span = row.get("time_range_s") or row.get("interval_sec")
+    # The interval is sometimes a two-number list named time_range. Without
+    # that name, start and end stay empty and the action is dropped.
+    span = row.get("time_range_s") or row.get("time_range") or row.get("interval_sec")
     if isinstance(span, (list, tuple)) and len(span) >= 2:
         if row.get("start") is None and _number(span[0]):
             row["start"] = span[0]
