@@ -148,6 +148,7 @@ def align_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """
     data = dict(payload)
     _hoist_grouped(data)
+    _hoist_action_lists(data)
     workflow = data.get("workflow")
     if isinstance(workflow, dict):
         steps = workflow.get("steps") or workflow.get("workflow_steps")
@@ -178,7 +179,12 @@ def align_payload(payload: dict[str, Any]) -> dict[str, Any]:
         pairs = _pair_relationships(data.get("relationships_at_intervals"))
         if pairs:
             data["relationships"] = pairs
-    _fill_alias(data, "relationships", ("relationships_structured", "relationships_list"), _align_relationship)
+    _fill_alias(
+        data,
+        "relationships",
+        ("relationships_structured", "relationships_list", "relationships_collapsed"),
+        _align_relationship,
+    )
     _fill_alias(data, "ambiguities", ("ambiguities_structured", "ambiguities_list"), _align_ambiguity)
     _fill_step_detail(data)
     return data
@@ -209,6 +215,32 @@ def _hoist_grouped(data: dict[str, Any]) -> None:
                 data["workflow_steps"] = steps
         if not _present(data.get("dependencies")) and _present(workflow.get("dependencies")):
             data["dependencies"] = workflow["dependencies"]
+
+
+def _hoist_action_lists(data: dict[str, Any]) -> None:
+    """A collapsed action list is one wrapper whose actions field holds the records."""
+    if _present(data.get("actions")):
+        return
+    for key, value in data.items():
+        if "action" not in key.lower() or not isinstance(value, list):
+            continue
+        nested: list[Any] = []
+        wrapped = False
+        for item in value:
+            if isinstance(item, dict) and isinstance(item.get("actions"), list):
+                nested.extend(item["actions"])
+                wrapped = True
+            elif isinstance(item, dict):
+                nested.append(item)
+        if nested and (
+            wrapped
+            or any(
+                isinstance(item, dict) and (item.get("verb") or item.get("action_type") or item.get("action_id"))
+                for item in nested
+            )
+        ):
+            data["actions"] = nested
+            return
 
 
 def _fill_alias(data: dict[str, Any], canonical: str, aliases: tuple[str, ...], align) -> None:
@@ -278,6 +310,8 @@ def _align_object(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["local_id"] = str(row["object_id"])
     if not row.get("visual_characteristics") and row.get("visual_characteristics_description"):
         row["visual_characteristics"] = str(row["visual_characteristics_description"])
+    if not row.get("visual_characteristics") and row.get("visual_characteristics_paraphrased"):
+        row["visual_characteristics"] = str(row["visual_characteristics_paraphrased"])
     if not row.get("description"):
         text = row.get("visual_characteristics") or row.get("descriptive_name")
         if text:
@@ -399,7 +433,7 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     if not row.get("local_id"):
         row["local_id"] = f"Action_{index}"
     if not row.get("action_type"):
-        kind = row.get("action_kind") or row.get("name") or row.get("verb")
+        kind = row.get("action_kind") or row.get("verb") or row.get("name")
         if not kind and isinstance(row.get("action_label"), str):
             kind = _verb_from_phrase(row["action_label"])
         if kind:
@@ -414,8 +448,12 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["end"] = row["time_end"]
     if row.get("start") is None and _number(row.get("start_sec")):
         row["start"] = row["start_sec"]
+    if row.get("start") is None and _number(row.get("start_seconds")):
+        row["start"] = row["start_seconds"]
     if row.get("end") is None and _number(row.get("end_sec")):
         row["end"] = row["end_sec"]
+    if row.get("end") is None and _number(row.get("end_seconds")):
+        row["end"] = row["end_seconds"]
     # The interval is sometimes a two-number list named time_range. Without
     # that name, start and end stay empty and the action is dropped.
     span = row.get("time_range_s") or row.get("time_range") or row.get("interval_sec")
@@ -444,7 +482,10 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
             row["actor"] = str(actor)
     ids = list(row.get("object_local_ids") or [])
     for guest in row.get("object_ids") or []:
-        if guest not in ids:
+        if isinstance(guest, str) and guest not in ids:
+            ids.append(guest)
+    for guest in row.get("objects") or []:
+        if isinstance(guest, str) and guest not in ids:
             ids.append(guest)
     guest = row.get("manipulated_object_local_id")
     if guest and guest not in ids:
@@ -466,8 +507,10 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["description"] = str(
             label or noted or row.get("evidence_note") or row.get("name") or row.get("action_type") or ""
         )
+    if not row.get("final_state") and row.get("result_state"):
+        row["final_state"] = str(row["result_state"])
     if row.get("outcome") not in _OUTCOMES:
-        result = str(row.get("result") or "").lower()
+        result = str(row.get("result") or row.get("status") or "").lower()
         row["outcome"] = result if result in _OUTCOMES else "unknown"
     estimate = row.get("uncertainty_estimate")
     if row.get("uncertainty") is None and _number(estimate) and 0 <= float(estimate) <= 1:
@@ -653,7 +696,15 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["required_objects"] = row["object_local_ids"]
     if not row.get("required_objects") and isinstance(row.get("target_objects"), list):
         row["required_objects"] = row["target_objects"]
-    for key in ("supporting_action_local_ids", "action_ids", "support_action_ids_or_numbers", "supporting_action_ids"):
+    if not row.get("required_objects") and isinstance(row.get("input_objects"), list):
+        row["required_objects"] = row["input_objects"]
+    for key in (
+        "supporting_action_local_ids",
+        "action_ids",
+        "support_action_ids_or_numbers",
+        "supporting_action_ids",
+        "related_action_ids",
+    ):
         if row.get("action_local_ids"):
             break
         if isinstance(row.get(key), list):
@@ -821,11 +872,17 @@ def _align_relationship(item: dict[str, Any], index: int) -> dict[str, Any] | No
         subject = row.get("object_a") or row.get("subject")
         if subject:
             row["subject_local_id"] = str(subject)
+    pair = row.get("object_ids")
+    if isinstance(pair, list) and pair:
+        if not row.get("subject_local_id"):
+            row["subject_local_id"] = str(pair[0])
+        if len(pair) > 1 and not row.get("other_local_id"):
+            row["other_local_id"] = str(pair[1])
     if not row.get("other_local_id"):
         other = row.get("object_b") or row.get("other") or row.get("object")
         if isinstance(other, str) and other:
             row["other_local_id"] = other
-    kind = str(row.get("kind") or row.get("relation") or row.get("label") or "unknown")
+    kind = str(row.get("kind") or row.get("relation") or row.get("predicate") or row.get("label") or "unknown")
     kind = _RELATION_ALIAS.get(kind, kind)
     if kind not in _RELATIONS:
         lowered = kind.lower()
@@ -845,9 +902,11 @@ def _align_relationship(item: dict[str, Any], index: int) -> dict[str, Any] | No
         row["time_start"] = float(row["time_end"])
     row["kind"] = kind
     if not row.get("description"):
-        row["description"] = str(row.get("label") or kind)
+        row["description"] = str(row.get("notes") or row.get("label") or kind)
     if not row.get("classification") and row.get("evidence_classification"):
         row["classification"] = row["evidence_classification"]
+    if not row.get("classification") and row.get("evidence_class"):
+        row["classification"] = row["evidence_class"]
     if not row.get("epistemic_status") and row.get("classification"):
         row["epistemic_status"] = row["classification"]
     row["evidence"] = _status_evidence(row, str(row.get("description") or kind))
@@ -933,6 +992,18 @@ def _status_evidence(row: dict[str, Any], note: str) -> dict[str, Any]:
     evidence = row.get("evidence")
     if isinstance(evidence, str):
         evidence = {"note": evidence}
+    elif isinstance(evidence, list):
+        notes = []
+        classification = ""
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            if not classification and isinstance(item.get("classification"), str):
+                classification = item["classification"]
+            detail = item.get("detail") or item.get("note") or ""
+            if detail:
+                notes.append(str(detail))
+        evidence = {"classification": classification, "note": "; ".join(notes)}
     elif not isinstance(evidence, dict):
         evidence = {}
     status = row.get("epistemic_status") or row.get("classification")

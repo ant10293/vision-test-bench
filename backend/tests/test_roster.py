@@ -1,6 +1,6 @@
 """Object ids follow the previous window, through the frames those windows share."""
 
-from app.perception.roster import align_to_roster, drop_contained_objects
+from app.perception.roster import align_to_roster, drop_contained_objects, omit_workspace_and_hands
 from app.schemas.analysis import (
     ActionPrediction,
     AmbiguityPrediction,
@@ -446,6 +446,59 @@ def test_a_box_that_never_leaves_another_object_is_not_shown_separately():
     assert _box(kept, "Object_3", 0) == tire
     assert all(item.object_local_id != "Object_4" for item in kept.observations)
     assert any("never seen apart" in item.description for item in kept.ambiguities)
+
+
+def test_a_part_on_the_table_is_not_swallowed_by_the_table():
+    surface = (0.0, 0.0, 0.99, 0.70)
+    body = (0.40, 0.30, 0.12, 0.06)
+    document = _window(
+        [("Object_1", "light gray body"), ("Object_7", "purple flat support surface")],
+        [
+            _obs("Object_1", 0, *body),
+            _obs("Object_7", 0, *surface),
+            _obs("Object_1", 1, *body),
+            _obs("Object_7", 1, *surface),
+        ],
+    )
+    kept = drop_contained_objects(document)
+    assert _ids(kept) == {"Object_1", "Object_7"}
+    assert _box(kept, "Object_1", 0) == body
+
+
+def test_hands_and_the_resting_surface_are_left_out():
+    surface = (0.0, 0.0, 0.99, 0.70)
+    body = (0.40, 0.30, 0.12, 0.06)
+    hand = (0.20, 0.20, 0.15, 0.12)
+    base = (0.55, 0.40, 0.20, 0.10)
+    document = _window(
+        [
+            ("Object_1", "light gray body"),
+            ("Object_7", "purple flat support surface"),
+            ("Object_8", "left hand"),
+            ("Object_9", "wooden base"),
+        ],
+        [
+            _obs("Object_1", 0, *body),
+            _obs("Object_7", 0, *surface),
+            _obs("Object_8", 0, *hand),
+            _obs("Object_9", 0, *base),
+        ],
+    )
+    document = document.model_copy(
+        update={
+            "objects": [
+                document.objects[0].model_copy(update={"manipulated": True, "initial_state": "Resting on the purple surface"}),
+                document.objects[1],
+                document.objects[2],
+                document.objects[3],
+            ]
+        }
+    )
+    kept = omit_workspace_and_hands(document)
+    assert _ids(kept) == {"Object_1", "Object_9"}
+    assert _box(kept, "Object_1", 0) == body
+    assert all(item.object_local_id != "Object_7" for item in kept.observations)
+    assert all(item.object_local_id != "Object_8" for item in kept.observations)
 
 
 def test_a_part_seen_apart_before_it_is_inside_stays_its_own_object():

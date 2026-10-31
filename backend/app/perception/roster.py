@@ -10,6 +10,8 @@ angle, not a new object.
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 from app.perception.assignment import iou, linear_assignment
@@ -30,6 +32,9 @@ CONTAINED = 0.9
 APART = 0.5
 # The inner object has to be clearly the smaller one. Similar boxes are not a part inside a part.
 CONTAINED_AREA = 0.75
+# A box this large, as a fraction of the frame, is the table or the background.
+# Parts resting on it are not a second view of that surface.
+BACKGROUND_AREA = 0.25
 # A later box this close to a known part is another view of that part.
 TOUCH_GAP = 0.04
 # Pairs below MATCH_IOU stay out of the assignment, so a weak overlap cannot
@@ -375,6 +380,64 @@ def _union(a: BBox, b: BBox) -> BBox:
     return BBox(x=x1, y=y1, w=max(x2 - x1, 1e-4), h=max(y2 - y1, 1e-4))
 
 
+# A hand is the actor, not an object. "arm" alone is not matched: a multi-arm piece is a part.
+_HAND = re.compile(r"\b(hands?|fingers?|thumbs?|palms?|wrists?|forearms?|arms)\b", re.IGNORECASE)
+# The stationary background the parts rest on. A board, tray, or base that is built on stays.
+_RESTING_SURFACE = re.compile(r"\b(background|workspace|tabletop|table|desk|bench|floor|surface)\b", re.IGNORECASE)
+_BUILT_ON = re.compile(r"\b(board|tray|base)\b", re.IGNORECASE)
+
+
+def omit_workspace_and_hands(document: AnalysisDocument) -> AnalysisDocument:
+    """Drop hands and the stationary surface the parts rest on.
+
+    The scene prompt already tells the model to leave those out of the object
+    list. A surface it records anyway is not an object, and its box would
+    otherwise cover the parts. A board, tray, or base, and anything picked up,
+    stays.
+    """
+    dropped = {obj.local_id for obj in document.objects if _workspace_or_hand(obj)}
+    if not dropped:
+        return document
+
+    def kept(ids: list[str]) -> list[str]:
+        return [item for item in ids if item not in dropped]
+
+    return document.model_copy(
+        update={
+            "objects": [obj for obj in document.objects if obj.local_id not in dropped],
+            "observations": [item for item in document.observations if item.object_local_id not in dropped],
+            "states": [item for item in document.states if item.object_local_id not in dropped],
+            "transitions": [item for item in document.transitions if item.object_local_id not in dropped],
+            "relationships": [
+                item
+                for item in document.relationships
+                if item.subject_local_id not in dropped and item.other_local_id not in dropped
+            ],
+            "actions": [
+                item.model_copy(update={"object_local_ids": kept(item.object_local_ids)})
+                for item in document.actions
+            ],
+            "workflow_steps": [
+                item.model_copy(update={"required_objects": kept(item.required_objects)})
+                for item in document.workflow_steps
+            ],
+            "ambiguities": [
+                item.model_copy(update={"object_local_ids": kept(item.object_local_ids)})
+                for item in document.ambiguities
+            ],
+        }
+    )
+
+
+def _workspace_or_hand(obj) -> bool:
+    label = obj.label or ""
+    if _HAND.search(label):
+        return True
+    if obj.manipulated or _BUILT_ON.search(label):
+        return False
+    return _RESTING_SURFACE.search(label) is not None
+
+
 def drop_contained_objects(document: AnalysisDocument) -> AnalysisDocument:
     """Drop an object whose box never leaves the inside of another object.
 
@@ -462,7 +525,7 @@ def _contained_hosts(document: AnalysisDocument) -> dict[str, str]:
     for inner, inner_area in areas.items():
         best: tuple[float, str] | None = None
         for outer, outer_area in areas.items():
-            if inner == outer or inner_area > outer_area * CONTAINED_AREA:
+            if inner == outer or outer_area >= BACKGROUND_AREA or inner_area > outer_area * CONTAINED_AREA:
                 continue
             shared = sorted(
                 time for (object_id, time) in boxes if object_id == inner and (outer, time) in boxes
@@ -478,7 +541,12 @@ def _contained_hosts(document: AnalysisDocument) -> dict[str, str]:
                 best = (outer_area, outer)
         if best is not None:
             hosts[inner] = best
-    return _resolve_hosts({inner: outer for inner, (_area, outer) in hosts.items()})
+    resolved = _resolve_hosts({inner: outer for inner, (_area, outer) in hosts.items()})
+    # Several objects inside one outline are the parts on that outline, not copies of it.
+    counts: dict[str, int] = {}
+    for outer in resolved.values():
+        counts[outer] = counts.get(outer, 0) + 1
+    return {inner: outer for inner, outer in resolved.items() if counts[outer] == 1}
 
 
 def _resolve_hosts(hosts: dict[str, str]) -> dict[str, str]:

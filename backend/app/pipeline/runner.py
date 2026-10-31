@@ -18,7 +18,7 @@ from app.models.util import utcnow
 from app.perception.assembly import apply_assembly
 from app.perception.continuity import reconcile_identity
 from app.perception.ground import apply_perception
-from app.perception.roster import drop_contained_objects
+from app.perception.roster import drop_contained_objects, omit_workspace_and_hands
 from app.perception.types import TrackingCancelled
 from app.pipeline.actions import collapse_repeated_actions
 from app.pipeline.infer import (
@@ -532,6 +532,7 @@ async def _ground(session, run, stage, document: AnalysisDocument, frames: list[
         document = retain_prior_records(document, load_working(run.id))
     locate_info = None
     if document.observations:
+        document = omit_workspace_and_hands(document)
         document = reconcile_identity(document)
         document = drop_contained_objects(document)
         if stage.stage == "scene_analysis":

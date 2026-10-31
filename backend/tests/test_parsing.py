@@ -546,3 +546,57 @@ def test_labeled_actions_with_nested_times_and_step_ids_are_kept():
         ("Step_1", "Step_2"),
         ("Step_2", "Step_6"),
     ]
+
+
+def test_collapsed_action_list_keeps_the_verb_and_the_parts():
+    text = """
+    {
+      "objects": [
+        {"local_id": "Object_1", "label": "light gray body", "manipulated": true},
+        {"local_id": "Object_7", "label": "purple flat support surface", "manipulated": false}
+      ],
+      "actions_collapsed": [{
+        "actions": [{
+          "local_id": "Action_1",
+          "verb": "pick_up",
+          "name": "pick_up body and small round piece",
+          "start_seconds": 0.5,
+          "end_seconds": 2.0,
+          "objects": ["Object_1", "Object_6"],
+          "status": "completed",
+          "result_state": "held",
+          "evidence": [{"classification": "DIRECTLY_OBSERVED", "detail": "hands lift the body"}]
+        }]
+      }],
+      "workflow": {
+        "steps": [{
+          "local_id": "Step_1",
+          "name": "Insert small round piece into body",
+          "expected_action": "Insert the piece",
+          "input_objects": ["Object_1", "Object_6"],
+          "related_action_ids": ["Action_1"],
+          "time_start": 0.5,
+          "time_end": 2.0,
+          "observed_result": "The piece meets the body."
+        }],
+        "dependencies": [{
+          "from_step_id": "Step_1",
+          "to_step_id": "Step_1",
+          "category": "observed_temporal",
+          "evidence": "follows in time"
+        }]
+      }
+    }
+    """
+    document = parse_analysis(text)
+    action = document.actions[0]
+    assert action.local_id == "Action_1"
+    assert action.action_type == "pick_up"
+    assert action.start == 0.5 and action.end == 2.0
+    assert action.object_local_ids == ["Object_1", "Object_6"]
+    assert action.outcome.value == "completed"
+    assert action.final_state == "held"
+    assert action.evidence.classification.value == "DIRECTLY_OBSERVED"
+    assert action.evidence.note == "hands lift the body"
+    assert document.workflow_steps[0].required_objects == ["Object_1", "Object_6"]
+    assert document.workflow_steps[0].action_local_ids == ["Action_1"]
