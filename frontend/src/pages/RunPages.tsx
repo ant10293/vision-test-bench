@@ -11,6 +11,7 @@ import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
 import { WorkflowGraph } from "../components/WorkflowGraph";
 import { api, evidenceClass, formatTime, formatUsd } from "../lib/api";
+import { analysisSetupLine } from "../lib/runOptions";
 import { formatConfidence } from "../lib/confidence";
 import { formatLogText } from "../lib/formatLog";
 import { actionPhrase, humanize, humanizeText, labeledId, nameObjects, objectLabels } from "../lib/humanize";
@@ -226,12 +227,7 @@ function AnalysisHeader({ bundle, embedded }: { bundle: Bundle | null; embedded:
         </div>
         <p className="mt-1 text-xs text-[var(--muted)]">
           {bundle ? (
-            <>
-              {humanize(bundle.run.provider_id)} / {humanize(bundle.run.model_id)} · {humanize(bundle.run.modality)} · {humanize(bundle.run.sampling_preset)}
-              {bundle.revision ? ` · ${humanize(bundle.revision.layer)} v${bundle.revision.version}` : ""}
-              {" · "}{formatUsd(bundle.run.cost_usd)}
-              {bundle.run.unpriced_calls > 0 ? ` · ${bundle.run.unpriced_calls} unpriced` : ""}
-            </>
+            analysisSetupLine(bundle)
           ) : (
             <Bone width="28rem" />
           )}
@@ -501,7 +497,17 @@ function UnselectedAction() {
   );
 }
 
-function ObjectTile({ object, sightings, onOpen }: { object: Bundle["objects"][number] | null; sightings?: number; onOpen?: () => void }) {
+function ObjectTile({
+  object,
+  sightings,
+  selected = false,
+  onOpen,
+}: {
+  object: Bundle["objects"][number] | null;
+  sightings?: number;
+  selected?: boolean;
+  onOpen?: () => void;
+}) {
   const thumb = objectThumbnail(object);
   const media = thumb ? (
     <img src={thumb} alt="" className="max-h-48 w-auto max-w-full object-contain" />
@@ -532,7 +538,12 @@ function ObjectTile({ object, sightings, onOpen }: { object: Bundle["objects"][n
   );
   if (!object) return <div className="panel flex h-full flex-col overflow-hidden text-left" aria-hidden="true">{body}</div>;
   return (
-    <button type="button" className="panel flex h-full flex-col overflow-hidden text-left" onClick={onOpen}>
+    <button
+      type="button"
+      aria-pressed={selected}
+      className={`panel flex h-full flex-col overflow-hidden text-left${selected ? " outline outline-2 -outline-offset-2 outline-[var(--teal)]" : ""}`}
+      onClick={onOpen}
+    >
       {body}
     </button>
   );
@@ -569,7 +580,11 @@ export function ObjectsPage() {
             key={object?.id ?? `pending-${index}`}
             object={object}
             sightings={object && bundle ? sightingCount(bundle.frames, object.local_id, bundle.observations) : undefined}
-            onOpen={object ? () => { setOpen(object.local_id); setPreview(null); } : undefined}
+            selected={object?.local_id === open}
+            onOpen={object ? () => {
+              setOpen((current) => (current === object.local_id ? null : object.local_id));
+              setPreview(null);
+            } : undefined}
           />
         ))}
       </div>

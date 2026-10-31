@@ -22,7 +22,7 @@ from app.models.domain import (
     WorkflowStepRow,
 )
 from app.models.media import FrameAsset, VideoAsset
-from app.models.runs import AnalysisRevision, AnalysisRun, PipelineStageRun
+from app.models.runs import AnalysisRevision, AnalysisRun, PipelineStageRun, PromptVersion
 from app.services.storage import data_path
 
 
@@ -140,6 +140,12 @@ def bundle(session: Session, run: AnalysisRun) -> dict:
         ).all()
     stages = session.scalars(select(PipelineStageRun).where(PipelineStageRun.run_id == run.id)).all()
     stage_order = {name: index for index, name in enumerate(_order())}
+    config = _public_config(run.config_json or {})
+    if run.prompt_version_id:
+        prompt = session.get(PromptVersion, run.prompt_version_id)
+        if prompt is not None:
+            config["prompt_key"] = prompt.key
+            config["prompt_name"] = prompt.name
     return {
         "run": run_summary(session, run),
         "video": video_dict(video) if video else None,
@@ -152,7 +158,7 @@ def bundle(session: Session, run: AnalysisRun) -> dict:
         if revision
         else None,
         "coverage": run.coverage_json,
-        "config": _public_config(run.config_json or {}),
+        "config": config,
         "stages": [
             _stage(stage)
             for stage in sorted(stages, key=lambda item: stage_order.get(item.stage, 99))
@@ -277,7 +283,13 @@ def _alignments(session: Session, run_id: str) -> list[dict]:
 
 def _public_config(config: dict) -> dict:
     hidden = {"credentials", "api_key"}
-    return {key: value for key, value in config.items() if key not in hidden and "key" not in key.lower()}
+    # prompt_key names a template family. Other key-like fields stay hidden.
+    revealed = {"prompt_key"}
+    return {
+        key: value
+        for key, value in config.items()
+        if key in revealed or (key not in hidden and "key" not in key.lower())
+    }
 
 
 def _order() -> list[str]:

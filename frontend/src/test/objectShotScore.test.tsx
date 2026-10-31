@@ -109,4 +109,24 @@ describe("confidence on the object image grid", () => {
     expect(cells[2]).toHaveTextContent("0:02.00");
     expect(cells[2].querySelector("img")).toHaveAttribute("src", "/api/media/observations/obs-2/crop");
   });
+
+  it("closes the detail when the selected object card is clicked again", () => {
+    const client = new QueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <BundleContext.Provider value={bundle}>
+          <ObjectsPage />
+        </BundleContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    const card = screen.getByRole("button", { name: /Rod/ });
+    fireEvent.click(card);
+    expect(screen.getByText("Dataset")).toBeInTheDocument();
+    expect(card).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(card);
+    expect(screen.queryByText("Dataset")).not.toBeInTheDocument();
+    expect(card).toHaveAttribute("aria-pressed", "false");
+  });
 });

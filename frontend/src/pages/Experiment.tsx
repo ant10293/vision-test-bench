@@ -5,6 +5,7 @@ import { Bone, FieldBone } from "../components/Skeleton";
 import { SettingsFieldset } from "../components/SettingsFieldset";
 import { api } from "../lib/api";
 import { humanize } from "../lib/humanize";
+import { PERCEPTION_OPTIONS, PIPELINE_OPTIONS, SEGMENTATION_OPTIONS } from "../lib/runOptions";
 import type { Capability } from "../lib/types";
 import { videoReady } from "../lib/uploadProgress";
 
@@ -161,11 +162,7 @@ export function ExperimentPage() {
       )}
       <Field label="Perception">
         <select className="field" value={perceptionPreset} onChange={(event) => setPerceptionPreset(event.target.value)}>
-          <option value="A_legacy_motion">A · Motion baseline</option>
-          <option value="B_temporal">B · Temporal tracking</option>
-          <option value="C_appearance">C · Appearance-assisted</option>
-          <option value="D_appearance_segmented">D · Appearance and GrabCut</option>
-          <option value="vlm_only">VLM only</option>
+          {PERCEPTION_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
         <span className="text-xs text-[var(--muted)]">
           The same footage can be repeated under each preset. Appearance tracking asks for DINOv2 only when that preset is selected, and it does not download weights until a run encodes a crop. No accuracy is assumed.
@@ -194,9 +191,7 @@ export function ExperimentPage() {
         </Field>
         <Field label="Pipeline">
           <select className="field stretch" value={pass} onChange={(event) => setPass(event.target.value)}>
-            <option value="single">Single pass</option>
-            <option value="multi">Multi-stage</option>
-            <option value="multi_reinspect">Multi-stage + reinspection</option>
+            {PIPELINE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </Field>
       </div>
@@ -206,11 +201,18 @@ export function ExperimentPage() {
         </p>
         <Field label="Segmentation">
           <select className="field" value={segmentation} onChange={(event) => setSegmentation(event.target.value)}>
-            <option value="disabled">Disabled</option>
-            <option value="boxes_only">Boxes and crops only</option>
-            <option value="local_grabcut">Local GrabCut</option>
-            <option value="sam" disabled={samCaps ? !samCaps.image_segmentation : false}>SAM 3.1 image segmentation</option>
-            <option value="sam_video" disabled={samCaps ? !samCaps.video_tracking : false}>SAM 3.1 video tracking with evidence fusion</option>
+            {SEGMENTATION_OPTIONS.map(([value, label]) => (
+              <option
+                key={value}
+                value={value}
+                disabled={
+                  (value === "sam" && Boolean(samCaps) && !samCaps?.image_segmentation)
+                  || (value === "sam_video" && Boolean(samCaps) && !samCaps?.video_tracking)
+                }
+              >
+                {label}
+              </option>
+            ))}
           </select>
         </Field>
         {(segmentation === "sam" || segmentation === "sam_video") && (

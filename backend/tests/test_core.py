@@ -300,6 +300,22 @@ def test_a_step_that_depends_on_itself_is_dropped():
     assert dropped.severity == "warning"
 
 
+def test_prompt_family_stays_visible_and_secrets_stay_hidden():
+    from app.api.serialize import _public_config
+
+    public = _public_config({
+        "prompt_key": "scene",
+        "api_key": "secret",
+        "credentials": {"token": "nope"},
+        "sampling_preset": "standard",
+        "perception": {"preset": "B_temporal"},
+    })
+    assert public["prompt_key"] == "scene"
+    assert public["perception"]["preset"] == "B_temporal"
+    assert "api_key" not in public
+    assert "credentials" not in public
+
+
 def test_attempted_outcome_is_distinct_in_fixture():
     document = build_document(SCENARIOS["fixed_camera"]())
     outcomes = {action.local_id: action.outcome.value for action in document.actions}
