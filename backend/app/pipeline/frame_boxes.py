@@ -52,19 +52,26 @@ FRAME_BOX_SCHEMA = {
                 "properties": {
                     "object_local_id": {"type": "string"},
                     "timestamp": {"type": "number"},
+                    "visibility": {"type": "string"},
+                    "confidence": {"anyOf": [{"type": "number"}, {"type": "null"}]},
                     "bbox": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "x": {"type": "number"},
-                            "y": {"type": "number"},
-                            "w": {"type": "number"},
-                            "h": {"type": "number"},
-                        },
-                        "required": ["x", "y", "w", "h"],
+                        "anyOf": [
+                            {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "x": {"type": "number"},
+                                    "y": {"type": "number"},
+                                    "w": {"type": "number"},
+                                    "h": {"type": "number"},
+                                },
+                                "required": ["x", "y", "w", "h"],
+                            },
+                            {"type": "null"},
+                        ]
                     },
                 },
-                "required": ["object_local_id", "timestamp", "bbox"],
+                "required": ["object_local_id", "timestamp", "visibility", "bbox", "confidence"],
             },
         }
     },
@@ -151,18 +158,25 @@ def frame_box_prompt(width: int, height: int) -> str:
         f"A circle on this image has w/h = {ratio:.3f}. "
         "Do not give w and h the same fraction unless the part has that shape in the image. "
         "The box touches the outermost visible pixels of that one part. "
-        "Keep the given object ids. On every image, include one observation for each object "
-        "that is even partly visible, and omit an object that is fully hidden. "
-        "Return JSON with an observations list. Each box is an object named bbox with x, y, w, and h. "
+        "Keep the given object ids. On every image, include one observation for each named object. "
+        "When any of that part is visible, visibility is visible or partial, bbox is that part alone, "
+        "and confidence is your score from 0 to 1 that the box is that part and only that part. "
+        "When the part is fully hidden or not in the frame, visibility is absent, bbox is null, and confidence is null. "
+        "Do not point its id at a different part, and do not give a score to a guess. "
+        "Two parts never share one box. "
         "Do not rename the objects."
     )
 
 
 def merge_frame_boxes(document: AnalysisDocument, fresh: AnalysisDocument) -> AnalysisDocument:
-    """Copy boxes from a frame answer onto the matching object and timestamp."""
+    """Copy boxes from a frame answer onto the matching object and timestamp.
+
+    An absent answer clears the box. The score has to come from that same answer,
+    because the video score was about a different corner.
+    """
     incoming: dict[tuple[str, float], ObservationPrediction] = {}
     for item in fresh.observations:
-        if item.bbox is None:
+        if item.bbox is None and _visibility(item) != "absent":
             continue
         incoming[(item.object_local_id, round(item.timestamp, 3))] = item
     if not incoming:
@@ -173,13 +187,65 @@ def merge_frame_boxes(document: AnalysisDocument, fresh: AnalysisDocument) -> An
         if match is None:
             updated.append(item)
             continue
+        if match.bbox is None:
+            updated.append(
+                item.model_copy(update={"bbox": None, "visibility": match.visibility, "confidence": None})
+            )
+            continue
         updated.append(
             item.model_copy(
                 update={
                     "bbox": match.bbox,
                     "visibility": match.visibility,
-                    "confidence": match.confidence if match.confidence is not None else item.confidence,
+                    "confidence": match.confidence,
                 }
             )
         )
+    return drop_copied_boxes(document.model_copy(update={"observations": updated}))
+
+
+def drop_copied_boxes(document: AnalysisDocument) -> AnalysisDocument:
+    """Clear the lower-scoring box when two ids were given the same rectangle."""
+    grouped: dict[float, list[int]] = {}
+    observations = list(document.observations)
+    for index, item in enumerate(observations):
+        if item.bbox is None:
+            continue
+        grouped.setdefault(round(item.timestamp, 3), []).append(index)
+    clear: set[int] = set()
+    for indexes in grouped.values():
+        ranked = sorted(indexes, key=lambda index: (observations[index].confidence or 0), reverse=True)
+        kept: list[int] = []
+        for index in ranked:
+            box = observations[index].bbox
+            assert box is not None
+            if any(_iou(box, observations[other].bbox) >= 0.9 for other in kept):
+                clear.add(index)
+                continue
+            kept.append(index)
+    if not clear:
+        return document
+    from app.schemas.enums import Visibility
+
+    updated = []
+    for index, item in enumerate(observations):
+        if index not in clear:
+            updated.append(item)
+            continue
+        updated.append(item.model_copy(update={"bbox": None, "visibility": Visibility.ABSENT, "confidence": None}))
     return document.model_copy(update={"observations": updated})
+
+
+def _visibility(item: ObservationPrediction) -> str:
+    value = item.visibility
+    return str(getattr(value, "value", value))
+
+
+def _iou(left, right) -> float:
+    if left is None or right is None:
+        return 0
+    ix = max(0, min(left.x + left.w, right.x + right.w) - max(left.x, right.x))
+    iy = max(0, min(left.y + left.h, right.y + right.h) - max(left.y, right.y))
+    inter = ix * iy
+    union = left.w * left.h + right.w * right.h - inter
+    return inter / union if union else 0

@@ -101,8 +101,12 @@ Do not treat proximity as attachment.
 
 WORKFLOW = """
 Derive a structured procedure from the observed actions without assuming it is the correct procedure.
-Each step needs required objects, preconditions, the expected physical action, an observable completion
-condition, supporting action ids, a time interval, and uncertainty.
+Each step needs required objects, preconditions, supporting action ids, a time interval, and uncertainty.
+Each step also has three different sentences, and none of them is a copy of the step name:
+expected_action says how the change is carried out.
+completion_condition says the visible end state that means the step is done. The page shows this after "Expected:".
+observed_result says what was actually seen, including when it finished. The page shows this after "Observed:".
+Do not leave expected_action, completion_condition, or observed_result empty.
 A dependency joins two different steps. from_step and to_step are different workflow step ids, such as Step_1 and Step_2.
 When the recording has one step, or the steps have no ordering constraint, dependencies is empty.
 Do not make a step depend on itself.

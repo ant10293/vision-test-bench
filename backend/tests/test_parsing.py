@@ -215,6 +215,33 @@ def test_flat_boxes_and_structured_procedure_are_kept():
     assert document.ambiguities[0].kind.value == "uncertain_identity"
 
 
+def test_a_combined_step_description_fills_expected_and_the_detail_line():
+    text = """
+    {
+      "actions": [{
+        "local_id": "Action_1",
+        "action_type": "attach",
+        "description": "attach the clear piece to the body; the free end remains",
+        "start": 0.5,
+        "end": 3.5,
+        "object_local_ids": ["Object_1", "Object_6"],
+        "evidence": {"classification": "DIRECTLY_OBSERVED", "provenance": "AI_PREDICTION", "note": "seated"}
+      }],
+      "workflow_steps_structured": [{
+        "label": "insert the clear piece",
+        "description": "Insert the clear piece: the free end remains after the fingers withdraw",
+        "objects": ["Object_1", "Object_6"],
+        "time_start": 0.5,
+        "time_end": 4.0
+      }]
+    }
+    """
+    step = parse_analysis(text).workflow_steps[0]
+    assert step.expected_action == "attach the clear piece to the body; the free end remains"
+    assert step.completion_condition == "the free end remains after the fingers withdraw"
+    assert "Insert the clear piece" in step.observed_result
+
+
 def test_schema_actions_are_not_replaced_by_an_alias():
     text = """
     {

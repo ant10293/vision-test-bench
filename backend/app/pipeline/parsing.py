@@ -168,6 +168,7 @@ def align_payload(payload: dict[str, Any]) -> dict[str, Any]:
             data["relationships"] = pairs
     _fill_alias(data, "relationships", ("relationships_structured",), _align_relationship)
     _fill_alias(data, "ambiguities", ("ambiguities_structured",), _align_ambiguity)
+    _fill_step_detail(data)
     return data
 
 
@@ -344,8 +345,14 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["name"] = str(row["label"])
     if not row.get("name") and row.get("description"):
         row["name"] = str(row["description"])
-    if not row.get("expected_action") and row.get("step_kind"):
-        row["expected_action"] = str(row["step_kind"])
+    if not row.get("expected_action"):
+        action = row.get("step_kind") or row.get("expected_physical_action") or row.get("how")
+        if action:
+            row["expected_action"] = str(action)
+    if not row.get("completion_condition"):
+        completion = row.get("completion") or row.get("observable_completion") or row.get("completion_criteria")
+        if completion:
+            row["completion_condition"] = str(completion)
     if not row.get("required_objects") and isinstance(row.get("objects_involved_local_ids"), list):
         row["required_objects"] = row["objects_involved_local_ids"]
     if not row.get("required_objects") and isinstance(row.get("objects"), list):
@@ -389,6 +396,72 @@ def _align_dependency(item: dict[str, Any], index: int) -> dict[str, Any] | None
     note = f"{row['from_step']} to {row['to_step']}"
     row["evidence"] = _evidence(row.get("evidence") if isinstance(row.get("evidence"), dict) else {}, note)
     return _accepted(DependencyPrediction, row)
+
+
+def _fill_step_detail(data: dict[str, Any]) -> None:
+    """Fill the three step sentences from actions and from a combined description.
+
+    Some answers put the whole step in one description and leave expected_action
+    and completion_condition empty. The page then shows a blank detail line and
+    a blank Expected line. Overlapping action descriptions are the detail line,
+    and the clause after a colon or semicolon is the expected end state.
+    """
+    steps = data.get("workflow_steps")
+    actions = data.get("actions")
+    if not isinstance(steps, list):
+        return
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if not step.get("expected_action") and isinstance(actions, list):
+            lines, ids = _actions_during(step, actions)
+            if lines:
+                step["expected_action"] = "; ".join(lines)
+            if ids and not step.get("action_local_ids"):
+                step["action_local_ids"] = ids
+        if not step.get("completion_condition"):
+            clause = _result_clause(str(step.get("observed_result") or "")) or _result_clause(
+                str(step.get("expected_action") or "")
+            )
+            if clause:
+                step["completion_condition"] = clause
+            elif step.get("observed_result") and str(step.get("observed_result")).strip().lower() != str(step.get("name") or "").strip().lower():
+                step["completion_condition"] = str(step["observed_result"])
+
+
+def _actions_during(step: dict[str, Any], actions: list) -> tuple[list[str], list[str]]:
+    start, end = step.get("time_start"), step.get("time_end")
+    if start is None or end is None:
+        return [], []
+    lines: list[str] = []
+    ids: list[str] = []
+    linked = {str(item) for item in (step.get("action_local_ids") or [])}
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        begin, finish = action.get("start"), action.get("end")
+        if begin is None or finish is None or finish <= start or begin >= end:
+            continue
+        local_id = str(action.get("local_id") or "")
+        if linked and local_id and local_id not in linked:
+            continue
+        text = str(action.get("description") or action.get("action_type") or "").strip()
+        if text and text not in lines:
+            lines.append(text)
+        if local_id and local_id not in ids:
+            ids.append(local_id)
+    return lines, ids
+
+
+def _result_clause(text: str) -> str:
+    for separator in (":", ";"):
+        if separator not in text:
+            continue
+        tail = text.split(separator, 1)[1].strip()
+        tail = re.sub(r"^(?:the )?observed result is\s+", "", tail, flags=re.IGNORECASE)
+        if tail:
+            return tail
+    return ""
 
 
 def _bind_step_names(data: dict[str, Any]) -> None:

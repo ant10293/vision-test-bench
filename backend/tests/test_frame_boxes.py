@@ -56,6 +56,40 @@ def test_a_box_shared_by_three_parts_is_not_copied():
     assert frame_box_rejection(boxes, 2160, 3840, {item.object_local_id for item in boxes})
 
 
+def test_an_absent_part_clears_the_video_box():
+    original = AnalysisDocument(observations=[_obs("Object_1", 1.0, 0.08, 0.045)])
+    fresh = AnalysisDocument(
+        observations=[
+            ObservationPrediction(
+                object_local_id="Object_1",
+                timestamp=1.0,
+                bbox=None,
+                visibility="absent",
+                confidence=None,
+                evidence=Evidence(classification=EvidenceClass.DIRECTLY_OBSERVED, provenance=Provenance.AI_PREDICTION),
+            )
+        ]
+    )
+    merged = merge_frame_boxes(original, fresh)
+    assert merged.observations[0].bbox is None
+    assert merged.observations[0].confidence is None
+
+
+def test_two_ids_on_one_rectangle_keep_the_higher_score():
+    original = AnalysisDocument(
+        observations=[
+            _obs("Object_1", 1.0, 0.08, 0.045, x=0.4, y=0.3),
+            _obs("Object_2", 1.0, 0.08, 0.045, x=0.4, y=0.3),
+        ]
+    )
+    original.observations[0].confidence = 0.4
+    original.observations[1].confidence = 0.8
+    fresh = AnalysisDocument(observations=original.observations)
+    merged = merge_frame_boxes(original, fresh)
+    kept = [item for item in merged.observations if item.bbox is not None]
+    assert [item.object_local_id for item in kept] == ["Object_2"]
+
+
 def test_frame_boxes_replace_the_same_moment_only():
     original = AnalysisDocument(observations=[_obs("Object_1", 1.0, 0.05, 0.05), _obs("Object_1", 2.0, 0.05, 0.05)])
     fresh = AnalysisDocument(observations=[_obs("Object_1", 1.0, 0.09, 0.05, x=0.4, y=0.3)])
