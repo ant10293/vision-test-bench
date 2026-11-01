@@ -6,6 +6,9 @@ replaces this run's SAM masks, cutouts, and track points instead of appending.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -21,7 +24,7 @@ from app.models.domain import (
     SpatialTrackPoint,
 )
 from app.models.media import FrameAsset, VideoAsset
-from app.models.runs import AnalysisRun
+from app.models.runs import AnalysisRun, Job
 from app.perception.sam_fusion import (
     SamRequestPlan,
     TrackSample,
@@ -41,6 +44,7 @@ from app.providers.sam import (
     SamRecord,
     frame_timestamp,
     normalized_box,
+    parse_sam_output,
     plan_video_chunks,
     sam_capabilities,
     sam_video_accepted,
@@ -123,9 +127,12 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
     secret, _source = load_secret(session, "meta")
     adapter = SamAdapter(secret, timeout_s=_timeout(run))
     _clear_sam_rows(session, run)
+    resuming = _resuming_after_restart(session, run)
+    if not resuming:
+        shutil.rmtree(_responses_dir(run.id), ignore_errors=True)
     document = load_working(run.id)
     source = resolve_stored(video.stored_path)
-    prepared, transform = _prepare_media(source, run.id, int(video.rotation_deg or 0))
+    prepared, transform = _prepare_media(source, run.id, int(video.rotation_deg or 0), reuse=resuming)
     metadata = probe(prepared)
     fps = float(metadata.avg_fps or metadata.fps or video.avg_fps or video.fps or 0)
     timeline = timeline_for(video, run.config_json)
@@ -157,8 +164,13 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
     failure: Exception | None = None
     max_requests = _max_requests(run)
     file_ids: dict[str, str] = {}
-    for chunk in chunks:
-        plans = plan_prompts(document, chunk, width, height, fps)
+    resumed = 0
+    planned = [plan_prompts(document, chunk, width, height, fps) for chunk in chunks]
+    # One unit per SAM request and one for saving, which ends when the stage completes.
+    stage.progress_total = min(sum(len(plans) for plans in planned), max_requests) + 1
+    stage.progress_current = 0
+    session.commit()
+    for chunk, plans in zip(chunks, planned):
         if not plans:
             skipped_spans.append(_skip(chunk, "no_concepts"))
             continue
@@ -166,7 +178,7 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
             skipped.extend(plan.session_id for plan in plans)
             skipped_spans.append(_skip(chunk, "frame_budget"))
             continue
-        media = _chunk_media(prepared, chunk, chunks, run.id, fps, whole=whole)
+        media: Path | None = None
         counted = False
         for plan in plans:
             if calls >= max_requests:
@@ -176,6 +188,20 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
             if not counted:
                 submitted_frames += chunk.frame_count
                 counted = True
+            saved = _load_response(run.id, plan, chunk) if resuming else None
+            if saved is not None:
+                calls += 1
+                resumed += 1
+                samples.extend(
+                    _samples_from_result(
+                        parse_sam_output(saved["text"]), saved["request_id"], plan, chunk, fps
+                    )
+                )
+                stage.progress_current = calls
+                session.commit()
+                continue
+            if media is None:
+                media = _chunk_media(prepared, chunk, chunks, run.id, fps, whole=whole, reuse=resuming)
             call = open_provider_call(
                 session,
                 run,
@@ -214,6 +240,8 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
                 break
             file_ids[str(media)] = result.file_id or file_ids.get(str(media), "")
             _finish(session, run, call, result)
+            _save_response(run.id, plan, chunk, result)
+            stage.progress_current = calls
             session.commit()
             samples.extend(
                 _samples_from_result(result.records, result.request_id, plan, chunk, fps)
@@ -258,6 +286,7 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
         "mode": "video",
         "masks": len(samples),
         "requests": calls,
+        "resumed_requests": resumed,
         "frames_submitted": submitted_frames,
         "chunks": len(chunks),
         "interval": [round(timeline.start, 3), round(timeline.end, 3)],
@@ -600,7 +629,61 @@ def _skip(chunk, reason: str, session_id: str = "") -> dict:
     }
 
 
-def _prepare_media(source: Path, run_id: str, rotation: int = 0) -> tuple[Path, dict]:
+def _resuming_after_restart(session: Session, run: AnalysisRun) -> bool:
+    """A retry of the same job continues. A new job, such as a rerun of this stage, starts fresh."""
+    job = session.scalar(
+        select(Job).where(Job.run_id == run.id, Job.status == "running").order_by(Job.created_at.desc())
+    )
+    return job is not None and job.attempt > 1
+
+
+def _responses_dir(run_id: str) -> Path:
+    return data_path("runs", run_id, "sam", "responses")
+
+
+def _response_path(run_id: str, plan: SamRequestPlan, chunk) -> Path:
+    identity = json.dumps(
+        [
+            plan.session_id,
+            plan.kind,
+            plan.prompt,
+            plan.propagation or "",
+            chunk.time_start,
+            chunk.time_end,
+            chunk.frame_count,
+        ]
+    )
+    return _responses_dir(run_id) / f"{hashlib.sha256(identity.encode()).hexdigest()}.json"
+
+
+def _save_response(run_id: str, plan: SamRequestPlan, chunk, result) -> None:
+    """Keep the billed response, written whole so a kill cannot leave a partial file."""
+    dest = _response_path(run_id, plan, chunk)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"text": result.text, "request_id": result.request_id}))
+    tmp.replace(dest)
+
+
+def _load_response(run_id: str, plan: SamRequestPlan, chunk) -> dict | None:
+    try:
+        return json.loads(_response_path(run_id, plan, chunk).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _encode(command: list[str], dest: Path) -> subprocess.CompletedProcess:
+    """Run ffmpeg into a temporary name, so `dest` only ever holds a finished encode."""
+    tmp = dest.with_name(f".{dest.stem}.tmp{dest.suffix}")
+    completed = subprocess.run([*command, str(tmp)], capture_output=True, text=True, check=False)
+    if completed.returncode == 0 and tmp.exists():
+        tmp.replace(dest)
+    else:
+        tmp.unlink(missing_ok=True)
+    return completed
+
+
+def _prepare_media(source: Path, run_id: str, rotation: int = 0, *, reuse: bool = False) -> tuple[Path, dict]:
     """SAM always receives displayed-orientation media, so its boxes are displayed-frame boxes."""
     metadata = probe(source)
     if sam_video_accepted(metadata.codec, metadata.container) and rotation % 360 == 0:
@@ -628,15 +711,16 @@ def _prepare_media(source: Path, run_id: str, rotation: int = 0) -> tuple[Path, 
         "passthrough",
         "-movflags",
         "+faststart",
-        str(dest),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
-    if completed.returncode != 0 or not dest.exists():
-        detail = (completed.stderr or completed.stdout or "").strip()[-500:]
-        raise ProviderError(
-            f"SAM 3.1 accepts MP4 or MOV with H.264, H.265, or MPEG-4. "
-            f"This file is {metadata.codec} in {metadata.container}, and converting it failed. {detail}"
-        )
+    if not (reuse and dest.exists()):
+        dest.unlink(missing_ok=True)
+        completed = _encode(command, dest)
+        if completed.returncode != 0 or not dest.exists():
+            detail = (completed.stderr or completed.stdout or "").strip()[-500:]
+            raise ProviderError(
+                f"SAM 3.1 accepts MP4 or MOV with H.264, H.265, or MPEG-4. "
+                f"This file is {metadata.codec} in {metadata.container}, and converting it failed. {detail}"
+            )
     converted = probe(dest)
     return dest, {
         "transformed": True,
@@ -654,7 +738,9 @@ def _prepare_media(source: Path, run_id: str, rotation: int = 0) -> tuple[Path, 
     }
 
 
-def _chunk_media(source: Path, chunk, chunks, run_id: str, fps: float, *, whole: bool = True) -> Path:
+def _chunk_media(
+    source: Path, chunk, chunks, run_id: str, fps: float, *, whole: bool = True, reuse: bool = False
+) -> Path:
     """The file SAM receives for one chunk. Frame `k` in it is source frame `chunk.frame_times[k]`.
 
     A cut is re-encoded with accurate seeking and without dropping or
@@ -665,6 +751,8 @@ def _chunk_media(source: Path, chunk, chunks, run_id: str, fps: float, *, whole:
         return source
     dest = data_path("runs", run_id, "sam", f"chunk_{chunk.index}.mp4")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    if reuse and dest.exists():
+        return dest
     half_frame = 0.5 / max(fps, 1)
     duration = max(chunk.time_end - chunk.time_start - half_frame, 1 / max(fps, 1))
     command = [
@@ -685,9 +773,9 @@ def _chunk_media(source: Path, chunk, chunks, run_id: str, fps: float, *, whole:
         "passthrough",
         "-movflags",
         "+faststart",
-        str(dest),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    dest.unlink(missing_ok=True)
+    completed = _encode(command, dest)
     if completed.returncode != 0 or not dest.exists():
         raise ProviderError((completed.stderr or "Could not cut a SAM video chunk.")[-500:])
     return dest

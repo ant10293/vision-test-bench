@@ -1,6 +1,6 @@
 # Providers
 
-Capabilities live in `backend/app/providers/catalog.py`. The experiment form reads them. If a model id is typed in by hand, the catalog returns a conservative record: native video only for Gemini and non-SAM Meta models, temperature off for Meta, image windows of 16 except Anthropic's 20.
+Capabilities live in `backend/app/providers/catalog.py`. The experiment form reads them. A model that accepts video gets native video by default, and the form can switch that run to sampled frames. The run records the modality it used. If a model id is typed in by hand, the catalog returns a conservative record: native video only for Gemini and non-SAM Meta models, temperature off for Meta, image windows of 16 except Anthropic's 20.
 
 Prices in the catalog are approximate list prices for planning. They are not invoices. Unknown models are unpriced.
 

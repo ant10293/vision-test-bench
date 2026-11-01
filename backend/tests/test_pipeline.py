@@ -141,10 +141,10 @@ def test_native_video_rejected_for_openai(client):
     assert "native video" in refused.json()["detail"].lower()
 
 
-def test_video_model_keeps_the_file_when_frames_were_requested(client):
+def test_video_model_defaults_to_the_file_and_honors_frames(client):
     from app.db import SessionLocal
     from app.models.media import Project, VideoAsset
-    from app.services.experiments import create_run
+    from app.services.experiments import create_run, sends_video_file
 
     session = SessionLocal()
     project = Project(name="video-mode")
@@ -159,31 +159,29 @@ def test_video_model_keeps_the_file_when_frames_were_requested(client):
     )
     session.add(video)
     session.commit()
-    run = create_run(
-        session,
-        {
-            "video_id": video.id,
-            "provider_id": "gemini",
-            "model_id": "gemini-2.5-pro",
-            "modality": "sampled_frames",
-            "research_mode": "fixed_camera",
-        },
-        enqueue=False,
-    )
-    assert run.modality == "native_video"
-    assert run.config_json["modality"] == "native_video"
-    frames = create_run(
-        session,
-        {
-            "video_id": video.id,
-            "provider_id": "openai",
-            "model_id": "gpt-4.1",
-            "modality": "sampled_frames",
-            "research_mode": "fixed_camera",
-        },
-        enqueue=False,
-    )
-    assert frames.modality == "sampled_frames"
+    def start(provider_id, model_id, **extra):
+        return create_run(
+            session,
+            {
+                "video_id": video.id,
+                "provider_id": provider_id,
+                "model_id": model_id,
+                "research_mode": "fixed_camera",
+                **extra,
+            },
+            enqueue=False,
+        )
+
+    default = start("gemini", "gemini-2.5-pro")
+    assert default.modality == "native_video"
+    assert default.config_json["modality"] == "native_video"
+    assert sends_video_file(default)
+    chosen = start("gemini", "gemini-2.5-pro", modality="sampled_frames")
+    assert chosen.modality == "sampled_frames"
+    assert chosen.config_json["modality"] == "sampled_frames"
+    assert not sends_video_file(chosen)
+    assert start("openai", "gpt-4.1").modality == "sampled_frames"
+    assert start("openai", "gpt-4.1", modality="sampled_frames").modality == "sampled_frames"
     session.close()
 
 

@@ -713,17 +713,22 @@ def test_a_person_can_retry_the_stage_after_a_contract_failure(client, meta_run,
 def test_multi_window_calls_and_their_merge_all_use_the_contract(meta_run, monkeypatch):
     from dataclasses import replace
 
-    from app.pipeline import infer, runner
+    from app.pipeline import runner
     from app.providers import catalog
 
     real = catalog.lookup
     monkeypatch.setattr(catalog, "lookup", lambda *args: replace(real(*args), max_images=3))
-    monkeypatch.setattr(infer, "adopt_video_modality", lambda _run: False)
-    monkeypatch.setattr(runner, "adopt_video_modality", lambda _run: False)
-    outcome = meta_run({SINGLE_PASS.name: single_pass()}, analysis_pass="single", semantic_mode="combined")
+    outcome = meta_run(
+        {SINGLE_PASS.name: single_pass()},
+        analysis_pass="single",
+        semantic_mode="combined",
+        modality="sampled_frames",
+    )
     assert outcome.run.status == "completed", outcome.run.error
     contract_calls = [item for item in outcome.fake.requests if item.schema_name == SINGLE_PASS.name]
     assert len(contract_calls) >= 3, "at least two windows and one merge"
+    assert all(item.modality == "sampled_frames" and item.video_path is None for item in outcome.fake.requests)
+    assert outcome.run.modality == "sampled_frames"
     assert runner.load_working(outcome.run.id).workflow_steps
 
 

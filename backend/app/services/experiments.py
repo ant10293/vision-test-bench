@@ -39,18 +39,19 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         raise ValueError(f"unknown research mode {mode}")
     provider_id = payload["provider_id"]
     model_id = payload["model_id"]
-    requested = payload.get("modality") or "sampled_frames"
+    requested = payload.get("modality")
     _warm_account_models(session, provider_id)
-    modality = "native_video" if use_video_file(provider_id, model_id) else requested
+    modality = requested or ("native_video" if use_video_file(provider_id, model_id) else "sampled_frames")
     model_id = resolve_model_id(session, provider_id, model_id, modality)
     if str(model_id).startswith("sam"):
         raise UnsupportedMode(
             "SAM is a segmentation model. Select it as the segmentation model, not the analysis model."
         )
     caps = capabilities_for(provider_id, model_id)
-    if caps.native_video:
-        modality = "native_video"
-    elif modality == "native_video":
+    if not requested:
+        # The live list can replace the model, so the default follows the model that will run.
+        modality = "native_video" if caps.native_video else "sampled_frames"
+    elif modality == "native_video" and not caps.native_video:
         raise UnsupportedMode(
             f"{model_id} does not support native video. Choose sampled frames. "
             "The selection was not changed for you."
@@ -182,16 +183,9 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
     return run
 
 
-def adopt_video_modality(run: AnalysisRun) -> bool:
-    """Record a video-file run when this model can take one. Image-only models stay on frames."""
-    if not use_video_file(run.provider_id, run.model_id):
-        return False
-    if run.modality != "native_video":
-        run.modality = "native_video"
-        config = dict(run.config_json or {})
-        config["modality"] = "native_video"
-        run.config_json = config
-    return True
+def sends_video_file(run: AnalysisRun) -> bool:
+    """True when this run asked for native video and its model can take the file."""
+    return run.modality == "native_video" and use_video_file(run.provider_id, run.model_id)
 
 
 def duplicate_run(session: Session, run: AnalysisRun, name: str | None = None) -> AnalysisRun:

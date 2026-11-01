@@ -51,7 +51,7 @@ from app.schemas.analysis import (
 )
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
 from app.services.credentials import load_secret
-from app.services.experiments import adopt_video_modality
+from app.services.experiments import sends_video_file
 from app.services.storage import data_path, resolve_stored
 from app.video.sampling import budget_indices
 
@@ -248,7 +248,7 @@ async def produce_document(
     contract = contract_for(run.provider_id, stage, purpose, config.get("analysis_pass"))
     legacy_model = InterpretationResponse if interpreting else AnalysisDocument
     schema = contract.schema if contract else legacy_model.model_json_schema()
-    video_file = adopt_video_modality(run)
+    video_file = sends_video_file(run)
     user = (
         f"Recording duration {video.duration_sec:.3f} seconds. "
         f"Research mode {run.research_mode}. Input modality {run.modality}. "

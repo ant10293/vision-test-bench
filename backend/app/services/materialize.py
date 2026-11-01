@@ -274,37 +274,42 @@ def _nearest_frame(frames: list[FrameAsset], timestamp: float) -> FrameAsset | N
 
 def _extract_images(session, run_id, revision_id, obj: DetectedObject, observations, frames) -> None:
     by_id = {frame.id: frame for frame in frames}
-    scored: list[tuple[float, ObjectObservation, np.ndarray, np.ndarray]] = []
-    for obs in observations:
+    # SAM adds thousands of observations on a few stored frames. Decode each frame
+    # once and hold one at a time, because a 4K frame is about 25 MB in memory.
+    by_frame: dict[str, list[tuple[int, ObjectObservation]]] = {}
+    for position, obs in enumerate(observations):
         if not obs.bbox_json or not obs.frame_id or obs.visibility == "absent":
             continue
-        frame = by_id.get(obs.frame_id)
-        if frame is None:
-            continue
-        path = data_path(*Path(frame.path).parts)
+        if obs.frame_id in by_id:
+            by_frame.setdefault(obs.frame_id, []).append((position, obs))
+    ranked: list[tuple[int, float, ObjectObservation]] = []
+    for frame_id, members in by_frame.items():
+        path = data_path(*Path(by_id[frame_id].path).parts)
         if not path.exists():
             continue
         image = read_bgr(path)
-        bbox = BBox.model_validate(obs.bbox_json)
-        crop = _crop(image, bbox)
-        if crop.size == 0:
-            continue
-        sharp = sharpness_score(crop)
-        area = bbox.w * bbox.h
-        vis = {"visible": 1.0, "partial": 0.55, "occluded": 0.2}.get(obs.visibility, 0.4)
-        occ = obs.occlusion or 0
-        score = sharp * (0.15 + area) * vis * (1 - min(occ, 0.9))
-        obs.sharpness = sharp
-        scored.append((score, obs, image, crop))
-    if not scored:
+        for position, obs in members:
+            bbox = BBox.model_validate(obs.bbox_json)
+            crop = _crop(image, bbox)
+            if crop.size == 0:
+                continue
+            sharp = sharpness_score(crop)
+            area = bbox.w * bbox.h
+            vis = {"visible": 1.0, "partial": 0.55, "occluded": 0.2}.get(obs.visibility, 0.4)
+            occ = obs.occlusion or 0
+            score = sharp * (0.15 + area) * vis * (1 - min(occ, 0.9))
+            obs.sharpness = sharp
+            ranked.append((position, score, obs))
+    if not ranked:
         return
+    ranked.sort(key=lambda item: item[0])
+    scored = [(score, obs) for _position, score, obs in ranked]
     scored.sort(key=lambda item: item[0], reverse=True)
-    best_score, best_obs, best_image, best_crop = scored[0]
     first = min(scored, key=lambda item: item[1].timestamp)
     last = max(scored, key=lambda item: item[1].timestamp)
     kinds = {
-        "primary": (best_score, best_obs, best_image, best_crop),
-        "unobstructed": (best_score, best_obs, best_image, best_crop),
+        "primary": scored[0],
+        "unobstructed": scored[0],
         "initial": first,
         "final": last,
     }
@@ -313,7 +318,9 @@ def _extract_images(session, run_id, revision_id, obj: DetectedObject, observati
     folder = data_path("runs", run_id, "objects", obj.local_id)
     folder.mkdir(parents=True, exist_ok=True)
     primary_id = None
-    for kind, (score, obs, image, crop) in kinds.items():
+    for kind, (score, obs) in kinds.items():
+        image = read_bgr(data_path(*Path(by_id[obs.frame_id].path).parts))
+        crop = _crop(image, BBox.model_validate(obs.bbox_json))
         crop_path = folder / f"{kind}_{obs.id[:8]}.png"
         boxed_path = folder / f"{kind}_{obs.id[:8]}_boxed.jpg"
         cv2.imwrite(str(crop_path), crop)

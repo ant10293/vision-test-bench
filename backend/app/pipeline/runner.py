@@ -45,7 +45,7 @@ from app.pipeline.validate import validate_document
 from app.providers.types import UnsupportedMode
 from app.schemas.analysis import AnalysisDocument, Coverage, ReinspectionProposal
 from app.schemas.enums import PIPELINE_STAGES
-from app.services.experiments import adopt_video_modality
+from app.services.experiments import sends_video_file
 from app.services.ingest import playback_path
 from app.services.materialize import grabcut_cutout, materialize
 from app.services.storage import data_path, relative, resolve_stored
@@ -70,7 +70,6 @@ async def execute_job(session: Session, job: Job) -> None:
     run.status = "running"
     run.started_at = run.started_at or utcnow()
     run.error = ""
-    adopt_video_modality(run)
     session.commit()
     started = job.from_stage == ""
     try:
@@ -267,10 +266,9 @@ def _native_subclip(run, video) -> dict:
     """Cut the requested interval for a native-video model. A failed cut fails the stage."""
     from app.pipeline.clip_time import save_transform, subclip_path
     from app.pipeline.sampling_stage import timeline_for
-    from app.providers.model_list import use_video_file
     from app.video.decode import cut_clip
 
-    if not use_video_file(run.provider_id, run.model_id):
+    if not sends_video_file(run):
         return {}
     timeline = timeline_for(video, run.config_json)
     duration = float(video.duration_sec or 0)
@@ -349,7 +347,7 @@ async def _audio_context(session, run, video, stage) -> None:
         for frame in frames
         if data_path(*Path(frame.path).parts).exists()
     ]
-    send_video = adopt_video_modality(run)
+    send_video = sends_video_file(run)
     model_id, requested = model_for_call(session, run)
     video_path = None
     if send_video:
