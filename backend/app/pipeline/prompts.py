@@ -152,7 +152,9 @@ Interpretation pass. Object identities and boxes were measured before this call 
 analysis. A row with observation_role canonical is measured geometry. A row with geometry_origin
 vlm_estimated is an earlier estimate, not a measurement. Keep every object id and do not add, move,
 or redraw boxes. Return actions, states, transitions, relationships, workflow_steps, dependencies,
-and ambiguities. Overlap or proximity is not attachment, insertion, or completion.
+and ambiguities. Do not return objects or observations, and use only the keys in the schema. Return
+an empty list when the evidence supports no record. Overlap or proximity is not attachment, insertion,
+or completion.
 """.strip()
 
 COMPARISON = """

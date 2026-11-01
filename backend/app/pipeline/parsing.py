@@ -51,7 +51,8 @@ def _recover_object(blob: str, exc: json.JSONDecodeError) -> dict[str, Any] | No
 
     A missing colon is one dropped ``:"`` between a key and its value. An
     abandoned document is a fragment, then a second object that runs to the
-    closing brace. A first object that already parses is left alone.
+    closing brace. A first object that already parses is left alone. A record
+    inside an unfinished list is not a document.
     """
     repaired = _repair_missing_colons(blob, exc)
     if repaired is not None:
@@ -108,7 +109,8 @@ def _object_through_end(blob: str) -> dict[str, Any] | None:
             start = index + 1
             continue
         if isinstance(payload, dict) and stop == len(blob):
-            return payload
+            before = blob[:index].rstrip()
+            return None if before.endswith((",", "[", ":")) else payload
         start = index + 1
 
 
@@ -192,10 +194,20 @@ def align_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def parse_analysis(text: str) -> AnalysisDocument:
     payload = align_payload(extract_json_object(text))
+    if not payload.keys() & AnalysisDocument.model_fields.keys():
+        raise ParseFailure("response has none of the analysis fields", text)
     try:
         return AnalysisDocument.model_validate(payload)
     except ValidationError as exc:
         raise ParseFailure(f"response did not match the analysis schema: {exc}", text) from exc
+
+
+def parse_interpretation(text: str) -> AnalysisDocument:
+    """An explicit empty list means no action was seen. A missing list means no answer was given."""
+    payload = align_payload(extract_json_object(text))
+    if not payload.keys() & {"actions", "workflow_steps"}:
+        raise ParseFailure("interpretation response has no actions or workflow_steps", text)
+    return parse_analysis(text)
 
 
 def _hoist_grouped(data: dict[str, Any]) -> None:

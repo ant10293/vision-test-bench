@@ -22,6 +22,9 @@ from app.providers.types import (
 )
 
 META_BASE = "https://api.meta.ai/v1"
+# Above every complete answer recorded so far. Reasoning tokens count toward it.
+# A call that repeats itself stops here instead of at the provider's far larger limit.
+MAX_OUTPUT_TOKENS = 65_536
 
 
 class MetaProvider:
@@ -85,6 +88,7 @@ class MetaProvider:
             "instructions": request.system_prompt,
             "input": [{"role": "user", "content": content}],
             "store": False,
+            "max_output_tokens": MAX_OUTPUT_TOKENS,
         }
         if request.reasoning_effort:
             if request.reasoning_effort not in caps.reasoning_efforts:
@@ -118,14 +122,23 @@ class MetaProvider:
         output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
         cost, known = estimate_cost(caps, input_tokens, output_tokens)
         text = getattr(response, "output_text", "") or ""
+        status = str(getattr(response, "status", "") or "")
+        incomplete = _incomplete_reason(response) if status == "incomplete" else ""
         return ProviderResponse(
             text=text,
-            raw={"id": getattr(response, "id", ""), "model": request.model_id, "usage": _usage_dict(usage)},
+            raw={
+                "id": getattr(response, "id", ""),
+                "model": request.model_id,
+                "usage": _usage_dict(usage),
+                "status": status,
+                "incomplete_reason": incomplete,
+            },
             usage=Usage(input_tokens, output_tokens, cost, known),
             request_id=str(getattr(response, "id", "") or ""),
             latency_ms=int((time.perf_counter() - started) * 1000),
             model_id=request.model_id,
             sdk_version=_sdk(),
+            incomplete_reason=incomplete,
         )
 
     async def _video_content(self, secret: str, request: GenerationRequest) -> list[dict]:
@@ -147,6 +160,11 @@ class MetaProvider:
             {"type": "input_text", "text": request.user_prompt},
             {"type": "input_video", "file_id": uploaded.id},
         ]
+
+
+def _incomplete_reason(response) -> str:
+    details = getattr(response, "incomplete_details", None)
+    return str(getattr(details, "reason", "") or "unknown")
 
 
 def _usage_dict(usage) -> dict:

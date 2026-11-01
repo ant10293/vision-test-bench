@@ -6,7 +6,7 @@ observe something, and a model can infer something. Neither field implies the ot
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app import SCHEMA_VERSION
 from app.schemas.enums import (
@@ -337,6 +337,21 @@ class ReinspectionProposal(BaseModel):
     applied: bool = False
     notes: str = ""
     frame_timestamps: list[float] = Field(default_factory=list)
+
+
+class InterpretationResponse(BaseModel):
+    """What the grounded interpretation call is asked to return. Geometry is already resolved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = ""
+    actions: list[ActionPrediction]
+    states: list[StatePrediction]
+    transitions: list[TransitionPrediction]
+    relationships: list[RelationshipPrediction]
+    workflow_steps: list[WorkflowStepPrediction]
+    dependencies: list[DependencyPrediction]
+    ambiguities: list[AmbiguityPrediction]
 
 
 class AnalysisDocument(BaseModel):

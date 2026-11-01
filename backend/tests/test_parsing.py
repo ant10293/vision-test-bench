@@ -1,6 +1,10 @@
 import pytest
-
-from app.pipeline.parsing import ParseFailure, extract_json_object, parse_analysis
+from app.pipeline.parsing import (
+    ParseFailure,
+    extract_json_object,
+    parse_analysis,
+    parse_interpretation,
+)
 
 
 def test_extracts_a_fenced_object_after_prose():
@@ -21,6 +25,28 @@ def test_repairs_missing_colons_before_a_number_and_an_object():
 def test_keeps_the_later_document_when_the_first_was_abandoned():
     text = '{"summary":"partial","time_end{"schema_version":"1.0.0","ok":true}'
     assert extract_json_object(text) == {"schema_version": "1.0.0", "ok": True}
+
+
+def test_a_record_in_a_truncated_list_is_not_the_document():
+    text = '{"objects":[{"local_id":"Object_1"},{"local_id":"Object_2"}],"actions_allowed":null,"actions_den'
+    with pytest.raises(ParseFailure, match="malformed JSON"):
+        extract_json_object(text)
+
+
+def test_an_object_with_no_analysis_fields_is_rejected():
+    with pytest.raises(ParseFailure, match="none of the analysis fields"):
+        parse_analysis('{"local_id":"Object_6","label":"piece"}')
+
+
+def test_interpretation_without_action_lists_is_rejected():
+    with pytest.raises(ParseFailure, match="no actions or workflow_steps"):
+        parse_interpretation('{"objects":[{"local_id":"Object_1","label":"piece"}],"actions_allowed":null}')
+
+
+def test_interpretation_may_report_that_nothing_happened():
+    document = parse_interpretation('{"actions":[],"workflow_steps":[]}')
+    assert document.actions == []
+    assert document.workflow_steps == []
 
 
 def test_two_complete_objects_stay_an_error():

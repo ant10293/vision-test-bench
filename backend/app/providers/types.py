@@ -55,6 +55,8 @@ class ProviderResponse:
     latency_ms: int = 0
     model_id: str = ""
     sdk_version: str = ""
+    # Why the provider stopped early, such as max_output_tokens. Empty for a finished answer.
+    incomplete_reason: str = ""
 
 
 @dataclass(frozen=True)

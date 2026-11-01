@@ -24,12 +24,12 @@ from app.pipeline.frame_boxes import (
     parse_frame_boxes,
 )
 from app.pipeline.merge import restore_omitted_records
-from app.pipeline.parsing import parse_analysis
+from app.pipeline.parsing import ParseFailure, parse_analysis, parse_interpretation
 from app.pipeline.prompts import DISCOVERY, INTERPRETATION, compose
 from app.providers.model_list import capabilities_for, resolve_model_id
 from app.providers.registry import get_provider, needs_secret, run_transport
 from app.providers.types import FrameInput, GenerationRequest, UnsupportedMode, rough_input_tokens
-from app.schemas.analysis import AnalysisDocument, Coverage
+from app.schemas.analysis import AnalysisDocument, Coverage, InterpretationResponse
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
 from app.services.credentials import load_secret
 from app.services.experiments import adopt_video_modality
@@ -215,7 +215,9 @@ async def produce_document(
             system += "\n\n" + compose(key, run.research_mode)
         system += "\n\n" + INTERPRETATION
 
-    schema = AnalysisDocument.model_json_schema()
+    interpreting = purpose == "interpretation"
+    schema = (InterpretationResponse if interpreting else AnalysisDocument).model_json_schema()
+    parser = parse_interpretation if interpreting else None
     video_file = adopt_video_modality(run)
     user = (
         f"Recording duration {video.duration_sec:.3f} seconds. "
@@ -234,7 +236,8 @@ async def produce_document(
             times = [round(item - offset, 3) for item in times]
         user += _video_coverage_instruction(
             clip_duration,
-            times,
+            # Interpretation does not report boxes, so it gets no per-time observation grid.
+            [] if interpreting and run.provider_id != "cursor" else times,
             frames_attached=run.provider_id == "cursor",
         )
         if offset:
@@ -265,6 +268,7 @@ async def produce_document(
             video,
             schema,
             attach_video=True,
+            parser=parser,
         )
         if offset:
             from app.pipeline.clip_time import shift_to_source
@@ -293,6 +297,7 @@ async def produce_document(
             video,
             schema,
             attach_video=bool(video_file),
+            parser=parser,
         )
         if partials:
             # The previous window is the one that shares this boundary.
@@ -311,6 +316,7 @@ async def produce_document(
         video,
         schema,
         attach_video=False,
+        parser=parser,
     )
     merged = drop_split_objects(partials[0], restore_omitted_records(merged, partials))
     return _with_perception(merged, spatial_document)
@@ -410,6 +416,12 @@ async def _call(
         raise
     finish_provider_call(session, run, row, response)
     session.commit()
+    if response.incomplete_reason:
+        raise ParseFailure(
+            f"{model_id} stopped before finishing its answer ({response.incomplete_reason}) "
+            f"after {response.usage.output_tokens} output tokens.",
+            response.text,
+        )
     from app.perception.resolve import mark_estimates
 
     parsed = (parser or parse_analysis)(response.text)
