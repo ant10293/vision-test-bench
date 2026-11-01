@@ -28,7 +28,13 @@ from app.pipeline.parsing import ParseFailure, parse_analysis, parse_interpretat
 from app.pipeline.prompts import DISCOVERY, INTERPRETATION, compose
 from app.providers.model_list import capabilities_for, resolve_model_id
 from app.providers.registry import get_provider, needs_secret, run_transport
-from app.providers.types import FrameInput, GenerationRequest, UnsupportedMode, rough_input_tokens
+from app.providers.types import (
+    DEFAULT_MAX_REQUESTS,
+    FrameInput,
+    GenerationRequest,
+    UnsupportedMode,
+    rough_input_tokens,
+)
 from app.schemas.analysis import AnalysisDocument, Coverage, InterpretationResponse
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
 from app.services.credentials import load_secret
@@ -116,14 +122,21 @@ def semantic_calls(session: Session, run_id: str) -> int:
 
 
 def fixture_document_for(video: VideoAsset) -> AnalysisDocument | None:
+    key = _fixture_key(video)
+    return build_document(SCENARIOS[key]()) if key else None
+
+
+def has_fixture(video: VideoAsset) -> bool:
+    return _fixture_key(video) is not None
+
+
+def _fixture_key(video: VideoAsset) -> str | None:
     index_path = data_path("fixture_index.json")
     if not index_path.exists():
         return None
     index = json.loads(index_path.read_text())
     key = index.get(video.checksum_sha256)
-    if not key or key not in SCENARIOS:
-        return None
-    return build_document(SCENARIOS[key]())
+    return key if key in SCENARIOS else None
 
 
 def register_fixture(checksum: str, scenario_key: str) -> None:
@@ -217,7 +230,9 @@ async def produce_document(
 
     interpreting = purpose == "interpretation"
     schema = (InterpretationResponse if interpreting else AnalysisDocument).model_json_schema()
-    parser = parse_interpretation if interpreting else None
+    # These two calls are the only source of actions and steps for the run.
+    single_pass = purpose == "full" and config.get("analysis_pass") == "single" and stage == "scene_analysis"
+    parser = parse_interpretation if interpreting or single_pass else None
     video_file = adopt_video_modality(run)
     user = (
         f"Recording duration {video.duration_sec:.3f} seconds. "
@@ -346,7 +361,7 @@ async def _call(
     if run.input_tokens and False:
         pass
     sent = session.query(ModelRequestRow).filter(ModelRequestRow.run_id == run.id).count()
-    if sent >= int(config.get("max_requests") or 12):
+    if sent >= int(config.get("max_requests") or DEFAULT_MAX_REQUESTS):
         raise BudgetExceeded("request budget reached; no further model calls were made")
     transport = run_transport(run.provider_id, config)
     secret = ""

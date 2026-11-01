@@ -18,6 +18,11 @@ class ParseFailure(Exception):
 
 
 _COLON_REPAIR_LIMIT = 4
+_ACTION_PREFIXES = ("action",)
+_STEP_PREFIXES = ("workflow", "process_step", "procedure_step", "step")
+_DEPENDENCY_PREFIXES = ("dependenc", "workflow_depend", "step_depend")
+_RELATIONSHIP_PREFIXES = ("relationship",)
+_AMBIGUITY_PREFIXES = ("ambiguit",)
 _VALUE_START = set('{["0123456789-tfn')
 _BARE_STRING = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\"")
 
@@ -168,14 +173,17 @@ def align_payload(payload: dict[str, Any]) -> dict[str, Any]:
         ("actions_detailed", "detailed_actions", "actions_structured", "actions_list", "interactions"),
         _align_action,
     )
+    _fill_from_variants(data, "actions", _ACTION_PREFIXES, _align_action)
     _bind_steps_named_only_by_id(data)
     _fill_alias(data, "workflow_steps", ("workflow", "workflow_steps_structured", "steps"), _align_step)
     _fill_alias(
         data,
         "dependencies",
-        ("dependencies_if_any", "workflow_dependencies", "dependencies_structured"),
+        ("dependencies_if_any", "workflow_dependencies", "dependencies_structured", "step_dependencies"),
         _align_dependency,
     )
+    _fill_from_variants(data, "workflow_steps", _STEP_PREFIXES, _align_step)
+    _fill_from_variants(data, "dependencies", _DEPENDENCY_PREFIXES, _align_dependency)
     _bind_step_names(data)
     if not _present(data.get("relationships")):
         pairs = _pair_relationships(data.get("relationships_at_intervals"))
@@ -187,7 +195,9 @@ def align_payload(payload: dict[str, Any]) -> dict[str, Any]:
         ("relationships_structured", "relationships_list", "relationships_collapsed"),
         _align_relationship,
     )
-    _fill_alias(data, "ambiguities", ("ambiguities_structured", "ambiguities_list"), _align_ambiguity)
+    _fill_alias(data, "ambiguities", ("ambiguities_structured", "ambiguities_list", "ambiguities_annotated"), _align_ambiguity)
+    _fill_from_variants(data, "relationships", _RELATIONSHIP_PREFIXES, _align_relationship)
+    _fill_from_variants(data, "ambiguities", _AMBIGUITY_PREFIXES, _align_ambiguity)
     _fill_step_detail(data)
     return data
 
@@ -196,17 +206,27 @@ def parse_analysis(text: str) -> AnalysisDocument:
     payload = align_payload(extract_json_object(text))
     if not payload.keys() & AnalysisDocument.model_fields.keys():
         raise ParseFailure("response has none of the analysis fields", text)
+    _require_kept_records(payload, text)
     try:
         return AnalysisDocument.model_validate(payload)
     except ValidationError as exc:
         raise ParseFailure(f"response did not match the analysis schema: {exc}", text) from exc
 
 
+def _require_kept_records(payload: dict[str, Any], text: str) -> None:
+    """Records no variant could read are a failure. They must not become an empty procedure."""
+    if _present(payload.get("actions")) or _present(payload.get("workflow_steps")):
+        return
+    for key, value in _variant_lists(payload, _ACTION_PREFIXES + _STEP_PREFIXES):
+        if any(isinstance(item, dict) for item in value):
+            raise ParseFailure(f"{len(value)} records under {key} could not be read", text)
+
+
 def parse_interpretation(text: str) -> AnalysisDocument:
     """An explicit empty list means no action was seen. A missing list means no answer was given."""
     payload = align_payload(extract_json_object(text))
     if not payload.keys() & {"actions", "workflow_steps"}:
-        raise ParseFailure("interpretation response has no actions or workflow_steps", text)
+        raise ParseFailure("response has no actions or workflow_steps", text)
     return parse_analysis(text)
 
 
@@ -253,6 +273,35 @@ def _hoist_action_lists(data: dict[str, Any]) -> None:
         ):
             data["actions"] = nested
             return
+
+
+def _variant_lists(data: dict[str, Any], prefixes: tuple[str, ...]) -> list[tuple[str, list[Any]]]:
+    """Dependency lists also start with workflow or step, so only their own prefixes reach them."""
+    wants_dependencies = prefixes == _DEPENDENCY_PREFIXES
+    return [
+        (key, value)
+        for key, value in data.items()
+        if key.lower().startswith(prefixes)
+        and isinstance(value, list)
+        and (wants_dependencies or "depend" not in key.lower())
+    ]
+
+
+def _fill_from_variants(data: dict[str, Any], canonical: str, prefixes: tuple[str, ...], align) -> None:
+    """A long answer can rename a list to anything, such as workflow_steps_collapsed.
+
+    No fixed alias list keeps up, so the variant whose records read best is used.
+    """
+    if _present(data.get(canonical)):
+        return
+    best: list[dict[str, Any]] = []
+    for _key, value in _variant_lists(data, prefixes):
+        rows = [align(item, index) for index, item in enumerate(value, start=1) if isinstance(item, dict)]
+        kept = [row for row in rows if row is not None]
+        if len(kept) > len(best):
+            best = kept
+    if best:
+        data[canonical] = best
 
 
 def _fill_alias(data: dict[str, Any], canonical: str, aliases: tuple[str, ...], align) -> None:
@@ -434,10 +483,28 @@ def _first_number(row: dict[str, Any], window: dict[str, Any], keys: tuple[str, 
     return None
 
 
+def _copy_aliases(row: dict[str, Any], aliases: dict[str, str]) -> None:
+    """Fill a schema field from the name a model used instead. A value already present wins."""
+    for field, alias in aliases.items():
+        if row.get(field) in (None, "", []) and row.get(alias) not in (None, "", []):
+            row[field] = row[alias]
+
+
 def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     from app.schemas.analysis import ActionPrediction
 
     row = dict(item)
+    _copy_aliases(
+        row,
+        {
+            "action_type": "operation",
+            "actor": "responsible_agent",
+            "object_local_ids": "involved_objects",
+            "initial_state": "initiating_state",
+            "final_state": "concluding_state",
+            "uncertainty": "uncertainty_self_assessed",
+        },
+    )
     if not row.get("local_id") and row.get("action_id"):
         row["local_id"] = str(row["action_id"])
     if not row.get("local_id") and row.get("action_local_id"):
@@ -671,6 +738,21 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     from app.schemas.analysis import WorkflowStepPrediction
 
     row = dict(item)
+    _copy_aliases(row, {"required_objects": "necessary_inputs"})
+    _copy_aliases(
+        row,
+        {
+            "local_id": "step_local_id",
+            "required_objects": "required_object_local_ids",
+            "name": "goal_description",
+            "expected_action": "core_operation",
+            "completion_condition": "completion_state_description",
+            "observed_result": "observed_outcome_description",
+            "action_local_ids": "connected_actions",
+            "time_window_sec": "elapsed_window",
+            "uncertainty": "uncertainty_self_assessed",
+        },
+    )
     if not row.get("local_id") and row.get("step_id"):
         row["local_id"] = str(row["step_id"])
     if not row.get("local_id"):
@@ -738,6 +820,8 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
 def _align_dependency(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     from app.schemas.analysis import DependencyPrediction
 
+    item = dict(item)
+    _copy_aliases(item, {"category": "necessity", "rationale": "dependency_rationale"})
     row = dict(item)
     if not row.get("from_step"):
         source = row.get("from_step_id") or row.get("from_step_local_id")
@@ -880,6 +964,7 @@ def _align_relationship(item: dict[str, Any], index: int) -> dict[str, Any] | No
     from app.schemas.analysis import RelationshipPrediction
 
     row = dict(item)
+    _copy_aliases(row, {"object_ids": "between", "relation": "relationship"})
     if not row.get("subject_local_id"):
         subject = row.get("object_a") or row.get("subject")
         if subject:
@@ -930,6 +1015,7 @@ def _align_ambiguity(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     from app.schemas.enums import AmbiguityKind
 
     row = dict(item)
+    _copy_aliases(row, {"issue": "specific_issue", "detail": "impact", "label": "ambiguity_source"})
     if not row.get("local_id"):
         row["local_id"] = f"Ambiguity_{index}"
     if not row.get("description"):

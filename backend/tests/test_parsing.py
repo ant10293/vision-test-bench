@@ -38,6 +38,79 @@ def test_an_object_with_no_analysis_fields_is_rejected():
         parse_analysis('{"local_id":"Object_6","label":"piece"}')
 
 
+def test_invented_field_names_are_still_read():
+    document = parse_analysis(
+        """{
+        "actions_structured": [{"local_id": "Action_1", "operation": "pick_up", "time_start": 1.0, "time_end": 2.0,
+          "involved_objects": ["Object_2"], "responsible_agent": "both hands", "initiating_state": "resting",
+          "concluding_state": "held", "outcome": "completed",
+          "evidence": {"classification": "DIRECTLY_OBSERVED", "note": "seen", "provenance": "AI_PREDICTION"}}],
+        "workflow_steps_structured": [{"local_id": "Step_1", "goal_description": "Join the pieces",
+          "core_operation": "attach", "elapsed_window": [1.0, 6.0], "necessary_inputs": ["Object_2"],
+          "connected_actions": ["Action_1"], "observed_outcome_description": "moved as one",
+          "preconditions": "separate",
+          "evidence": {"classification": "INFERRED", "note": "seen", "provenance": "AI_PREDICTION"}}],
+        "relationships_structured": [{"between": ["Object_2", "Object_3"], "relationship": "attached_to",
+          "time_start": 6.0, "time_end": 9.0,
+          "evidence": {"classification": "INFERRED", "note": "seen", "provenance": "AI_PREDICTION"}}],
+        "ambiguities_annotated": [{"specific_issue": "ids are unclear", "impact": "provisional ids",
+          "evidence": {"classification": "UNKNOWN", "note": "n", "provenance": "AI_PREDICTION"}}]
+        }"""
+    )
+    action = document.actions[0]
+    assert (action.action_type, action.actor, action.start, action.end) == ("pick_up", "both hands", 1.0, 2.0)
+    assert action.object_local_ids == ["Object_2"]
+    step = document.workflow_steps[0]
+    assert (step.name, step.time_start, step.time_end) == ("Join the pieces", 1.0, 6.0)
+    assert step.action_local_ids == ["Action_1"]
+    relation = document.relationships[0]
+    assert (relation.subject_local_id, relation.other_local_id) == ("Object_2", "Object_3")
+    assert document.ambiguities[0].description == "ids are unclear: provisional ids"
+
+
+def test_a_renamed_list_is_read_and_the_best_variant_wins():
+    evidence = '"evidence": {"classification": "INFERRED", "note": "n", "provenance": "AI_PREDICTION"}'
+    document = parse_analysis(
+        '{"actions": [{"local_id": "Action_1", "action_type": "lift", "start": 0, "end": 1, ' + evidence + "}],"
+        '"workflow_steps_placeholder": [{"note": "nothing here"}],'
+        '"workflow_steps_collapsed": [{"local_id": "Step_1", "name": "Lift", ' + evidence + "},"
+        '{"local_id": "Step_2", "name": "Place", ' + evidence + "}]}"
+    )
+    assert [step.name for step in document.workflow_steps] == ["Lift", "Place"]
+
+
+def test_every_list_is_read_from_a_renamed_key():
+    evidence = '"evidence": {"classification": "INFERRED", "note": "n", "provenance": "AI_PREDICTION"}'
+    document = parse_analysis(
+        '{"actions_actual": [{"local_id": "Action_1", "action_type": "lift", "start": 0, "end": 1, ' + evidence + "}],"
+        '"workflow_actual": [{"step_local_id": "Step_4", "name": "Lift", "required_object_local_ids": ["Object_1"]},'
+        '{"step_local_id": "Step_5", "name": "Place"}],'
+        '"dependencies_actual": [{"from_step": "Step_4", "to_step": "Step_5", "category": "observed_temporal", '
+        + evidence + "}],"
+        '"relationships_main": [{"subject_local_id": "Object_1", "other_local_id": "Object_2", "kind": "near", '
+        '"time_start": 0, "time_end": 1, ' + evidence + "}],"
+        '"ambiguities_actual": [{"description": "ids unclear", ' + evidence + "}]}"
+    )
+    assert [step.local_id for step in document.workflow_steps] == ["Step_4", "Step_5"]
+    assert document.workflow_steps[0].required_objects == ["Object_1"]
+    assert len(document.actions) == len(document.dependencies) == 1
+    assert len(document.relationships) == len(document.ambiguities) == 1
+
+
+def test_unreadable_steps_beside_real_actions_keep_the_actions():
+    evidence = '"evidence": {"classification": "INFERRED", "note": "n", "provenance": "AI_PREDICTION"}'
+    document = parse_analysis(
+        '{"actions": [{"local_id": "Action_1", "action_type": "lift", "start": 0, "end": 1, ' + evidence + "}],"
+        '"process_steps": [{"note": "unreadable"}]}'
+    )
+    assert len(document.actions) == 1
+
+
+def test_unreadable_action_records_are_a_failure_not_an_empty_list():
+    with pytest.raises(ParseFailure, match="1 records under actions_mystery"):
+        parse_analysis('{"objects": [], "actions_mystery": [{"what": "unreadable"}]}')
+
+
 def test_interpretation_without_action_lists_is_rejected():
     with pytest.raises(ParseFailure, match="no actions or workflow_steps"):
         parse_interpretation('{"objects":[{"local_id":"Object_1","label":"piece"}],"actions_allowed":null}')

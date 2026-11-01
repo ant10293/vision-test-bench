@@ -121,7 +121,10 @@ def test_attach_to_a_multi_day_project_joins_a_session(client: TestClient):
 
 
 def test_library_run_has_no_project(client: TestClient):
+    from app.pipeline.infer import register_fixture
+
     video_id = _video(None, "loose.mp4", "library-run")
+    register_fixture("library-run", "fixed_camera")
     created = client.post(
         "/api/runs",
         json={
@@ -134,6 +137,21 @@ def test_library_run_has_no_project(client: TestClient):
     )
     assert created.status_code == 200, created.text
     assert created.json()["project_id"] is None
+
+
+def test_fixture_run_on_an_unregistered_video_is_rejected_at_launch(client: TestClient):
+    video_id = _video(None, "real.mp4", "not-a-fixture")
+    created = client.post(
+        "/api/runs",
+        json={
+            "video_id": video_id,
+            "provider_id": "fixture",
+            "model_id": "authored-fixture",
+            "research_mode": "fixed_camera",
+        },
+    )
+    assert created.status_code == 400
+    assert "no authored analysis" in created.json()["detail"]
 
 
 def test_missing_video_and_empty_selection_are_rejected(client: TestClient):

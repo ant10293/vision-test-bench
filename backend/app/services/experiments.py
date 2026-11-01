@@ -19,7 +19,7 @@ from app.providers.claude_code import load_claude_code
 from app.providers.codex_cli import load_codex
 from app.providers.cursor_cli import load_cursor_cli
 from app.providers.model_list import capabilities_for, resolve_model_id, use_video_file, warm
-from app.providers.types import UnsupportedMode
+from app.providers.types import DEFAULT_MAX_REQUESTS, UnsupportedMode
 from app.schemas.enums import PIPELINE_STAGES, ResearchMode
 
 MODE_AXES = {
@@ -109,8 +109,7 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "reasoning_effort": reasoning,
         "image_detail": payload.get("image_detail") or "high",
         "timeout_s": payload.get("timeout_s") or 180,
-        "max_requests": payload.get("max_requests")
-        or (20 if (payload.get("segmentation_mode") or "") == "sam_video" else 12),
+        "max_requests": payload.get("max_requests") or DEFAULT_MAX_REQUESTS,
         "sam_max_requests": int(payload.get("sam_max_requests") or 8),
         "sam_max_frames": int(payload.get("sam_max_frames") or 1800),
         "sam_chunk_frames": int(payload.get("sam_chunk_frames") or 300),
@@ -141,6 +140,14 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         config["anthropic_transport"] = anthropic_transport
     if provider_id == "cursor":
         config["cursor_transport"] = load_cursor_cli()["transport"]
+    if provider_id == "fixture":
+        from app.pipeline.infer import has_fixture
+
+        if not has_fixture(video):
+            raise UnsupportedMode(
+                f"The fixture provider has no authored analysis for {video.original_filename}. "
+                "Choose a model provider for this video."
+            )
     run = AnalysisRun(
         id=new_id(),
         project_id=video.project_id,

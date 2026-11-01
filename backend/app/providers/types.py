@@ -28,6 +28,10 @@ class RateLimitError(ProviderError):
 PROVIDER_TIMEOUT_S = 30 * 60
 
 
+# Provider requests one run may send, counted across its retries.
+DEFAULT_MAX_REQUESTS = 36
+
+
 def provider_timeout(requested: float | None = None) -> float:
     return max(float(requested or 0), PROVIDER_TIMEOUT_S)
 

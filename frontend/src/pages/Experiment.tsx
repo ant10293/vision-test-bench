@@ -23,8 +23,8 @@ export function ExperimentPage() {
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const prompts = useQuery({ queryKey: ["prompts"], queryFn: api.prompts });
   const [videoId, setVideoId] = useState(params.get("video") ?? "");
-  const [providerId, setProviderId] = useState("fixture");
-  const [modelId, setModelId] = useState("authored-fixture");
+  const [providerId, setProviderId] = useState("meta");
+  const [modelId, setModelId] = useState("muse-wonder-1.0");
   const [mode, setMode] = useState("fixed_camera");
   const [preset, setPreset] = useState("standard");
   const [pass, setPass] = useState("single");
@@ -60,10 +60,10 @@ export function ExperimentPage() {
   const create = useMutation({
     mutationFn: () =>
       api.createRun({
-        name: `${humanize(mode)} · ${humanize(modelId)}`,
+        name: `${humanize(mode)} · ${humanize(selected?.model_id ?? modelId)}`,
         video_id: videoId,
         provider_id: providerId,
-        model_id: modelId,
+        model_id: selected?.model_id ?? modelId,
         research_mode: mode,
         modality,
         sampling_preset: preset,
@@ -127,7 +127,7 @@ export function ExperimentPage() {
         </Field>
         <Field label="Primary model">
           {providersPending ? <FieldBone stretch /> : (
-            <select className="field stretch" value={modelId} onChange={(event) => setModelId(event.target.value)}>
+            <select className="field stretch" value={selected?.model_id ?? modelId} onChange={(event) => setModelId(event.target.value)}>
               {models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label || humanize(model.model_id)}</option>)}
             </select>
           )}

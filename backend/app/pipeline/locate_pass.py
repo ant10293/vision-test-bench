@@ -25,7 +25,7 @@ from app.pipeline.infer import model_for_call
 from app.pipeline.parsing import ParseFailure, extract_json_object
 from app.pipeline.prompts import LOCATE_PART
 from app.providers.registry import get_provider, needs_secret, run_transport
-from app.providers.types import FrameInput, GenerationRequest
+from app.providers.types import DEFAULT_MAX_REQUESTS, FrameInput, GenerationRequest
 from app.schemas.analysis import AnalysisDocument, BBox
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
 from app.services.credentials import load_secret
@@ -105,7 +105,7 @@ async def locate_missing(
             return document, {"skipped": "no API key"}
     config = run.config_json or {}
     sent = session.query(ModelRequestRow).filter(ModelRequestRow.run_id == run.id).count()
-    budget = int(config.get("max_requests") or 12)
+    budget = int(config.get("max_requests") or DEFAULT_MAX_REQUESTS)
     targets = _targets(document)[:MAX_OBJECTS]
     stills = _stills(frames)
     provider = get_provider(run.provider_id, session)
