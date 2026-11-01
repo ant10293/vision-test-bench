@@ -1,5 +1,5 @@
 import { humanize } from "./humanize";
-import type { Bundle, LabObject, Observation, TrackPointSample } from "./types";
+import type { Bundle, LabObject, Observation, RawObservation, TrackPointSample } from "./types";
 
 export type FrameObjectStill = {
   id: string;
@@ -52,8 +52,11 @@ export function observationsAt(bundle: Bundle, time: number, window = 0.45): Obs
 
 export type OverlayKind = "vlm" | "sam" | "inferred" | "conflict";
 
+/** "sam" is the measured layer: canonical rows and SAM masks draw solid. A provisional tracker row stays dashed. */
 export function observationKind(observation: Observation): OverlayKind {
   if (observation.association_status === "conflict") return "conflict";
+  if (observation.observation_role === "canonical") return "sam";
+  if (observation.source_model === "tracker") return "inferred";
   if (observation.evidence_class === "INFERRED") return "inferred";
   if (observation.provenance === "CV_DETECTION" || observation.source_model === "sam-3.1") return "sam";
   return "vlm";
@@ -94,6 +97,30 @@ export function coverageAt(observations: Observation[], localId: string, time: n
   }
   if (rows.some((item) => item.evidence_class === "INFERRED")) return "inferred";
   return "unobserved";
+}
+
+/** Flat key and value pairs. Nested sections such as resolution and grounding read as "resolution canonical 12". */
+export function diagnosticEntries(diagnostics: Record<string, unknown>): [string, string][] {
+  const entries: [string, string][] = [];
+  for (const [key, value] of Object.entries(diagnostics)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const [inner, item] of Object.entries(value as Record<string, unknown>)) {
+        if (item !== null && typeof item === "object") continue;
+        entries.push([`${key}_${inner}`, String(item)]);
+      }
+    } else if (!Array.isArray(value)) {
+      entries.push([key, String(value)]);
+    }
+  }
+  return entries;
+}
+
+/** Raw rows near the playhead, for inspection only. They are never drawn as a second overlay. */
+export function rawRowsNear(rows: RawObservation[], time: number, window = 0.5, limit = 12): RawObservation[] {
+  return rows
+    .filter((row) => Math.abs(row.timestamp - time) <= window)
+    .sort((a, b) => Math.abs(a.timestamp - time) - Math.abs(b.timestamp - time) || a.object_local_id.localeCompare(b.object_local_id))
+    .slice(0, limit);
 }
 
 export function tracksAt(points: TrackPointSample[], time: number, window = 0.2): TrackPointSample[] {

@@ -24,6 +24,11 @@ export const PIPELINE_OPTIONS = [
   ["multi_reinspect", "Multi-stage + reinspection"],
 ] as const;
 
+export const SEMANTIC_OPTIONS = [
+  ["combined", "Combined: interpret in the scene call"],
+  ["grounded", "Grounded: discover, measure, then interpret"],
+] as const;
+
 const STRATEGY_PRESET: Record<string, string> = {
   legacy_motion: "A_legacy_motion",
   temporal: "B_temporal",
@@ -72,6 +77,44 @@ function promptFamily(config: Record<string, unknown> | null | undefined): strin
 }
 
 /** Model, sampling, and the experiment options recorded on the run. */
+type CoverageSummary = {
+  time_start?: number | null;
+  time_end?: number | null;
+  frames_extracted?: number;
+  max_gap_sec?: number | null;
+  uncovered_gaps?: [number, number][];
+  semantic_mode?: string;
+  semantic_calls?: number;
+  tracking?: { frames?: number; max_gap_sec?: number; gaps_over_occlusion?: number; continuity?: string };
+  segmentation?: { skipped_chunks?: unknown[] };
+};
+
+/** One line of measured coverage. Empty for older runs that did not record it. */
+export function coverageLine(coverage: CoverageSummary | null | undefined): string {
+  if (!coverage || coverage.time_end == null) return "";
+  const start = Number(coverage.time_start ?? 0);
+  const end = Number(coverage.time_end);
+  const parts = [`Interval ${start.toFixed(2)}–${end.toFixed(2)} s`];
+  if (coverage.frames_extracted) parts.push(`${coverage.frames_extracted} semantic frames`);
+  if (coverage.max_gap_sec != null) parts.push(`largest semantic gap ${coverage.max_gap_sec.toFixed(2)} s`);
+  const gaps = coverage.uncovered_gaps?.length ?? 0;
+  if (gaps) parts.push(`${gaps} uncovered ${gaps === 1 ? "gap" : "gaps"}`);
+  const tracking = coverage.tracking;
+  if (tracking?.frames) {
+    parts.push(`${tracking.frames} perception frames`);
+    if (tracking.max_gap_sec != null) parts.push(`largest tracking gap ${tracking.max_gap_sec.toFixed(2)} s`);
+    if (tracking.continuity && tracking.continuity !== "supported") parts.push(`tracking continuity ${tracking.continuity}`);
+  }
+  const skipped = coverage.segmentation?.skipped_chunks?.length ?? 0;
+  if (skipped) parts.push(`${skipped} SAM ${skipped === 1 ? "chunk" : "chunks"} skipped`);
+  if (coverage.semantic_mode) {
+    const count = coverage.semantic_calls ?? 0;
+    const calls = count ? `, ${count} semantic ${count === 1 ? "call" : "calls"}` : "";
+    parts.push(`${coverage.semantic_mode} mode${calls}`);
+  }
+  return parts.join(" · ");
+}
+
 export function analysisSetupLine(bundle: {
   run: {
     provider_id: string;
@@ -94,6 +137,7 @@ export function analysisSetupLine(bundle: {
     optionLabel(PERCEPTION_OPTIONS, perceptionPreset(bundle.config)),
     promptFamily(bundle.config),
     optionLabel(PIPELINE_OPTIONS, bundle.run.analysis_pass),
+    bundle.config?.semantic_mode === "grounded" ? "Grounded interpretation" : "",
   ].filter(Boolean);
   if (bundle.revision) parts.push(`${humanize(bundle.revision.layer)} v${bundle.revision.version}`);
   parts.push(formatUsd(bundle.run.cost_usd));

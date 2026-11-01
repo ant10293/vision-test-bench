@@ -7,10 +7,12 @@ cd backend && .venv/bin/python -m pytest tests -q
 cd backend && .venv/bin/ruff check app tests
 ```
 
+The timeline tests and the pipeline tests encode clips with the local `ffmpeg`. The alignment tests skip when `ffmpeg` is not on the path. Nothing in the suite downloads model weights or calls a paid provider. Where a provider is needed, a fake returns an authored document and every request is still recorded as a `model_requests` row.
+
 Covered without network:
 
 - presentation-timestamp snapping and uniform sampling
-- prompt text does not name the hardware task
+- prompt text does not name the hardware task, and the scene prompt does not mention rings, facets, or a head or top
 - fixture documents for all three modes validate, including attempted versus completed outcomes
 - SAM special-token box parsing
 - OpenAI and Anthropic refuse native video
@@ -26,9 +28,25 @@ Covered without network:
 - confirming a hypothesis promotes the matching candidate reference and leaves the others as candidates
 - learned-workflow fixtures: a correct slower execution, a visible missing component, an occluded component that stays unverified, harmless reorder, a required order violation, an incorrect component, a corrected mistake, similar objects that stay ambiguous, an unsupported model PASS that is rejected, and a template edit that leaves the earlier verification on the original version
 
+Perception architecture:
+
+- `test_sampling.py`: activity after 20 seconds is sampled and the end is kept, a busy opening cannot take the whole budget, a truncated tail gets a closing sample, a capped tracking plan keeps a 2 FPS floor, a budget too sparse for the occlusion window is reported as insufficient, and a sustained new view is a hard cut while a brief occlusion and a lighting change are soft. These are synthetic signals.
+- `test_timeline.py`: generated clips whose frames carry their own index. Extracted frames carry their source time within one frame, a subclip keeps its bounds and maps back to source time, capped tracking crosses four processing chunks to the end without a hard cut, and a rotated file reaches segmentation in the same displayed frame the tracker sees.
+- `test_grounding.py`: two identical labels stay two instances, a model estimate never overwrites a canonical row, one shared time is weak and binds nothing, a label change keeps the instance, a cross-cut match is a hypothesis, a proposal-only track stays provisional, a flow hold is not a detection, a gap adds no absence row, disagreeing measurements become a conflict, resolution is idempotent, and an older document still displays. A pipeline case runs combined and grounded with a fake provider: combined makes requests only in scene analysis and fusion records zero calls; grounded makes requests in scene analysis and workflow and records two semantic calls. A second case runs two providers with the same response and checks that geometry and instances are identical.
+- `test_heuristics.py`: each fenced repair. Two canonical nested instances both remain, a model-only size glitch is still repaired, a canonical row is never edited, two touching identical instances stay two, a canonical track causes no locate call, canonical rows skip the re-ground call, a later-stage box does not replace a canonical row, model-only boxes make no assembly claim, and sustained contact stays inferred and does not complete.
+- `test_benchmark.py`: the harness on synthetic cases. These scores check the harness. They are not accuracy.
+
 `tests/verification_fixtures.py` is the only place those assembly names appear. `app/verification` is scanned so the engine does not name a specific part. No paid provider is called. Reinspection status in these tests is `not_sent`.
 
 Paid provider tests are not in this suite. Do not describe a live integration as tested until a validation or generation call has succeeded with a real key.
+
+## Benchmark
+
+```bash
+cd backend && .venv/bin/python -m tests.benchmark_harness ../data/benchmark
+```
+
+Scores every case folder under the path. The report lists which cases are human-annotated. With none, it says that nothing in it measures real-world accuracy. See `RESEARCH_METHODOLOGY.md`.
 
 ## Frontend
 
@@ -36,7 +54,7 @@ Paid provider tests are not in this suite. Do not describe a live integration as
 cd frontend && npx tsc --noEmit && npx vitest run
 ```
 
-Unit tests cover observation selection at the playhead, refusal to hold a box across a long gap, nearest-frame lookup, one track sample nearest the playhead, and verification verdict colors that keep pass, fail, uncertain, and corrected distinct.
+Unit tests cover observation selection at the playhead, refusal to hold a box across a long gap, nearest-frame lookup, one track sample nearest the playhead, verification verdict colors that keep pass, fail, uncertain, and corrected distinct, canonical rows on the solid measured layer with provisional tracker rows dashed, raw rows listed near the playhead and never drawn, nested diagnostics flattened for the perception panel, the coverage line, and the grounded setup label.
 
 ## Browser
 

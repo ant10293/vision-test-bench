@@ -36,13 +36,15 @@ class AnthropicProvider:
 
     async def validate(self, secret: str) -> None:
         try:
-            await self._client(secret, 30).models.list(limit=1)
+            async with self._client(secret, 30) as client:
+                await client.models.list(limit=1)
         except Exception as exc:
             raise translate(exc) from exc
 
     async def list_models(self, secret: str) -> list[str]:
         try:
-            page = await self._client(secret, 30).models.list(limit=40)
+            async with self._client(secret, 30) as client:
+                page = await client.models.list(limit=40)
         except Exception as exc:
             raise translate(exc) from exc
         found = sorted({item.id for item in page.data})
@@ -100,7 +102,8 @@ class AnthropicProvider:
         kwargs["tool_choice"] = {"type": "tool", "name": "record_analysis"}
         started = time.perf_counter()
         try:
-            response = await self._client(secret, provider_timeout(request.timeout_s)).messages.create(**kwargs)
+            async with self._client(secret, provider_timeout(request.timeout_s)) as client:
+                response = await client.messages.create(**kwargs)
         except Exception as exc:
             raise translate(exc) from exc
         text = ""

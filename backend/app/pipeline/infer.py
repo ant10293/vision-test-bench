@@ -25,7 +25,7 @@ from app.pipeline.frame_boxes import (
 )
 from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import parse_analysis
-from app.pipeline.prompts import compose
+from app.pipeline.prompts import DISCOVERY, INTERPRETATION, compose
 from app.providers.model_list import capabilities_for, resolve_model_id
 from app.providers.registry import get_provider, needs_secret, run_transport
 from app.providers.types import FrameInput, GenerationRequest, UnsupportedMode, rough_input_tokens
@@ -83,6 +83,38 @@ def _working_path(run_id: str) -> Path:
     return data_path("runs", run_id, "working.json")
 
 
+SEMANTIC_STAGES = ("scene_analysis", "action_analysis", "state_tracking", "workflow", "ambiguity", "evidence_fusion")
+SEMANTIC_LISTS = ("actions", "states", "transitions", "relationships", "workflow_steps", "dependencies")
+
+
+def semantic_mode(run: AnalysisRun) -> str:
+    """``combined`` interprets in the scene call; ``grounded`` interprets once after evidence fusion."""
+    mode = str((run.config_json or {}).get("semantic_mode") or "combined")
+    return mode if mode in {"combined", "grounded"} else "combined"
+
+
+def save_semantic_raw(run_id: str, document: AnalysisDocument) -> None:
+    """The scene call's parsed output, before any repair. Replaced on retry."""
+    path = data_path("runs", run_id, "semantic_raw.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(document.model_dump_json(indent=2))
+
+
+def semantic_calls(session: Session, run_id: str) -> int:
+    """Semantic passes that reached a provider. A windowed or re-grounded pass is one pass.
+
+    Every provider request, including windows, merges, and locate calls, is
+    still recorded on its own row.
+    """
+    stages = (
+        session.query(ModelRequestRow.stage)
+        .filter(ModelRequestRow.run_id == run_id, ModelRequestRow.stage.in_(SEMANTIC_STAGES))
+        .distinct()
+        .all()
+    )
+    return len(stages)
+
+
 def fixture_document_for(video: VideoAsset) -> AnalysisDocument | None:
     index_path = data_path("fixture_index.json")
     if not index_path.exists():
@@ -111,7 +143,14 @@ async def produce_document(
     coverage: Coverage,
     spatial_document: AnalysisDocument | None,
     user_extra: str = "",
+    purpose: str = "full",
 ) -> AnalysisDocument:
+    """One semantic call for a stage.
+
+    `purpose` is ``full`` for the combined path, ``discovery`` for the grounded
+    objects-and-boxes call, or ``interpretation`` for the grounded call that
+    reads resolved geometry and returns actions, states, and workflow.
+    """
     if run.provider_id == "fixture":
         document = fixture_document_for(video)
         if document is None:
@@ -167,6 +206,14 @@ async def produce_document(
         system = compose(prompt_key, run.research_mode, extra)
     elif stage != "scene_analysis":
         system = compose(prompt_key, run.research_mode, extra)
+    if purpose == "discovery":
+        system = config.get("prompt_snapshot") or compose("scene", run.research_mode)
+        system += "\n\n" + DISCOVERY
+    elif purpose == "interpretation":
+        system = compose("actions", run.research_mode, extra)
+        for key in ("states", "workflow", "ambiguity"):
+            system += "\n\n" + compose(key, run.research_mode)
+        system += "\n\n" + INTERPRETATION
 
     schema = AnalysisDocument.model_json_schema()
     video_file = adopt_video_modality(run)
@@ -175,13 +222,27 @@ async def produce_document(
         f"Research mode {run.research_mode}. Input modality {run.modality}. "
         "Use only the attached evidence."
     )
+    from app.pipeline.clip_time import load_transform
+
+    subclip = load_transform(run.id) if video_file and run.provider_id != "cursor" else None
+    offset = float(subclip.get("offset") or 0) if subclip else 0.0
     if video_file:
         times = [_frame_time(frame) for frame in _budget_frames(frames, int(config.get("max_frames") or 48))]
+        clip_duration = float(video.duration_sec or 0)
+        if subclip:
+            clip_duration = float(subclip.get("duration") or clip_duration)
+            times = [round(item - offset, 3) for item in times]
         user += _video_coverage_instruction(
-            float(video.duration_sec or 0),
+            clip_duration,
             times,
             frames_attached=run.provider_id == "cursor",
         )
+        if offset:
+            user += (
+                f" The video file is the requested interval of the recording. File time zero is recording time "
+                f"{offset:.3f}s. Report every time in file time. Tracking evidence below is in recording time; "
+                f"subtract {offset:.3f}s to compare."
+            )
         user += _displayed_frame_instruction(video)
         _note_video_coverage(coverage, timeline_frames=len(times) if run.provider_id == "cursor" else None)
     if user_extra:
@@ -205,7 +266,12 @@ async def produce_document(
             schema,
             attach_video=True,
         )
-        document = await _reground_video_boxes(session, run, stage, document, frames, video)
+        if offset:
+            from app.pipeline.clip_time import shift_to_source
+
+            document = shift_to_source(document, offset)
+        if purpose != "interpretation":
+            document = await _reground_video_boxes(session, run, stage, document, frames, video)
         return _with_perception(document, spatial_document)
     selected = _budget_frames(frames, int(config.get("max_frames") or 48))
     if not video_file:
@@ -287,7 +353,7 @@ async def _call(
             )
     provider = get_provider(run.provider_id, session)
     model_id, requested = model_for_call(session, run)
-    video_path = _video_file(video) if attach_video else None
+    video_path = _video_file(video, run if run.provider_id != "cursor" else None) if attach_video else None
     if video_path is not None:
         _require_video_length(run, video)
     # A video API sees the file itself. The Cursor CLI only reads images it is given,
@@ -344,17 +410,30 @@ async def _call(
         raise
     finish_provider_call(session, run, row, response)
     session.commit()
-    return (parser or parse_analysis)(response.text)
+    from app.perception.resolve import mark_estimates
+
+    parsed = (parser or parse_analysis)(response.text)
+    return mark_estimates(parsed) if isinstance(parsed, AnalysisDocument) else parsed
 
 
-def _video_file(video: VideoAsset):
-    """The playback mp4 when ingest made one, otherwise the original file."""
+def _video_file(video: VideoAsset, run: AnalysisRun | None = None):
+    """The requested-interval subclip when preprocess cut one, else the playback mp4 or the original."""
+    if run is not None:
+        from app.pipeline.clip_time import load_transform, subclip_path
+
+        if load_transform(run.id) is not None:
+            return subclip_path(run.id)
     return resolve_stored(video.proxy_path or video.stored_path)
 
 
 def _require_video_length(run: AnalysisRun, video: VideoAsset) -> None:
     limit = capabilities_for(run.provider_id, run.model_id).max_video_seconds
     duration = float(video.duration_sec or 0)
+    from app.pipeline.clip_time import load_transform
+
+    transform = load_transform(run.id) if getattr(run, "id", None) else None
+    if transform is not None:
+        duration = float(transform.get("duration") or duration)
     if limit and duration > float(limit):
         raise UnsupportedMode(
             f"{run.model_id} accepts at most {limit:g} seconds of video. "
@@ -410,8 +489,15 @@ async def _reground_video_boxes(session, run, stage, document: AnalysisDocument,
     selected = _budget_frames(frames, int(config.get("max_frames") or 48))
     if not selected:
         return document
-    roster_ids = {obj.local_id for obj in document.objects}
-    roster = "\n".join(f"{obj.local_id}: {obj.label}" for obj in document.objects)
+    from app.perception.resolve import canonical_objects, fence_repair
+
+    measured = canonical_objects(document)
+    pending = [obj for obj in document.objects if obj.local_id not in measured]
+    if not pending:
+        logger.info("frame box pass skipped: every object already has canonical geometry")
+        return document
+    roster_ids = {obj.local_id for obj in pending}
+    roster = "\n".join(f"{obj.local_id}: {obj.label}" for obj in pending)
     system = frame_box_prompt(width, height)
     merged = document
     replaced = False
@@ -443,7 +529,7 @@ async def _reground_video_boxes(session, run, stage, document: AnalysisDocument,
         if reason:
             logger.info("frame box pass skipped: %s", reason)
             continue
-        merged = merge_frame_boxes(merged, fresh)
+        merged = fence_repair(merged, lambda doc, answer=fresh: merge_frame_boxes(doc, answer))
         replaced = True
     if replaced:
         logger.info("replaced video-file boxes with boxes measured on the displayed frames")
@@ -554,30 +640,9 @@ def _boxing_rule(frames: list[FrameAsset]) -> str:
     where = f"The supplied frames are at {times}. " if times else ""
     return (
         where
-        + "On each of those frames, every object that is even partly visible gets its own observation "
-        "and a tight box around that object alone. Hands, fingers, arms, and the stationary background "
-        "the parts rest on are not objects in that list. A box around a larger object does not count for a "
-        "smaller part that can still be distinguished, including a part resting on it, around it, or "
-        "partly covered by a hand. Do not skip a frame because the object looks unchanged. A change in "
-        "brightness, color cast, or shadow is not disappearance: if the shape and the color relative to "
-        "the parts around it still match an earlier view, box that same object again. A darker part stays "
-        "that part. Do not drop it, and do not redraw it as a shadow or as the edge of a lighter neighbor. "
-        "A gap, hole, or edge that identified it before still identifies it. A long object is still that "
-        "object when only its end, face, or head is showing. Do not wait for the long side or a repeating "
-        "surface pattern. Box that end or head, including when it sits in the middle of a ring, and do not "
-        "let the ring's box stand in for it. When the repeating surface and the head or top are both in "
-        "view, the same box includes the head or top. Do not stop where the repeating surface ends. A box "
-        "that holds only that surface leaves the head or top unidentified. A compact faceted part touching "
-        "a ring is its own object. "
-        "Box it when any face is visible, even if most of it is covered. Do not leave it out because "
-        "the view is end-on or because the ring beside it already has a box. If that faceted part is seen "
-        "face-on, surrounding an end and surrounded by the ring, it still gets its own box on the flats. "
-        "The ring's box and the inner end's box do not count for it. When the edges are faint, keep "
-        "the box tight on that part instead of growing it across the hand or a neighbor. A rotated or "
-        "partly covered part is still that part: box the visible portion, even when its long side is no "
-        "longer the side you saw before. Leave an object out of a frame when it is fully out of view or "
-        "fully hidden, and do not invent a box then. Do not keep its id by boxing a different part, "
-        "including a larger neighbor of a similar color. A box many times larger than the part is the wrong box."
+        + "On each of those frames, give every object that is even partly visible its own observation with a "
+        "tight box around that object alone. Leave an object out of a frame when it is fully hidden, and do "
+        "not keep its id by boxing a different part."
     )
 
 

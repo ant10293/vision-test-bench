@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionCoversTime, coverageAt, frameObjectStills, objectFrameTimeline, observationsAt, frameNear, overlayObservations, sightingCount, tracksAt } from "../lib/analysis";
+import { actionCoversTime, coverageAt, diagnosticEntries, frameObjectStills, objectFrameTimeline, observationsAt, frameNear, overlayObservations, rawRowsNear, sightingCount, tracksAt } from "../lib/analysis";
 import type { Bundle } from "../lib/types";
 
 const bundle = {
@@ -145,5 +145,32 @@ describe("analysis helpers", () => {
     expect(overlayObservations(observations, 1, "conflict").map((item) => item.id)).toEqual(["clash"]);
     expect(coverageAt(observations, "Object_1", 3)).toBe("unobserved");
     expect(coverageAt(observations, "Object_1", 1)).toBe("conflict");
+  });
+
+  it("draws a canonical tracker row on the measured layer and a provisional one dashed", () => {
+    const base = { visibility: "visible", evidence_class: "DIRECTLY_OBSERVED", provenance: "AI_PREDICTION", evidence_note: "", continuity: "continuous", confidence: 0.8, coordinate_frame: "image", camera_compensated: false, frame_id: null };
+    const observations = [
+      { ...base, id: "canon", object_local_id: "Object_1", timestamp: 1, bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, source_model: "tracker", observation_role: "canonical" },
+      { ...base, id: "provisional", object_local_id: "Object_2", timestamp: 1, bbox: { x: 0.5, y: 0.1, w: 0.2, h: 0.2 }, source_model: "tracker", observation_role: "raw" },
+      { ...base, id: "estimate", object_local_id: "Object_3", timestamp: 1, bbox: { x: 0.5, y: 0.5, w: 0.2, h: 0.2 }, geometry_origin: "vlm_estimated" },
+      { ...base, id: "legacy", object_local_id: "Object_4", timestamp: 1, bbox: { x: 0.1, y: 0.6, w: 0.2, h: 0.2 } },
+    ] as Bundle["observations"];
+    expect(overlayObservations(observations, 1, "sam").map((item) => item.id)).toEqual(["canon"]);
+    expect(overlayObservations(observations, 1, "inferred").map((item) => item.id)).toEqual(["provisional"]);
+    expect(overlayObservations(observations, 1, "vlm").map((item) => item.id).sort()).toEqual(["estimate", "legacy"]);
+  });
+
+  it("lists raw rows near the playhead and flattens nested diagnostics", () => {
+    const row = { bbox: null, visibility: "visible", track_ref: "", association_status: "", observation_role: "raw", geometry_origin: "vlm_estimated", geometry_authority: "vlm", detection_support: "none", association_support: "", temporal_support: "", semantic_support: "labeled", evidence_ref: "" };
+    const rows = [
+      { ...row, object_local_id: "Object_1", timestamp: 1.2, source_model: "" },
+      { ...row, object_local_id: "Object_1", timestamp: 4, source_model: "" },
+    ];
+    expect(rawRowsNear(rows, 1).map((item) => item.timestamp)).toEqual([1.2]);
+    expect(diagnosticEntries({ tracks: 3, resolution: { canonical: 12, conflicts: 0 }, list: [1] })).toEqual([
+      ["tracks", "3"],
+      ["resolution_canonical", "12"],
+      ["resolution_conflicts", "0"],
+    ]);
   });
 });

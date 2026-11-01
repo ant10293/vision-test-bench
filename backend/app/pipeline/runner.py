@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import Counter
 from pathlib import Path
 
 import cv2
@@ -18,10 +17,12 @@ from app.models.util import utcnow
 from app.perception.assembly import apply_assembly
 from app.perception.continuity import reconcile_identity
 from app.perception.ground import apply_perception
+from app.perception.resolve import fence_repair
 from app.perception.roster import drop_contained_objects, omit_workspace_and_hands
 from app.perception.types import TrackingCancelled
 from app.pipeline.actions import collapse_repeated_actions
 from app.pipeline.infer import (
+    SEMANTIC_LISTS,
     BudgetExceeded,
     StageSkipped,
     _require_video_length,
@@ -29,31 +30,26 @@ from app.pipeline.infer import (
     load_working,
     model_for_call,
     produce_document,
+    save_semantic_raw,
     save_working,
+    semantic_calls,
+    semantic_mode,
 )
 from app.pipeline.locate_pass import locate_missing
-from app.pipeline.merge import retain_prior_records
+from app.pipeline.merge import merge_interpretation, retain_prior_records
 from app.pipeline.perception_stage import load_spatial_document, run_spatial_stage
 from app.pipeline.prompts import compose
+from app.pipeline.sampling_stage import sample_stage
 from app.pipeline.validate import validate_document
 from app.providers.types import UnsupportedMode
 from app.schemas.analysis import AnalysisDocument, Coverage, ReinspectionProposal
 from app.schemas.enums import PIPELINE_STAGES
 from app.services.experiments import adopt_video_modality
-from app.services.ingest import playback_path, sample_run_frames
+from app.services.ingest import playback_path
 from app.services.materialize import grabcut_cutout, materialize
 from app.services.storage import data_path, relative, resolve_stored
 from app.video.frames import contact_sheet, extract_frame, read_bgr
-from app.video.probe import presentation_timestamps
-from app.video.sampling import (
-    annotate_sharpness,
-    budget_indices,
-    distinct_moments,
-    measure_motion,
-    plan_adaptive,
-    plan_uniform,
-    preset_fps,
-)
+from app.video.sampling import distinct_moments
 
 log = logging.getLogger("learnloop.runner")
 
@@ -212,7 +208,11 @@ async def _dispatch(session, run: AnalysisRun, video: VideoAsset, stage: Pipelin
         return
     if name == "preprocess":
         path = playback_path(video)
-        stage.checkpoint_json = {"playback": relative(path), "proxy": bool(video.proxy_path)}
+        stage.checkpoint_json = {
+            "playback": relative(path),
+            "proxy": bool(video.proxy_path),
+            **_native_subclip(run, video),
+        }
         stage.progress_total = 1
         stage.progress_current = 1
         return
@@ -252,6 +252,25 @@ async def _dispatch(session, run: AnalysisRun, video: VideoAsset, stage: Pipelin
         return
     stage.status = "skipped"
     stage.checkpoint_json = {"reason": "unknown stage"}
+
+
+def _native_subclip(run, video) -> dict:
+    """Cut the requested interval for a native-video model. A failed cut fails the stage."""
+    from app.pipeline.clip_time import save_transform, subclip_path
+    from app.pipeline.sampling_stage import timeline_for
+    from app.providers.model_list import use_video_file
+    from app.video.decode import cut_clip
+
+    if not use_video_file(run.provider_id, run.model_id):
+        return {}
+    timeline = timeline_for(video, run.config_json)
+    duration = float(video.duration_sec or 0)
+    if timeline.start <= 1e-3 and timeline.end >= duration - 1e-3:
+        return {}
+    dest = subclip_path(run.id)
+    transform = cut_clip(resolve_stored(video.stored_path), timeline.start, timeline.end, dest)
+    save_transform(run.id, transform)
+    return {"subclip": relative(dest), "media_transform": transform}
 
 
 async def _transcription(session, run, video, stage) -> None:
@@ -392,88 +411,30 @@ def _json_object(text: str) -> dict:
 
 
 def _sample(session, run, video, stage) -> None:
-    config = run.config_json or {}
-    start = float(config.get("time_start") or 0)
-    end = float(config.get("time_end") or video.duration_sec)
-    pts_cache = data_path("originals", f"{video.checksum_sha256[:12]}.pts.json")
-    original = resolve_stored(video.stored_path)
-    pts = presentation_timestamps(original, pts_cache)
-    pts = [item for item in pts if start - 0.01 <= item <= end + 0.01]
-    preset = run.sampling_preset
-    if run.modality == "native_video":
-        fps = 1.0
-        samples = plan_uniform(end, fps, pts)
-        samples = [item for item in samples if start <= item.timestamp <= end + 0.01]
-        note = (
-            "The model receives the video file. Preview frames were extracted so the "
-            "inspector can show evidence."
-        )
-    elif preset == "adaptive":
-        coarse = plan_uniform(end, 4.0, pts)
-        coarse = [item for item in coarse if start <= item.timestamp <= end + 0.01][:80]
-        coarse_rows = sample_run_frames(session, video, run.id, coarse)
-        signals = measure_motion(
-            [data_path(*Path(row.path).parts) for row in coarse_rows],
-            [row.timestamp for row in coarse_rows],
-        )
-        adapted = plan_adaptive(video.duration_sec, pts, coarse, signals)
-        samples = [item for item in adapted.frames if start <= item.timestamp <= end + 0.01]
-        note = (
-            f"Adaptive sampling kept {len(samples)} frames from a {len(coarse)}-frame motion pass. "
-            "This is not full-frame coverage."
-        )
-        stage.checkpoint_json = {"scene_changes": adapted.scene_change_times}
-    else:
-        fps = preset_fps(preset, config.get("custom_fps"))
-        samples = plan_uniform(end, fps, pts)
-        samples = [item for item in samples if start <= item.timestamp <= end + 0.01]
-        if samples:
-            span = f" from {samples[0].timestamp:.3f} s through {samples[-1].timestamp:.3f} s"
-        else:
-            span = ""
-        note = (
-            f"Uniform {fps:g} FPS sampling snapped to presentation timestamps{span}. "
-            f"{len(samples)} frames will be available. The source has about {video.frame_count} frames."
-        )
-    limit = int(config.get("max_frames") or 48)
-    if len(samples) > limit:
-        samples = [samples[index] for index in budget_indices(len(samples), limit)]
-        if run.modality == "native_video":
-            note += f" Inspector previews were limited to {limit}. The video file is sent whole."
-        else:
-            note += f" The frame budget truncated the set to {limit}."
-    rows = sample_run_frames(session, video, run.id, samples)
-    paths = {round(row.timestamp, 3): data_path(*Path(row.path).parts) for row in rows}
-    annotate_sharpness(samples, paths)
-    for sample, row in zip(samples, rows, strict=False):
-        row.sharpness = sample.sharpness
-        row.motion_score = sample.motion_score
-    reasons = Counter(sample.reason for sample in samples)
-    coverage = Coverage(
-        modality="native_video" if run.modality == "native_video" else "sampled_frames",
-        sampling_preset=preset,
-        nominal_fps=preset_fps(preset, config.get("custom_fps")) if preset != "adaptive" else 4.0,
-        frames_extracted=len(rows),
-        frames_submitted=0 if run.modality == "native_video" else len(rows),
-        frame_timestamps=[row.timestamp for row in rows],
-        selection_reasons=dict(reasons),
-        duration_sec=video.duration_sec,
-        native_video_submitted=run.modality == "native_video",
-        temporal_coverage_note=note,
-    )
-    run.coverage_json = coverage.model_dump(mode="json")
-    stage.progress_total = max(len(rows), 1)
-    stage.progress_current = len(rows)
-    stage.checkpoint_json = {**(stage.checkpoint_json or {}), "frames": len(rows), "reasons": dict(reasons)}
-    session.commit()
+    sample_stage(session, run, video, stage)
 
 
 def _spatial(session, run, video, stage) -> None:
     run_spatial_stage(session, run, video, stage)
 
 
+def _record_semantic(session, run, coverage: Coverage) -> Coverage:
+    coverage.semantic_mode = semantic_mode(run)
+    coverage.semantic_calls = semantic_calls(session, run.id)
+    return coverage
+
+
 async def _model_stage(session, run, video, stage) -> None:
     config = run.config_json or {}
+    grounded = semantic_mode(run) == "grounded"
+    if grounded and stage.stage in {"action_analysis", "state_tracking", "ambiguity"}:
+        raise StageSkipped(
+            "Grounded mode interprets actions, states, and ambiguities once, in workflow, after evidence fusion. "
+            "This stage made no model call."
+        )
+    if grounded and stage.stage == "workflow":
+        await _interpret(session, run, video, stage)
+        return
     single = config.get("analysis_pass", "single") == "single"
     if single and stage.stage != "scene_analysis":
         document = load_working(run.id)
@@ -500,7 +461,14 @@ async def _model_stage(session, run, video, stage) -> None:
     config = dict(config)
     config["max_images_per_call"] = caps_window
     run.config_json = config
-    document = await produce_document(session, run, video, frames, stage.stage, coverage, spatial)
+    discovery = grounded and stage.stage == "scene_analysis"
+    document = await produce_document(
+        session, run, video, frames, stage.stage, coverage, spatial, purpose="discovery" if discovery else "full"
+    )
+    if discovery:
+        document = document.model_copy(update={name: [] for name in SEMANTIC_LISTS})
+    if stage.stage == "scene_analysis":
+        save_semantic_raw(run.id, document)
     # Sampling already counted the frames. The text-only merge must not replace that
     # record with a note about how it combined the windows.
     document = document.model_copy(update={"coverage": coverage})
@@ -513,6 +481,8 @@ async def _model_stage(session, run, video, stage) -> None:
     if document.camera and run.research_mode == "auto":
         run.viewpoint = document.camera.viewpoint
         run.task_constraint = document.camera.task_constraint
+    _record_semantic(session, run, coverage)
+    document = document.model_copy(update={"coverage": coverage})
     run.coverage_json = coverage.model_dump(mode="json")
     save_working(run.id, document)
     _remember(session, run, document, stage.stage)
@@ -533,11 +503,11 @@ async def _ground(session, run, stage, document: AnalysisDocument, frames: list[
     locate_info = None
     if document.observations:
         document = omit_workspace_and_hands(document)
-        document = reconcile_identity(document)
+        document = fence_repair(document, reconcile_identity)
         document = drop_contained_objects(document)
         if stage.stage == "scene_analysis":
             document, locate_info = await locate_missing(session, run, document, frames)
-            document = reconcile_identity(document)
+            document = fence_repair(document, reconcile_identity)
             document = drop_contained_objects(document)
         document = apply_assembly(document)
     document = collapse_repeated_actions(document)
@@ -623,70 +593,90 @@ def _has_meta_key(session) -> bool:
 
 
 async def _evidence_fusion(session, run, video, stage) -> None:
-    """Reconcile the primary analysis after SAM video tracking.
+    """Resolve canonical geometry and identity. This stage never calls a language model.
 
-    Single-pass runs make an additional recorded call. Multi-stage runs leave
-    the summary for the later reasoning stages. Neither path pretends the
-    original analysis already saw the tracks.
+    It is the only writer of canonical rows. It rebuilds them from the
+    tracker document, the SAM rows already fused into the working document,
+    and the model's raw estimates, then replaces the working document, so a
+    retry does not append.
     """
-    from app.perception.sam_fusion import merge_reconciliation, sam_evidence_block
+    from app.perception.resolve import resolve_document
 
-    if run.segmentation_mode != "sam_video":
-        raise StageSkipped("Evidence fusion runs when SAM video tracking is selected.")
+    if run.provider_id == "fixture":
+        raise StageSkipped("Fixture documents are authored. Their geometry was not resolved.")
+    document = load_working(run.id)
+    if not document.objects and not document.observations:
+        raise StageSkipped("There is no analysis to resolve.")
+    notes: list[str] = []
     segmentation = _stage(session, run.id, "segmentation")
     if segmentation.status == "failed":
-        raise RuntimeError(
-            "SAM segmentation did not finish, so evidence fusion did not report success. "
-            "The primary analysis was kept."
-        )
-    document = load_working(run.id)
-    summary = sam_evidence_block(run.id, "evidence_fusion")
-    if not summary:
-        raise StageSkipped("SAM did not write a tracking summary.")
-    local = run.provider_id in {"deterministic", "fixture", "manual_json"}
-    multi = (run.config_json or {}).get("analysis_pass", "single") != "single"
-    if local or multi:
-        stage.checkpoint_json = {
-            "reconciled": False,
-            "injected": multi,
-            "source": "geometry_only" if local else "later_stages",
-            "note": (
-                "SAM geometry is in the document. This stage did not issue another model call. "
-                "The original analysis pass did not see these tracks."
-                if local
-                else "Later reasoning stages receive the SAM summary. This stage did not call the model."
-            ),
-        }
-        _remember(session, run, document, "evidence_fusion")
-        return
-    frames = list(
-        session.scalars(select(FrameAsset).where(FrameAsset.run_id == run.id).order_by(FrameAsset.timestamp))
-    )
-    proposed = await produce_document(
-        session,
-        run,
-        video,
-        frames,
-        "evidence_fusion",
-        Coverage.model_validate(run.coverage_json or {}),
-        None,
-        user_extra=(
-            "Revise actions, states, relationships, workflow steps, and ambiguities using the SAM evidence. "
-            "Keep object ids. Do not treat a gap as absence. Do not let SAM invent a completed step."
-        ),
-    )
-    merged = merge_reconciliation(document, proposed)
-    save_working(run.id, merged)
-    _remember(session, run, merged, "evidence_fusion")
+        notes.append("SAM segmentation failed. Geometry was resolved from tracker and model evidence only.")
+    elif segmentation.status == "skipped":
+        notes.append("Segmentation was skipped. Geometry was resolved from tracker and model evidence only.")
+    spatial = load_spatial_document(run.id)
+    usable = spatial is not None and spatial.perception is not None and spatial.perception.used_for_identity
+    if usable:
+        document = apply_perception(document, spatial)
+    elif spatial is not None:
+        notes.append("Tracking was not used for identity, so tracker rows did not bind to objects.")
+    resolved = resolve_document(document, spatial if usable else None)
+    if semantic_mode(run) == "combined":
+        # Measured rows exist only from here on. Grounded runs read them in the interpretation stage instead.
+        resolved = collapse_repeated_actions(apply_assembly(resolved))
+    coverage = _record_semantic(session, run, Coverage.model_validate(run.coverage_json or {}))
+    resolved = resolved.model_copy(update={"coverage": coverage})
+    run.coverage_json = coverage.model_dump(mode="json")
+    save_working(run.id, resolved)
+    _remember(session, run, resolved, "evidence_fusion")
+    diagnostics = resolved.perception.diagnostics if resolved.perception else {}
     stage.checkpoint_json = {
-        "reconciled": True,
-        "source": "evidence_fusion",
+        "source": "resolver",
+        "model_calls": 0,
+        "resolution": diagnostics.get("resolution", {}),
+        "grounding": diagnostics.get("grounding", {}),
+        "notes": notes,
+    }
+
+
+async def _interpret(session, run, video, stage) -> None:
+    """Grounded mode: one semantic call that reads resolved geometry.
+
+    Objects, canonical rows, and the display set from evidence fusion are
+    kept. The call replaces actions, states, relationships, workflow, and
+    ambiguities. Boxes it returns are stored as raw estimates only.
+    """
+    document = load_working(run.id)
+    if run.provider_id in {"deterministic", "fixture", "manual_json"}:
+        stage.checkpoint_json = {"source": run.provider_id, "model_calls": 0}
+        _remember(session, run, document, stage.stage)
+        return
+    frames = distinct_moments(
+        list(session.scalars(select(FrameAsset).where(FrameAsset.run_id == run.id).order_by(FrameAsset.timestamp)))
+    )
+    coverage = Coverage.model_validate(run.coverage_json or {})
+    spatial = load_spatial_document(run.id)
+    from app.providers.catalog import lookup
+
+    config = dict(run.config_json or {})
+    config["max_images_per_call"] = lookup(run.provider_id, run.model_id).max_images
+    run.config_json = config
+    proposed = await produce_document(
+        session, run, video, frames, "workflow", coverage, spatial, purpose="interpretation"
+    )
+    merged = merge_interpretation(document, proposed)
+    merged = collapse_repeated_actions(apply_assembly(merged))
+    coverage = _record_semantic(session, run, coverage)
+    merged = merged.model_copy(update={"coverage": coverage})
+    run.coverage_json = coverage.model_dump(mode="json")
+    save_working(run.id, merged)
+    _remember(session, run, merged, stage.stage)
+    stage.checkpoint_json = {
+        "source": "interpretation",
         "provider": run.provider_id,
         "model": run.model_id,
-        "note": (
-            "Single-pass analysis was reconciled after SAM tracking. "
-            "The original pass did not use this segmentation evidence."
-        ),
+        "actions": len(merged.actions),
+        "workflow_steps": len(merged.workflow_steps),
+        "semantic_calls": coverage.semantic_calls,
     }
 
 

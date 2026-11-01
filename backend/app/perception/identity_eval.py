@@ -209,6 +209,7 @@ def _events(pred_obs, truth_obs, matches, gap_sec: float):
 
 
 def _observed(document: dict) -> list[dict]:
+    """The display set only. Raw rows are kept for inspection and would double-count an instance."""
     rows = []
     for item in document.get("observations") or []:
         instance = item.get("instance_id") or item.get("track_ref")

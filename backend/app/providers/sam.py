@@ -95,6 +95,9 @@ class VideoChunk:
     time_start: float
     time_end: float
     session_id: str
+    # Source presentation time of each frame in the chunk, in order. Empty when
+    # only a nominal frame rate is known.
+    frame_times: list[float] = field(default_factory=list)
 
     @property
     def frame_count(self) -> int:
@@ -361,18 +364,21 @@ def plan_video_chunks(
     *,
     chunk_frames: int = DEFAULT_CHUNK_FRAMES,
     duration_sec: float = 0,
+    frame_times: list[float] | None = None,
 ) -> list[VideoChunk]:
-    """Split a long recording into tracked chunks.
+    """Split a recording, or the frames of a requested interval, into tracked chunks.
 
-    SAM object ids do not continue from one chunk into the next. A later
-    association may link them when the boxes agree. The boundary itself is
-    unobserved identity, not evidence the object disappeared.
+    With `frame_times`, chunks cover exactly those source frames and map a SAM
+    frame marker through them. Without it, times come from the nominal rate.
+    SAM object ids do not continue from one chunk into the next. The boundary
+    is unobserved identity, not evidence the object disappeared.
     """
-    count = int(frame_count)
+    times = list(frame_times or [])
+    count = len(times) if times else int(frame_count)
     rate = float(fps or 0)
-    if count <= 0 and duration_sec > 0 and rate > 0:
+    if not times and count <= 0 and duration_sec > 0 and rate > 0:
         count = int(round(duration_sec * rate))
-    if count <= 0 or rate <= 0:
+    if count <= 0 or (rate <= 0 and not times):
         raise ProviderError(
             "SAM video tracking needs a positive frame count and frame rate to map "
             "frame indices back to timestamps."
@@ -383,14 +389,22 @@ def plan_video_chunks(
     index = 0
     while start < count:
         end = min(count, start + size)
+        if times:
+            step = (times[end] - times[end - 1]) if end < count else (1.0 / rate if rate > 0 else 0.0)
+            time_start = times[start]
+            time_end = times[end] if end < count else times[end - 1] + step
+            chunk_times = times[start:end]
+        else:
+            time_start, time_end, chunk_times = start / rate, end / rate, []
         chunks.append(
             VideoChunk(
                 index=index,
                 start_frame=start,
                 end_frame=end,
-                time_start=start / rate,
-                time_end=end / rate,
+                time_start=time_start,
+                time_end=time_end,
                 session_id=f"c{index}",
+                frame_times=chunk_times,
             )
         )
         index += 1
@@ -402,9 +416,16 @@ def frame_timestamp(frame_index: int, fps: float, chunk: VideoChunk) -> float | 
     """Map a SAM frame marker onto the source clock.
 
     The marker is the index inside the submitted chunk, not the line number.
-    A missing or non-positive frame rate does not invent a timestamp.
+    Known frame times are used before the nominal rate. A missing rate and no
+    known times do not invent a timestamp.
     """
-    if fps <= 0 or frame_index < 0:
+    if frame_index < 0:
+        return None
+    if chunk.frame_times:
+        if frame_index >= len(chunk.frame_times):
+            return None
+        return chunk.frame_times[frame_index]
+    if fps <= 0:
         return None
     return chunk.time_start + (frame_index / fps)
 
@@ -459,10 +480,10 @@ class SamAdapter:
 
     async def upload_video(self, path: Path) -> str:
         """Upload through the Files API. purpose is user_data, as documented."""
-        client = self._client()
         try:
-            with Path(path).open("rb") as handle:
-                created = await client.files.create(file=handle, purpose="user_data")
+            async with self._client() as client:
+                with Path(path).open("rb") as handle:
+                    created = await client.files.create(file=handle, purpose="user_data")
         except Exception as exc:
             raise translate(exc) from exc
         file_id = str(getattr(created, "id", "") or "")
@@ -504,20 +525,21 @@ class SamAdapter:
         input_tokens = 0
         output_tokens = 0
         try:
-            stream = await self._client().responses.create(**body)
-            async for event in stream:
-                kind = _event_type(event)
-                if kind == "response.output_text.delta":
-                    delta = _event_field(event, "delta") or ""
-                    if delta:
-                        text_parts.append(delta)
-                        buffer.push(delta)
-                elif kind in {"response.completed", "response.output_text.done"}:
-                    response = _event_field(event, "response")
-                    request_id = request_id or _response_id(response if response is not None else event)
-                    usage = _usage(response if response is not None else event)
-                    input_tokens = usage[0] or input_tokens
-                    output_tokens = usage[1] or output_tokens
+            async with self._client() as client:
+                stream = await client.responses.create(**body)
+                async for event in stream:
+                    kind = _event_type(event)
+                    if kind == "response.output_text.delta":
+                        delta = _event_field(event, "delta") or ""
+                        if delta:
+                            text_parts.append(delta)
+                            buffer.push(delta)
+                    elif kind in {"response.completed", "response.output_text.done"}:
+                        response = _event_field(event, "response")
+                        request_id = request_id or _response_id(response if response is not None else event)
+                        usage = _usage(response if response is not None else event)
+                        input_tokens = usage[0] or input_tokens
+                        output_tokens = usage[1] or output_tokens
         except Exception as exc:
             raise translate(exc) from exc
         buffer.finish()

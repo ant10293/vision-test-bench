@@ -42,8 +42,17 @@ def _ev(note: str, start: float, end: float | None = None) -> Evidence:
     )
 
 
-def document_from_spatial(report: SpatialReport, coverage: Coverage) -> AnalysisDocument:
+def document_from_spatial(
+    report: SpatialReport,
+    coverage: Coverage,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+) -> AnalysisDocument:
+    from app.perception.resolve import detection_support, temporal_support_by_track
+
     grouped: dict[str, list] = defaultdict(list)
+    repeated = temporal_support_by_track(report.tracks)
     for point in report.tracks:
         grouped[point.track_ref].append(point)
     objects = []
@@ -80,6 +89,7 @@ def document_from_spatial(report: SpatialReport, coverage: Coverage) -> Analysis
         )
         for point in points:
             visibility = getattr(point, "visibility", "visible") or "visible"
+            flow = point.detector_id == "optical_flow"
             observations.append(
                 ObservationPrediction(
                     object_local_id=local_id,
@@ -92,6 +102,16 @@ def document_from_spatial(report: SpatialReport, coverage: Coverage) -> Analysis
                     coordinate_frame="image",
                     camera_compensated=point.camera_compensated,
                     track_ref=ref,
+                    observation_role="raw",
+                    source_model="tracker",
+                    geometry_origin="optical_flow" if flow else "detected",
+                    geometry_authority=point.detector_id or (report.perception.detector_id if report.perception else ""),
+                    detection_support="none" if flow else detection_support(point.detector_id),
+                    temporal_support="flow_only" if flow else repeated.get(ref, "single"),
+                    semantic_support="unlabeled",
+                    association_support="associated",
+                    source_width=width or None,
+                    source_height=height or None,
                 )
             )
         states.append(
@@ -220,13 +240,13 @@ def document_from_spatial(report: SpatialReport, coverage: Coverage) -> Analysis
                 local_id="Ambiguity_scenes",
                 kind=AmbiguityKind.UNOBSERVED_INTERVAL,
                 description=(
-                    f"{report.scene_change_count} scene-change boundaries were detected. "
+                    f"{report.scene_change_count} hard scene cuts were detected. "
                     "Object identity was not invented across them."
                 ),
                 evidence=Evidence(
                     classification=EvidenceClass.DIRECTLY_OBSERVED,
                     provenance=Provenance.CV_DETECTION,
-                    note="Histogram correlation between samples dropped.",
+                    note="The view changed and did not return within the confirmation window.",
                 ),
             )
         )

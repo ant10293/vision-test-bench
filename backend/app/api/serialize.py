@@ -166,7 +166,8 @@ def bundle(session: Session, run: AnalysisRun) -> dict:
         ],
         "frames": [_frame(frame) for frame in frames],
         "objects": objects,
-        "observations": _observations(session, revision_id),
+        "observations": _observations(session, revision_id, (revision.document_json or {}) if revision else {}),
+        "raw_observations": _raw_observations((revision.document_json or {}) if revision else {}),
         "states": _states(session, revision_id),
         "transitions": _transitions(session, revision_id),
         "relationships": _relationships(session, revision_id),
@@ -360,7 +361,55 @@ def _object(obj: DetectedObject, images: list[ObjectImage]) -> dict:
     }
 
 
-def _observations(session, revision_id: str) -> list[dict]:
+_PROVENANCE = (
+    "observation_role",
+    "geometry_origin",
+    "geometry_authority",
+    "detection_support",
+    "association_support",
+    "temporal_support",
+    "semantic_support",
+    "evidence_ref",
+)
+RAW_LIMIT = 4000
+
+
+def _provenance(row: dict) -> dict:
+    return {key: row.get(key) or "" for key in _PROVENANCE}
+
+
+def _provenance_index(document: dict) -> dict[tuple[str, float, str], dict]:
+    """Per-row provenance from the stored document. Database rows predate these fields."""
+    index: dict[tuple[str, float, str], dict] = {}
+    for row in document.get("observations") or []:
+        key = (row.get("object_local_id", ""), round(float(row.get("timestamp") or 0), 3), row.get("source_model") or "")
+        index.setdefault(key, _provenance(row))
+    return index
+
+
+def _raw_observations(document: dict) -> dict:
+    """Rows the display set does not show, for the perception panel. They are not a second overlay."""
+    rows = document.get("raw_observations") or []
+    return {
+        "total": len(rows),
+        "truncated": len(rows) > RAW_LIMIT,
+        "rows": [
+            {
+                "object_local_id": row.get("object_local_id", ""),
+                "timestamp": row.get("timestamp"),
+                "bbox": row.get("bbox"),
+                "visibility": row.get("visibility"),
+                "source_model": row.get("source_model") or "",
+                "track_ref": row.get("track_ref") or "",
+                "association_status": row.get("association_status") or "",
+                **_provenance(row),
+            }
+            for row in rows[:RAW_LIMIT]
+        ],
+    }
+
+
+def _observations(session, revision_id: str, document: dict | None = None) -> list[dict]:
     if not revision_id:
         return []
     rows = session.scalars(select(ObjectObservation).where(ObjectObservation.revision_id == revision_id)).all()
@@ -368,8 +417,13 @@ def _observations(session, revision_id: str) -> list[dict]:
         obj.id: obj.local_id
         for obj in session.scalars(select(DetectedObject).where(DetectedObject.revision_id == revision_id))
     }
+    index = _provenance_index(document or {})
+    empty = _provenance({})
     return [
         {
+            **index.get(
+                (objects.get(row.object_id, ""), round(float(row.timestamp or 0), 3), row.source_model or ""), empty
+            ),
             "id": row.id,
             "object_local_id": objects.get(row.object_id, ""),
             "timestamp": row.timestamp,

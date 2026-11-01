@@ -182,10 +182,16 @@ def _stills(frames: list[FrameAsset]) -> list[_Still]:
 
 
 def _targets(document: AnalysisDocument) -> list[tuple[str, list[float]]]:
+    from app.perception.resolve import canonical_objects
+
     all_times = sorted({round(item.timestamp, 3) for item in document.observations})
     ranked: list[tuple[tuple, str, list[float]]] = []
     labels = {obj.local_id: obj for obj in document.objects}
+    measured = canonical_objects(document)
     for object_id, obj in labels.items():
+        if object_id in measured:
+            # The tracker or SAM timeline already places this object. A locate call would only add an estimate.
+            continue
         kept = [
             round(item.timestamp, 3)
             for item in document.observations

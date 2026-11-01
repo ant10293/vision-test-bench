@@ -11,7 +11,7 @@ import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
 import { WorkflowGraph } from "../components/WorkflowGraph";
 import { api, evidenceClass, formatTime, formatUsd } from "../lib/api";
-import { analysisSetupLine } from "../lib/runOptions";
+import { analysisSetupLine, coverageLine } from "../lib/runOptions";
 import { formatConfidence } from "../lib/confidence";
 import { formatLogText } from "../lib/formatLog";
 import { actionPhrase, humanize, humanizeText, labeledId, nameObjects, objectLabels } from "../lib/humanize";
@@ -232,6 +232,11 @@ function AnalysisHeader({ bundle, embedded }: { bundle: Bundle | null; embedded:
             <Bone width="28rem" />
           )}
         </p>
+        {bundle && coverageLine(bundle.coverage) && (
+          <p className="mt-1 max-w-3xl text-xs text-[var(--muted)]" data-testid="coverage-line">
+            {coverageLine(bundle.coverage)}
+          </p>
+        )}
         {bundle?.coverage?.temporal_coverage_note && (
           <p className="mt-1 max-w-3xl text-xs text-[var(--amber)]">{bundle.coverage.temporal_coverage_note}</p>
         )}

@@ -42,16 +42,7 @@ or shadow is not disappearance. If the shape and the color relative to the parts
 an earlier view, box that same object again, including when this frame is dimmer, warmer, or more
 shadowed. A darker part stays that part: do not drop it, and do not redraw it as a shadow or as the
 edge of a lighter neighbor. A gap, hole, or edge that identified it before still identifies it.
-A long object is still that object when only its end, face, or head is showing. Do not wait for the
-long side or a repeating surface pattern. Box that end or head, including when it sits in the middle
-of a ring, and do not let the ring's box stand in for it.
-When the repeating surface and the head or top are both in view, the same box includes the head or top.
-Do not stop where the repeating surface ends. A box that holds only that surface leaves the head or top unidentified.
-A compact faceted part touching a ring is its own object. Box it when any face is visible, even if most
-of it is covered. Do not leave it out because the view is end-on or because the ring beside it already
-has a box.
-If that faceted part is seen face-on, surrounding an end and surrounded by the ring, it still gets
-its own box on the flats. The ring's box and the inner end's box do not count for it.
+An object seen end-on or from a new side is still that object; box the part of it that is visible.
 A separate loose part is its own object, including a second part that looks like one already listed and a small piece lying beside a larger one.
 The box covers that one part's entire visible extent, out to its outermost visible pixels. A box around only a piece of the part is the wrong box.
 When the edges are faint, keep the box on that part instead of growing it across the hand or a
@@ -146,6 +137,22 @@ You are reinspecting one uncertain interval. Compare the visible state before an
 Do not infer attachment, insertion, or identity from proximity or from a gap in the frames.
 Say what additional evidence changed, and what remains unknown.
 Return JSON with keys: conclusion, changed (boolean), evidence_classification, notes, updated_action (object or null).
+""".strip()
+
+DISCOVERY = """
+Discovery pass. Identify the physical objects and give each one an observation with a box on the
+moments supplied. Copy a tracked instance id into instance_id when the object is that instance.
+Return objects, observations, camera, summary, and ambiguities about identity or visibility.
+Leave actions, states, transitions, relationships, workflow_steps, and dependencies empty.
+A later call interprets them after the boxes are measured.
+""".strip()
+
+INTERPRETATION = """
+Interpretation pass. Object identities and boxes were measured before this call and are in the prior
+analysis. A row with observation_role canonical is measured geometry. A row with geometry_origin
+vlm_estimated is an earlier estimate, not a measurement. Keep every object id and do not add, move,
+or redraw boxes. Return actions, states, transitions, relationships, workflow_steps, dependencies,
+and ambiguities. Overlap or proximity is not attachment, insertion, or completion.
 """.strip()
 
 COMPARISON = """

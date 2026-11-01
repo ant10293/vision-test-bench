@@ -43,15 +43,15 @@ class OpenAIProvider:
                 )
             return
         try:
-            client = self._client(secret, 30)
-            await client.models.list()
+            async with self._client(secret, 30) as client:
+                await client.models.list()
         except Exception as exc:
             raise translate(exc) from exc
 
     async def list_models(self, secret: str) -> list[str]:
         try:
-            client = self._client(secret, 30)
-            page = await client.models.list()
+            async with self._client(secret, 30) as client:
+                page = await client.models.list()
         except Exception as exc:
             raise translate(exc) from exc
         found = sorted({item.id for item in page.data if _vision_candidate(item.id)})
@@ -109,7 +109,8 @@ class OpenAIProvider:
             }
         started = time.perf_counter()
         try:
-            response = await self._client(secret, provider_timeout(request.timeout_s)).responses.create(**kwargs)
+            async with self._client(secret, provider_timeout(request.timeout_s)) as client:
+                response = await client.responses.create(**kwargs)
         except Exception as exc:
             raise translate(exc) from exc
         usage = getattr(response, "usage", None)

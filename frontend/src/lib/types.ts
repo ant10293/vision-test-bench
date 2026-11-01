@@ -167,7 +167,7 @@ export interface PerceptionSummary {
   coordinate_frame?: string;
   used_for_identity?: boolean;
   scores_are_probabilities?: boolean;
-  diagnostics?: Record<string, number | string>;
+  diagnostics?: Record<string, unknown>;
   instances?: PerceptionInstance[];
   hypotheses?: PerceptionHypothesis[];
   appearance_references?: { instance_id: string; timestamp: number; state: string; quality: number; confirmed: boolean }[];
@@ -195,6 +195,32 @@ export interface Observation {
   source_model?: string;
   request_id?: string;
   mask_ref?: string;
+  observation_role?: string;
+  geometry_origin?: string;
+  geometry_authority?: string;
+  detection_support?: string;
+  association_support?: string;
+  temporal_support?: string;
+  semantic_support?: string;
+  evidence_ref?: string;
+}
+
+export interface RawObservation {
+  object_local_id: string;
+  timestamp: number;
+  bbox: BBox | null;
+  visibility: string;
+  source_model: string;
+  track_ref: string;
+  association_status: string;
+  observation_role: string;
+  geometry_origin: string;
+  geometry_authority: string;
+  detection_support: string;
+  association_support: string;
+  temporal_support: string;
+  semantic_support: string;
+  evidence_ref: string;
 }
 
 export interface LabAction {
@@ -282,12 +308,42 @@ export interface Bundle {
     temporal_coverage_note?: string;
     native_video_submitted?: boolean;
     selection_reasons?: Record<string, number>;
+    time_start?: number | null;
+    time_end?: number | null;
+    time_basis?: string;
+    max_gap_sec?: number | null;
+    uncovered_gaps?: [number, number][];
+    motion_frames?: number;
+    candidate_peaks?: number[];
+    selected_peaks?: number[];
+    budget_exclusions?: number;
+    scene_boundaries?: { time: number; kind: string; reason: string }[];
+    semantic_selection?: string;
+    selection_swaps?: { removed: number; added: number; reason: string }[];
+    semantic_mode?: string;
+    semantic_calls?: number;
+    tracking?: {
+      frames?: number;
+      max_gap_sec?: number;
+      gaps_over_occlusion?: number;
+      continuity?: string;
+      peak_fps?: number;
+      floor_fps?: number;
+      processing_chunks?: number;
+    };
+    segmentation?: {
+      chunks?: number;
+      frames_submitted?: number;
+      skipped_chunks?: { start: number; end: number; reason: string }[];
+    };
+    media_transforms?: Record<string, unknown>[];
   };
   config: Record<string, unknown>;
   stages: StageInfo[];
   frames: FrameInfo[];
   objects: LabObject[];
   observations: Observation[];
+  raw_observations?: { total: number; truncated: boolean; rows: RawObservation[] };
   states: {
     id: string;
     object_local_id: string;

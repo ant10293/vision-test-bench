@@ -120,7 +120,10 @@ def test_insertion_is_the_free_part_ending_at_the_host():
     )
     document = apply_assembly(_doc(observations, [action], [step]))
     assert document.actions[0].action_type == "insert"
-    assert document.actions[0].outcome == ActionOutcome.COMPLETED
+    # Box geometry infers the join. It keeps the model's own outcome and never confirms completion.
+    assert document.actions[0].outcome == ActionOutcome.UNKNOWN
+    assert document.actions[0].evidence.classification.value == "INFERRED"
+    assert document.workflow_steps[0].uncertainty >= 0.5
     assert document.workflow_steps[0].name.startswith("Insert the short rod")
     assert "bring" not in document.workflow_steps[0].expected_action.lower()
     assert "separate visible extent" in document.workflow_steps[0].observed_result

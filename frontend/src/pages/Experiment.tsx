@@ -5,7 +5,7 @@ import { Bone, FieldBone } from "../components/Skeleton";
 import { SettingsFieldset } from "../components/SettingsFieldset";
 import { api } from "../lib/api";
 import { humanize } from "../lib/humanize";
-import { PERCEPTION_OPTIONS, PIPELINE_OPTIONS, SEGMENTATION_OPTIONS } from "../lib/runOptions";
+import { PERCEPTION_OPTIONS, PIPELINE_OPTIONS, SEGMENTATION_OPTIONS, SEMANTIC_OPTIONS } from "../lib/runOptions";
 import type { Capability } from "../lib/types";
 import { videoReady } from "../lib/uploadProgress";
 
@@ -28,6 +28,7 @@ export function ExperimentPage() {
   const [mode, setMode] = useState("fixed_camera");
   const [preset, setPreset] = useState("standard");
   const [pass, setPass] = useState("single");
+  const [semanticMode, setSemanticMode] = useState("combined");
   const [segmentation, setSegmentation] = useState("boxes_only");
   const [temperature, setTemperature] = useState("");
   const [reasoning, setReasoning] = useState("");
@@ -67,6 +68,7 @@ export function ExperimentPage() {
         modality,
         sampling_preset: preset,
         analysis_pass: pass,
+        semantic_mode: semanticMode,
         segmentation_mode: segmentation,
         segmentation_model_id: segmentation === "sam" || segmentation === "sam_video" ? "sam-3.1" : "",
         temperature: codexRun || temperature === "" ? null : Number(temperature),
@@ -195,6 +197,16 @@ export function ExperimentPage() {
           </select>
         </Field>
       </div>
+      <Field label="Semantic order">
+        <select className="field" value={semanticMode} onChange={(event) => setSemanticMode(event.target.value)}>
+          {SEMANTIC_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <span className="text-xs text-[var(--muted)]">
+          {semanticMode === "grounded"
+            ? "Two semantic calls: one names objects, and one interprets actions and workflow after tracking and segmentation are resolved."
+            : "One semantic call interprets everything before segmentation. Evidence fusion then resolves geometry without another call."}
+        </span>
+      </Field>
       <SettingsFieldset legend="Segmentation and tracking">
         <p className="text-xs text-[var(--muted)]">
           The primary model interprets the scene, actions, and workflow. The segmentation model only supplies boxes, masks, and tracks. It does not decide whether a step was completed.

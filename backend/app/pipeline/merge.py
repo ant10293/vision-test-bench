@@ -67,6 +67,28 @@ def retain_prior_records(incoming: AnalysisDocument, prior: AnalysisDocument) ->
         previous = getattr(prior, name)
         if not current and previous:
             update[name] = list(previous)
+    if any(item.observation_role for item in prior.observations):
+        # Evidence fusion already resolved geometry. A later stage may add raw
+        # estimates and semantic lists; it does not replace objects or boxes.
+        known_ids = {item.local_id for item in prior.objects}
+        later = [
+            item.model_copy(
+                update={
+                    "observation_role": "raw",
+                    "geometry_origin": "vlm_estimated" if item.bbox is not None else "unobserved",
+                    "geometry_authority": "vlm_later_stage",
+                    "detection_support": "none",
+                }
+            )
+            for item in incoming.observations
+            if item.object_local_id in known_ids and not item.observation_role
+        ]
+        kept_raw = [item for item in prior.raw_observations if item.geometry_authority != "vlm_later_stage"]
+        update["objects"] = list(prior.objects)
+        update["observations"] = list(prior.observations)
+        update["raw_observations"] = kept_raw + later
+        update["perception"] = prior.perception
+        return incoming.model_copy(update=update)
     objects = list(update.get("objects", incoming.objects))
     if incoming.objects and prior.objects:
         incoming_ids = {item.local_id for item in incoming.objects}
@@ -84,6 +106,47 @@ def retain_prior_records(incoming: AnalysisDocument, prior: AnalysisDocument) ->
     if not update:
         return incoming
     return incoming.model_copy(update=update)
+
+
+_RESOLVED_AMBIGUITY = ("resolve_", "sam_", "ground_")
+
+
+def merge_interpretation(base: AnalysisDocument, proposed: AnalysisDocument) -> AnalysisDocument:
+    """Take semantic lists from a grounded interpretation call and keep resolved geometry.
+
+    Objects, the display set, and perception come from `base`. Boxes the call
+    returned are kept as raw estimates tagged ``vlm_interpretation`` and are
+    replaced on retry. Ambiguities from resolution, SAM, and grounding stay.
+    """
+    known = {item.local_id for item in base.objects}
+    raw = [item for item in base.raw_observations if item.geometry_authority != "vlm_interpretation"]
+    raw += [
+        item.model_copy(
+            update={
+                "observation_role": "raw",
+                "geometry_origin": "vlm_estimated" if item.bbox is not None else "unobserved",
+                "geometry_authority": "vlm_interpretation",
+                "detection_support": "none",
+            }
+        )
+        for item in proposed.observations
+        if item.object_local_id in known
+    ]
+    kept_ambiguities = [item for item in base.ambiguities if item.local_id.startswith(_RESOLVED_AMBIGUITY)]
+    proposed_ambiguities = [item for item in proposed.ambiguities if not item.local_id.startswith(_RESOLVED_AMBIGUITY)]
+    return base.model_copy(
+        update={
+            "summary": proposed.summary or base.summary,
+            "actions": list(proposed.actions),
+            "states": list(proposed.states),
+            "transitions": list(proposed.transitions),
+            "relationships": list(proposed.relationships),
+            "workflow_steps": list(proposed.workflow_steps),
+            "dependencies": list(proposed.dependencies),
+            "ambiguities": kept_ambiguities + proposed_ambiguities,
+            "raw_observations": raw,
+        }
+    )
 
 
 def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDocument]) -> AnalysisDocument:

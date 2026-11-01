@@ -19,6 +19,7 @@ from app.video.sampling import MotionSignal
 
 
 def characterize(signals: list[MotionSignal], declared_mode: str) -> dict:
+    """Camera profile from motion signals. Only confirmed hard cuts count as scene changes."""
     globals_ = [item.global_motion for item in signals[1:]] or [0.0]
     median_global = float(np.median(globals_))
     scene_changes = sum(1 for item in signals if item.scene_change)
@@ -59,10 +60,23 @@ def analyze_sequence(
     encoder=None,
     cache_dir: Path | None = None,
     should_stop=None,
+    *,
+    views=None,
+    profile_signals: list[MotionSignal] | None = None,
 ) -> SpatialReport:
-    """Track one frame at a time. Images are not retained after each step."""
+    """Track one frame at a time. Images are not retained after each step.
+
+    `views` replaces `paths` with a streamed frame source. `profile_signals`
+    characterizes the camera when the tracked frames are not known in advance.
+    """
     resolved = config if isinstance(config, PerceptionConfig) else config_from_mapping(config if isinstance(config, dict) else None)
-    profile = characterize(signals, declared_mode)
+    profile = characterize(profile_signals if profile_signals is not None else signals, declared_mode)
+    if views is not None and resolved.strategy in {"legacy_motion", "vlm_only"} and detector is None:
+        frames = list(views)
+        points, compensated, chunks = run_legacy(frames, profile["research_mode"])
+        notes = _legacy_notes(profile, compensated, resolved.strategy)
+        perception = _legacy_perception(points, resolved, len(frames), notes)
+        return _report(profile, compensated, "affine_partial" if compensated else "none", notes, points, chunks, perception)
     if resolved.strategy in {"legacy_motion", "vlm_only"} and detector is None:
         frames = list(_views(paths, timestamps, signals))
         points, compensated, chunks = run_legacy(frames, profile["research_mode"])
@@ -84,7 +98,9 @@ def analyze_sequence(
             encoder = load_encoder(resolved.encoder)
         except EncoderUnavailable as exc:
             encoder = _UnavailableEncoder(resolved.encoder, str(exc))
-    views, chunks = _streaming_views(paths, timestamps, signals)
+    if views is None:
+        views = _views(paths, timestamps, signals)
+    views, chunks = _scene_chunks(views)
     result = track_frames(
         views,
         config=resolved,
@@ -134,11 +150,12 @@ def _views(paths: list[Path], timestamps: list[float], signals: list[MotionSigna
         del image
 
 
-def _streaming_views(paths: list[Path], timestamps: list[float], signals: list[MotionSignal]):
+def _scene_chunks(views):
+    """Scene chunks start only at confirmed hard cuts, never at a processing chunk edge."""
     chunks: list[dict] = []
 
     def generate():
-        for frame in _views(paths, timestamps, signals):
+        for frame in views:
             if not chunks:
                 chunks.append(
                     {

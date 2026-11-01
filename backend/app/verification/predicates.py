@@ -331,7 +331,9 @@ def _visible_evidence(execution, object_ids: set[str], window, video_id: str) ->
     for observation in execution.observations:
         if not _is_visible(observation, object_ids, window):
             continue
-        bbox = observation.bbox.model_dump() if observation.bbox is not None else None
+        # The model saw the anchor, but its box is an estimate and is not cited as a measurement.
+        measured = observation.bbox is not None and observation.geometry_origin != "vlm_estimated"
+        bbox = observation.bbox.model_dump() if measured else None
         evidence.append(
             EvidenceRef(
                 video_id=video_id,

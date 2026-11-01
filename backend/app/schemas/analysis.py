@@ -71,6 +71,28 @@ class Coverage(BaseModel):
     duration_sec: float = 0
     native_video_submitted: bool = False
     temporal_coverage_note: str = ""
+    # Everything below is empty on documents written before the source timeline.
+    time_start: float | None = None
+    time_end: float | None = None
+    # "presentation" when frame times came from the file, "container" when estimated.
+    time_basis: str = ""
+    # Largest unexamined stretch between frames the semantic model received.
+    max_gap_sec: float | None = None
+    uncovered_gaps: list[list[float]] = Field(default_factory=list)
+    motion_frames: int = 0
+    candidate_peaks: list[float] = Field(default_factory=list)
+    selected_peaks: list[float] = Field(default_factory=list)
+    budget_exclusions: int = 0
+    scene_boundaries: list[dict] = Field(default_factory=list)
+    # "provisional" until tracking has run, then "final".
+    semantic_selection: str = ""
+    selection_swaps: list[dict] = Field(default_factory=list)
+    # "combined" or "grounded". Calls counts language-model requests for semantics.
+    semantic_mode: str = ""
+    semantic_calls: int | None = None
+    tracking: dict = Field(default_factory=dict)
+    segmentation: dict = Field(default_factory=dict)
+    media_transforms: list[dict] = Field(default_factory=list)
 
 
 class ObjectPrediction(BaseModel):
@@ -86,6 +108,13 @@ class ObjectPrediction(BaseModel):
     accepted: bool = True
     instance_id: str | None = None
     identity_relation: str | None = None
+    # How the object was bound to a physical instance. Empty on older documents.
+    # "associated" needs repeated overlap on shared times; "referenced" means the
+    # model named a tracked id it was shown; "ambiguous", "weak", and
+    # "unmatched" leave instance_id unset unless the model named one.
+    association_status: str = ""
+    association_score: float | None = None
+    association_rivals: list[str] = Field(default_factory=list)
 
 
 class ObservationPrediction(BaseModel):
@@ -109,6 +138,30 @@ class ObservationPrediction(BaseModel):
     source_model: str = ""
     request_id: str = ""
     mask_ref: str = ""
+    # Evidence resolution. Every field below is empty on older documents, which
+    # still display as they were stored.
+    # "raw" is one producer's output. "canonical" is the resolved geometry for
+    # an instance at one time.
+    observation_role: str = ""
+    # "detected", "optical_flow", "vlm_estimated", or "unobserved".
+    geometry_origin: str = ""
+    # The component that produced the box: a detector id, "sam-3.1", "vlm", or "human".
+    geometry_authority: str = ""
+    # Separate uncertainties. None of them is a probability.
+    # detection: "proposal", "detected", "mask", or "none". Flow is not a detection.
+    detection_support: str = ""
+    # association to a physical instance: "unmatched", "weak", "ambiguous", "referenced", "associated".
+    association_support: str = ""
+    # "single", "repeated", "flow_only", or "broken".
+    temporal_support: str = ""
+    # "unlabeled", "provisional", or "labeled". A label is not an identity.
+    semantic_support: str = ""
+    # Pixel size of the displayed frame the box was measured in. The box itself
+    # stays normalized to the displayed frame.
+    source_width: int | None = None
+    source_height: int | None = None
+    # Stable reference to the raw row a canonical row was resolved from.
+    evidence_ref: str = ""
 
 
 class StatePrediction(BaseModel):
@@ -294,7 +347,11 @@ class AnalysisDocument(BaseModel):
     camera: CameraAssessment | None = None
     coverage: Coverage | None = None
     objects: list[ObjectPrediction] = Field(default_factory=list)
+    # The resolved display set. Every consumer reads this list.
     observations: list[ObservationPrediction] = Field(default_factory=list)
+    # Producer outputs that the resolver did not display: superseded model
+    # estimates, unassociated or conflicting segmentation. Kept for inspection.
+    raw_observations: list[ObservationPrediction] = Field(default_factory=list)
     states: list[StatePrediction] = Field(default_factory=list)
     transitions: list[TransitionPrediction] = Field(default_factory=list)
     relationships: list[RelationshipPrediction] = Field(default_factory=list)

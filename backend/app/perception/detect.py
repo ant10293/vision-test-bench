@@ -9,6 +9,20 @@ from app.perception.assignment import iou
 from app.perception.camera import compensate
 from app.perception.types import Detection, DetectionContext, DetectorUnavailable
 
+# What each detector's hits are evidence of. Motion and MSER regions are
+# candidate regions; the resolver never makes one canonical geometry. A human
+# box is a detection. Flow holds are not detections at all. A detector that is
+# not listed here is treated as a proposal source.
+DETECTOR_EVIDENCE = {
+    "motion": "proposal",
+    "proposals": "proposal",
+    "grabcut": "proposal",
+    "manual": "detected",
+    "human": "detected",
+    "sam-3.1": "mask",
+    "optical_flow": "none",
+}
+
 
 def _blobs(mask: np.ndarray, limit: int = 8) -> list[tuple[int, int, int, int]]:
     contours, _hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)

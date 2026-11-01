@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from app.perception.assignment import iou
 from app.providers.sam import (
     MAX_PROMPTED_OBJECTS,
     SpatialMark,
@@ -87,7 +86,6 @@ class TrackAssociation:
     margin: float | None
     rivals: list[str] = field(default_factory=list)
     note: str = ""
-    replaces_box: bool = False
 
     @property
     def scoped_id(self) -> str:
@@ -149,18 +147,54 @@ def plan_prompts(
     return plans
 
 
+def reference_boxes(
+    document: AnalysisDocument, spatial: AnalysisDocument | None = None
+) -> dict[str, list[tuple[float, tuple[float, float, float, float]]]]:
+    """Boxes that stand for each object when a SAM track is matched to it.
+
+    Repeated tracker detections of the object's bound instance come first.
+    The model's own estimates are used where no measurement exists. SAM rows
+    and flow holds are never references.
+    """
+    from app.perception.resolve import is_estimate
+
+    refs: dict[str, list] = {}
+    measured: set[str] = set()
+    if spatial is not None:
+        owners = {obj.instance_id: obj.local_id for obj in document.objects if obj.instance_id}
+        for row in spatial.observations:
+            owner = owners.get(row.track_ref or "")
+            if owner is None or row.bbox is None or row.geometry_origin == "optical_flow":
+                continue
+            refs.setdefault(owner, []).append((row.timestamp, _tuple(row.bbox)))
+            measured.add(owner)
+    for row in [*document.observations, *document.raw_observations]:
+        if row.bbox is None or not is_estimate(row) or row.object_local_id in measured:
+            continue
+        refs.setdefault(row.object_local_id, []).append((row.timestamp, _tuple(row.bbox)))
+    return refs
+
+
 def associate_tracks(
     document: AnalysisDocument,
     samples: list[TrackSample],
     *,
     scene_boundaries: list[float] | None = None,
+    spatial: AnalysisDocument | None = None,
 ) -> list[TrackAssociation]:
-    """Link a track to an object by overlap, prompted id, and uniqueness.
+    """Link each SAM track to at most one object by temporal box overlap.
 
-    Matching labels are ignored. Two similar parts stay separate unless their
-    boxes agree. A close score keeps both candidates instead of picking one.
+    Matching runs inside one SAM response, so a raw id never crosses a
+    session. A concept prompt limits the candidates to the objects that noun
+    was asked for; the noun is not evidence of which one. A prompted point
+    binds its object unless the track contradicts it. Confidence and the
+    nearest leftover center are not used. A close rival leaves the track
+    unassigned.
     """
+    from app.perception.associate import associate, pair_stats
+
     del scene_boundaries  # gaps are recorded in the summary; they do not force a match
+    references = reference_boxes(document, spatial)
     grouped: dict[tuple[str, str], list[TrackSample]] = {}
     for sample in samples:
         grouped.setdefault((sample.session_id, sample.raw_track_id), []).append(sample)
@@ -170,112 +204,81 @@ def associate_tracks(
 
     associations: list[TrackAssociation] = []
     for session_id, tracks in by_session.items():
-        concept = _concept_associations(document, session_id, tracks)
-        if concept is not None:
-            associations.extend(concept)
-            continue
-        claimed: set[str] = set()
-        scored: list[tuple[float, float, str, str, list[str], str]] = []
+        open_tracks: dict[str, list] = {}
+        allowed: set[str] = set()
+        bound_targets: set[str] = set()
         for raw_id, rows in tracks:
+            boxes = [(row.timestamp, _tuple(row.bbox)) for row in rows]
             binding = next((row.bound_object_id for row in rows if row.bound_object_id), "")
-            ranking = _rank_objects(document, rows, binding)
-            if binding and ranking and ranking[0][1] < CONFLICT_IOU:
-                associations.append(
-                    TrackAssociation(
-                        session_id,
-                        raw_id,
-                        binding,
-                        "conflict",
-                        ranking[0][1],
-                        None,
-                        rivals=[binding],
-                        note=(
-                            "The prompted object did not overlap this track. "
-                            "The track was kept as a conflict and was not forced onto the object."
-                        ),
+            if binding:
+                pair = pair_stats(boxes, references.get(binding, []))
+                if pair.shared and pair.score < CONFLICT_IOU:
+                    associations.append(
+                        TrackAssociation(
+                            session_id,
+                            raw_id,
+                            binding,
+                            "conflict",
+                            pair.score,
+                            None,
+                            rivals=[binding],
+                            note=(
+                                "The prompted object did not overlap this track. "
+                                "The track was kept as a conflict and was not forced onto the object."
+                            ),
+                        )
                     )
-                )
-                continue
-            if not ranking:
-                associations.append(
-                    TrackAssociation(
-                        session_id,
-                        raw_id,
-                        None,
-                        "unassigned",
-                        0.0,
-                        None,
-                        note="No spatial overlap linked this track to a known object. The label was not used.",
+                else:
+                    bound_targets.add(binding)
+                    associations.append(
+                        TrackAssociation(
+                            session_id,
+                            raw_id,
+                            binding,
+                            "associated",
+                            pair.score,
+                            None,
+                            rivals=[binding],
+                            note="SAM tracked the point it was prompted with for this object.",
+                        )
                     )
-                )
                 continue
-            best_id, best_score = ranking[0]
-            second = ranking[1][1] if len(ranking) > 1 else 0.0
-            margin = best_score - second
-            rivals = [item[0] for item in ranking[:3]]
-            scored.append((best_score, margin, raw_id, best_id, rivals, binding))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        for best_score, margin, raw_id, best_id, rivals, binding in scored:
-            if best_score < ACCEPT_IOU:
-                status = "ambiguous" if best_score > 0 and margin < MARGIN else "unassigned"
-                associations.append(
-                    TrackAssociation(
-                        session_id,
-                        raw_id,
-                        None if status != "ambiguous" else None,
-                        status,
-                        best_score,
-                        margin,
-                        rivals=rivals,
-                        note=_ambiguous_note(rivals, binding, best_score),
-                    )
-                )
-                continue
-            if margin < MARGIN and not binding:
-                associations.append(
-                    TrackAssociation(
-                        session_id,
-                        raw_id,
-                        None,
-                        "ambiguous",
-                        best_score,
-                        margin,
-                        rivals=rivals,
-                        note="Competing objects overlap this track. Neither was selected.",
-                    )
-                )
-                continue
-            if best_id in claimed:
-                associations.append(
-                    TrackAssociation(
-                        session_id,
-                        raw_id,
-                        None,
-                        "ambiguous",
-                        best_score,
-                        margin,
-                        rivals=rivals,
-                        note=(
-                            f"{best_id} already has a track in this SAM response. "
-                            "A second track was not merged into it."
-                        ),
-                    )
-                )
-                continue
-            claimed.add(best_id)
+            open_tracks[raw_id] = boxes
+            for row in rows:
+                allowed.update(row.candidates)
+        candidates = {
+            local_id: rows
+            for local_id, rows in references.items()
+            if local_id not in bound_targets and (not allowed or local_id in allowed)
+        }
+        links, _stats = associate(open_tracks, candidates, accept=ACCEPT_IOU, margin=MARGIN)
+        for link in links:
+            status = {"unmatched": "unassigned"}.get(link.status, link.status)
             associations.append(
                 TrackAssociation(
                     session_id,
-                    raw_id,
-                    best_id,
-                    "associated",
-                    best_score,
-                    margin,
-                    rivals=rivals,
-                    note="Linked by spatiotemporal overlap inside one SAM response.",
+                    link.subject,
+                    link.candidate,
+                    status,
+                    link.score,
+                    link.margin,
+                    rivals=link.rivals,
+                    note=_link_note(link),
                 )
             )
     return associations
+
+
+def _link_note(link) -> str:
+    if link.status == "associated":
+        return f"Linked by box overlap {link.score:.2f} on {link.shared} shared times inside one SAM response."
+    if link.status == "weak":
+        return "Only one shared time overlapped. The track was not assigned on a single frame."
+    if link.status == "ambiguous":
+        return "Competing objects overlap this track. Neither was selected."
+    if link.rivals:
+        return "Overlap was too weak to assign this track. Labels and confidence were not used."
+    return "No spatial overlap linked this track to a known object. The label was not used."
 
 
 def fuse_geometry(
@@ -289,6 +292,7 @@ def fuse_geometry(
     """Add SAM boxes beside existing evidence. Do not delete a stronger observation."""
     lookup = {(item.session_id, item.raw_track_id): item for item in associations}
     kept = [item for item in document.observations if item.source_model != "sam-3.1"]
+    kept_raw = [item for item in document.raw_observations if item.source_model != "sam-3.1"]
     ambiguities = [item for item in document.ambiguities if not item.local_id.startswith("sam_")]
     added: list[ObservationPrediction] = []
     extra_ambiguities: list[AmbiguityPrediction] = []
@@ -299,7 +303,7 @@ def fuse_geometry(
             continue
         if association.status not in {"associated", "conflict"}:
             continue
-        status, continuity, note = _placement(kept, association, sample, boundaries)
+        status, continuity, note = _placement(association, sample, boundaries)
         added.append(
             ObservationPrediction(
                 object_local_id=association.object_local_id,
@@ -320,6 +324,14 @@ def fuse_geometry(
                 source_model="sam-3.1",
                 request_id=sample.request_id,
                 mask_ref=sample.mask_ref,
+                observation_role="raw",
+                geometry_origin="detected",
+                geometry_authority="sam-3.1",
+                detection_support="mask" if (sample.mask_ref or sample.mask_data or sample.mask_payload) else "detected",
+                association_support="associated" if status == "associated" else "conflict",
+                semantic_support="provisional",
+                source_width=sample.source_width or None,
+                source_height=sample.source_height or None,
             )
         )
         if status == "conflict":
@@ -399,6 +411,7 @@ def fuse_geometry(
     return document.model_copy(
         update={
             "observations": observations,
+            "raw_observations": kept_raw,
             "ambiguities": ambiguities + extra_ambiguities,
             "perception": perception,
         }
@@ -460,9 +473,19 @@ def prompt_prior(document: AnalysisDocument) -> str:
     A tracked clip can hold thousands of boxes. Those stay in the stored
     document. The call gets the reasoning-model records plus the short SAM summary.
     """
+    canonical_sam: dict[str, list[ObservationPrediction]] = {}
+    for item in document.observations:
+        if item.source_model == "sam-3.1" and item.observation_role == "canonical":
+            canonical_sam.setdefault(item.object_local_id, []).append(item)
+    sampled = [
+        rows[index]
+        for rows in canonical_sam.values()
+        for index in sorted({round(i * (len(rows) - 1) / 7) for i in range(8)} if len(rows) > 8 else range(len(rows)))
+    ]
     compact = document.model_copy(
         update={
-            "observations": [item for item in document.observations if item.source_model != "sam-3.1"],
+            "raw_observations": [],
+            "observations": [item for item in document.observations if item.source_model != "sam-3.1"] + sampled,
             "ambiguities": [item for item in document.ambiguities if not item.local_id.startswith("sam_")],
         }
     )
@@ -523,133 +546,6 @@ def _concept_noun(label: str) -> str:
     return noun or text
 
 
-def _concept_associations(
-    document: AnalysisDocument,
-    session_id: str,
-    tracks: list[tuple[str, list[TrackSample]]],
-) -> list[TrackAssociation] | None:
-    """Give each prompted object the SAM instance of its noun.
-
-    Overlap with the reasoning model's box is not required. That box is what
-    was wrong. Extra instances of the same noun stay unassigned.
-    """
-    if not any(row.prompt_kind == "concept" for _, rows in tracks for row in rows):
-        return None
-    targets: list[str] = []
-    for _, rows in tracks:
-        for row in rows:
-            for local_id in row.candidates:
-                if local_id not in targets:
-                    targets.append(local_id)
-    note = "SAM found this part from its noun. The reasoning model's box was not the prompt."
-    if len(targets) <= 1:
-        target = targets[0] if targets else None
-        ranked = sorted(tracks, key=lambda item: _mean_confidence(item[1]), reverse=True)
-        linked: list[TrackAssociation] = []
-        for index, (raw_id, _rows) in enumerate(ranked):
-            if index == 0 and target:
-                linked.append(
-                    TrackAssociation(
-                        session_id,
-                        raw_id,
-                        target,
-                        "associated",
-                        1.0,
-                        None,
-                        rivals=[target],
-                        note=note,
-                        replaces_box=True,
-                    )
-                )
-            else:
-                linked.append(
-                    TrackAssociation(
-                        session_id,
-                        raw_id,
-                        None,
-                        "unassigned",
-                        0.0,
-                        None,
-                        note="Another instance of this noun was not merged into the prompted object.",
-                    )
-                )
-        return linked
-    pairs: list[tuple[float, str, str]] = []
-    for raw_id, rows in tracks:
-        center = _mean_center(rows)
-        for target in targets:
-            sighting = _vlm_center(document, target)
-            distance = 1e9 if sighting is None else _distance(center, sighting)
-            pairs.append((distance, raw_id, target))
-    pairs.sort(key=lambda item: item[0])
-    used_tracks: set[str] = set()
-    used_targets: set[str] = set()
-    linked = []
-    for _gap, raw_id, target in pairs:
-        if raw_id in used_tracks or target in used_targets:
-            continue
-        used_tracks.add(raw_id)
-        used_targets.add(target)
-        linked.append(
-            TrackAssociation(
-                session_id,
-                raw_id,
-                target,
-                "associated",
-                1.0,
-                None,
-                rivals=[target],
-                note=note,
-                replaces_box=True,
-            )
-        )
-    for raw_id, _rows in tracks:
-        if raw_id in used_tracks:
-            continue
-        linked.append(
-            TrackAssociation(
-                session_id,
-                raw_id,
-                None,
-                "unassigned",
-                0.0,
-                None,
-                note="Another instance of this noun was not merged into a prompted object.",
-            )
-        )
-    return linked
-
-
-def _mean_confidence(rows: list[TrackSample]) -> float:
-    scores = [row.confidence for row in rows if row.confidence is not None]
-    if not scores:
-        return 0.0
-    return sum(scores) / len(scores)
-
-
-def _mean_center(rows: list[TrackSample]) -> tuple[float, float]:
-    xs = [row.bbox.x + row.bbox.w / 2 for row in rows]
-    ys = [row.bbox.y + row.bbox.h / 2 for row in rows]
-    return sum(xs) / len(xs), sum(ys) / len(ys)
-
-
-def _vlm_center(document: AnalysisDocument, local_id: str) -> tuple[float, float] | None:
-    boxes = [
-        item.bbox
-        for item in document.observations
-        if item.object_local_id == local_id and item.bbox is not None and item.source_model != "sam-3.1"
-    ]
-    if not boxes:
-        return None
-    xs = [box.x + box.w / 2 for box in boxes]
-    ys = [box.y + box.h / 2 for box in boxes]
-    return sum(xs) / len(xs), sum(ys) / len(ys)
-
-
-def _distance(left: tuple[float, float], right: tuple[float, float]) -> float:
-    return ((left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2) ** 0.5
-
-
 def _mark(frame: int, object_id: int, box: BBox, width: int, height: int) -> SpatialMark:
     """Prompt with the center of the sighting, not the rectangle itself."""
     x = min(max(int(round((box.x + box.w / 2) * width)), 0), max(width - 1, 0))
@@ -665,69 +561,16 @@ def _mark(frame: int, object_id: int, box: BBox, width: int, height: int) -> Spa
     )
 
 
-def _rank_objects(document: AnalysisDocument, rows: list[TrackSample], binding: str) -> list[tuple[str, float]]:
-    if binding:
-        score = _overlap(document, binding, rows)
-        return [(binding, score)]
-    scores = []
-    for obj in document.objects:
-        score = _overlap(document, obj.local_id, rows)
-        if score > 0:
-            scores.append((obj.local_id, score))
-    scores.sort(key=lambda item: item[1], reverse=True)
-    return scores
-
-
-def _overlap(document: AnalysisDocument, local_id: str, rows: list[TrackSample]) -> float:
-    hits = []
-    for sample in rows:
-        boxes = [
-            item.bbox
-            for item in document.observations
-            if item.object_local_id == local_id
-            and item.bbox is not None
-            and item.source_model != "sam-3.1"
-            and abs(item.timestamp - sample.timestamp) <= TIME_WINDOW
-        ]
-        if not boxes:
-            continue
-        hits.append(max(iou(_tuple(sample.bbox), _tuple(box)) for box in boxes))
-    if not hits:
-        return 0.0
-    return sum(hits) / len(hits)
-
-
-def _placement(existing, association: TrackAssociation, sample: TrackSample, boundaries: list[float]):
-    status = association.status
+def _placement(association: TrackAssociation, sample: TrackSample, boundaries: list[float]):
+    """Continuity for one SAM sample. A model estimate never demotes a SAM row; the resolver decides."""
     continuity = Continuity.CONTINUOUS
     note = association.note
-    if association.replaces_box:
-        if _crosses(sample.timestamp, boundaries):
-            continuity = Continuity.UNCERTAIN
-            note += " A scene boundary is nearby, so this sighting was not treated as continuous."
-        return status, continuity, note.strip()
-    for item in existing:
-        if item.object_local_id != association.object_local_id or item.bbox is None:
-            continue
-        if abs(item.timestamp - sample.timestamp) > TIME_WINDOW:
-            continue
-        if item.evidence.classification != EvidenceClass.DIRECTLY_OBSERVED:
-            continue
-        if item.evidence.provenance == Provenance.CV_DETECTION:
-            continue
-        overlap = iou(_tuple(item.bbox), _tuple(sample.bbox))
-        if overlap < CONFLICT_IOU:
-            status = "conflict"
-            continuity = Continuity.UNCERTAIN
-            note = (
-                "SAM box conflicts with a directly observed box. The observed box was kept "
-                "and this box was stored beside it."
-            )
-            break
+    if association.status == "conflict":
+        continuity = Continuity.UNCERTAIN
     if _crosses(sample.timestamp, boundaries):
         continuity = Continuity.UNCERTAIN
         note += " A scene boundary is nearby, so this sighting was not treated as continuous."
-    return status, continuity, note.strip()
+    return association.status, continuity, note.strip()
 
 
 def _crosses(timestamp: float, boundaries: list[float]) -> bool:
@@ -799,17 +642,6 @@ def _perception(document: AnalysisDocument, associations: list[TrackAssociation]
             "scores_are_probabilities": False,
         }
     )
-
-
-def _ambiguous_note(rivals: list[str], binding: str, score: float) -> str:
-    if binding and score < ACCEPT_IOU:
-        return (
-            f"The prompted object {binding} did not overlap the returned track "
-            f"(overlap {score:.2f}). It was not forced."
-        )
-    if rivals:
-        return "Overlap was too weak or too close to assign this track. Labels were not compared."
-    return "No spatial overlap linked this track to a known object."
 
 
 def _tuple(box: BBox) -> tuple[float, float, float, float]:

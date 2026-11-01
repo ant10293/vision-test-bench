@@ -194,32 +194,57 @@ def test_prompts_name_the_part_instead_of_pointing_at_a_box():
     assert wheel_plans[0].targets == ["Object_3", "Object_4"]
 
 
-def test_a_concept_track_keeps_its_box_when_the_reasoning_box_disagrees():
+def _two_time_document() -> AnalysisDocument:
     document = _document()
-    sample = _sample("c0s0", "1", 0.7, 0.7)
+    later = [
+        item.model_copy(update={"timestamp": 2.0})
+        for item in document.observations
+    ]
+    return document.model_copy(update={"observations": [*document.observations, *later]})
+
+
+def _concept(sample: TrackSample, *targets: str, confidence: float = 0.8) -> TrackSample:
     sample.prompt_kind = "concept"
-    sample.candidates = ("Object_1",)
-    linked = associate_tracks(document, [sample])
-    assert linked[0].status == "associated"
-    assert linked[0].object_local_id == "Object_1"
-    assert linked[0].replaces_box is True
-    fused = fuse_geometry(document, [sample], linked)
-    sam = [item for item in fused.observations if item.source_model == "sam-3.1"]
-    assert sam and sam[0].association_status == "associated"
+    sample.candidates = targets
+    sample.confidence = confidence
+    return sample
 
 
-def test_shared_noun_tracks_go_to_the_nearer_object():
+def test_a_concept_track_is_not_forced_onto_a_disagreeing_object():
     document = _document()
-    left = _sample("c0s0", "1", 0.1, 0.1)
-    right = _sample("c0s0", "2", 0.7, 0.7)
-    for sample in (left, right):
-        sample.prompt_kind = "concept"
-        sample.candidates = ("Object_1", "Object_2")
-    linked = {item.raw_track_id: item for item in associate_tracks(document, [left, right])}
+    sample = _concept(_sample("c0s0", "1", 0.7, 0.7), "Object_1")
+    linked = associate_tracks(document, [sample])
+    assert linked[0].status == "unassigned"
+    assert linked[0].object_local_id is None
+    fused = fuse_geometry(document, [sample], linked)
+    assert not [item for item in fused.observations if item.source_model == "sam-3.1"]
+
+
+def test_shared_noun_tracks_assign_by_repeated_overlap_not_confidence():
+    document = _two_time_document()
+    samples = [
+        _concept(_sample("c0s0", "1", 0.1, 0.1, timestamp=t), "Object_1", "Object_2", confidence=0.2)
+        for t in (1.0, 2.0)
+    ] + [
+        _concept(_sample("c0s0", "2", 0.7, 0.7, timestamp=t), "Object_1", "Object_2", confidence=0.99)
+        for t in (1.0, 2.0)
+    ]
+    linked = {item.raw_track_id: item for item in associate_tracks(document, samples)}
     assert linked["1"].object_local_id == "Object_1"
     assert linked["2"].object_local_id == "Object_2"
-    assert linked["1"].replaces_box is True
-    assert linked["2"].replaces_box is True
+    assert {linked["1"].status, linked["2"].status} == {"associated"}
+    fused = fuse_geometry(document, samples, list(linked.values()))
+    sam = [item for item in fused.observations if item.source_model == "sam-3.1"]
+    assert {item.association_support for item in sam} == {"associated"}
+    assert all(item.geometry_authority == "sam-3.1" for item in sam)
+
+
+def test_one_shared_frame_is_weak_and_does_not_bind():
+    document = _document()
+    sample = _concept(_sample("c0s0", "1", 0.1, 0.1), "Object_1", "Object_2")
+    linked = associate_tracks(document, [sample])
+    assert linked[0].status == "weak"
+    assert linked[0].object_local_id is None
 
 
 def test_similar_objects_are_not_merged_by_label():
@@ -233,10 +258,10 @@ def test_similar_objects_are_not_merged_by_label():
     assert linked["2"].object_local_id == "Object_2"
     assert linked["1"].status == "associated"
     crowded = associate_tracks(
-        document,
+        _two_time_document(),
         [
-            _sample("c0s0", "1", 0.1, 0.1),
-            _sample("c0s0", "2", 0.12, 0.12),
+            *(_sample("c0s0", "1", 0.1, 0.1, timestamp=t) for t in (1.0, 2.0)),
+            *(_sample("c0s0", "2", 0.12, 0.12, timestamp=t) for t in (1.0, 2.0)),
         ],
     )
     statuses = {item.status for item in crowded}

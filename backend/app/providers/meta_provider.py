@@ -107,7 +107,8 @@ class MetaProvider:
             }
         started = time.perf_counter()
         try:
-            response = await self._client(secret, provider_timeout(request.timeout_s)).responses.create(**kwargs)
+            async with self._client(secret, provider_timeout(request.timeout_s)) as client:
+                response = await client.responses.create(**kwargs)
         except UnsupportedMode:
             raise
         except Exception as exc:
@@ -136,10 +137,10 @@ class MetaProvider:
                 {"type": "input_text", "text": request.user_prompt},
                 {"type": "input_video", "video_url": data_url(request.video_path, "video/mp4")},
             ]
-        client = self._client(secret, provider_timeout(request.timeout_s))
         try:
-            with request.video_path.open("rb") as handle:
-                uploaded = await client.files.create(file=handle, purpose="user_data")
+            async with self._client(secret, provider_timeout(request.timeout_s)) as client:
+                with request.video_path.open("rb") as handle:
+                    uploaded = await client.files.create(file=handle, purpose="user_data")
         except Exception as exc:
             raise translate(exc) from exc
         return [

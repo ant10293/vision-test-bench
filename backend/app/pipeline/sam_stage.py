@@ -33,6 +33,7 @@ from app.perception.sam_fusion import (
 )
 from app.perception.sam_masks import materialize_record
 from app.pipeline.infer import load_working, save_working
+from app.pipeline.sampling_stage import timeline_for
 from app.providers.catalog import lookup
 from app.providers.sam import (
     DEFAULT_CHUNK_FRAMES,
@@ -124,10 +125,13 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
     _clear_sam_rows(session, run)
     document = load_working(run.id)
     source = resolve_stored(video.stored_path)
-    prepared, transform = _prepare_media(source, run.id)
+    prepared, transform = _prepare_media(source, run.id, int(video.rotation_deg or 0))
     metadata = probe(prepared)
     fps = float(metadata.avg_fps or metadata.fps or video.avg_fps or video.fps or 0)
-    frame_count = int(metadata.frame_count or video.frame_count or 0)
+    timeline = timeline_for(video, run.config_json)
+    interval_times = timeline.inside() if timeline.basis == "presentation" else []
+    whole = timeline.start <= 1e-3 and timeline.end >= float(video.duration_sec or 0) - 1e-3
+    frame_count = len(interval_times) or int(metadata.frame_count or video.frame_count or 0)
     max_frames = int((run.config_json or {}).get("sam_max_frames") or 1800)
     chunk_frames = int((run.config_json or {}).get("sam_chunk_frames") or DEFAULT_CHUNK_FRAMES)
     if 0 < frame_count <= max_frames:
@@ -136,29 +140,38 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
         frame_count,
         fps,
         chunk_frames=chunk_frames,
-        duration_sec=float(metadata.duration_sec or video.duration_sec or 0),
+        duration_sec=timeline.span or float(metadata.duration_sec or video.duration_sec or 0),
+        frame_times=interval_times,
     )
+    if not interval_times and timeline.start > 0:
+        for chunk in chunks:
+            chunk.time_start += timeline.start
+            chunk.time_end += timeline.start
     width = int(metadata.display_width or video.display_width or metadata.width)
     height = int(metadata.display_height or video.display_height or metadata.height)
     samples: list[TrackSample] = []
     calls = 0
     submitted_frames = 0
-    skipped = []
+    skipped: list[str] = []
+    skipped_spans: list[dict] = []
     failure: Exception | None = None
     max_requests = _max_requests(run)
     file_ids: dict[str, str] = {}
     for chunk in chunks:
         plans = plan_prompts(document, chunk, width, height, fps)
         if not plans:
+            skipped_spans.append(_skip(chunk, "no_concepts"))
             continue
         if calls and submitted_frames + chunk.frame_count > max_frames:
             skipped.extend(plan.session_id for plan in plans)
+            skipped_spans.append(_skip(chunk, "frame_budget"))
             continue
-        media = _chunk_media(prepared, chunk, chunks, run.id, fps)
+        media = _chunk_media(prepared, chunk, chunks, run.id, fps, whole=whole)
         counted = False
         for plan in plans:
             if calls >= max_requests:
                 skipped.append(plan.session_id)
+                skipped_spans.append(_skip(chunk, "request_budget", plan.session_id))
                 continue
             if not counted:
                 submitted_frames += chunk.frame_count
@@ -210,7 +223,11 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
     if not samples and failure is not None:
         raise failure
     boundaries = _scene_boundaries(session, run.id)
-    associations = associate_tracks(document, samples, scene_boundaries=boundaries)
+    from app.pipeline.perception_stage import load_spatial_document
+
+    associations = associate_tracks(
+        document, samples, scene_boundaries=boundaries, spatial=load_spatial_document(run.id)
+    )
     fused = fuse_geometry(
         document,
         samples,
@@ -218,6 +235,16 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
         scene_boundaries=boundaries,
         coverage_note=_coverage_note(chunks, skipped, submitted_frames, transform),
     )
+    if fused.coverage is not None:
+        fused.coverage.segmentation = {
+            "interval": [round(timeline.start, 3), round(timeline.end, 3)],
+            "time_basis": timeline.basis,
+            "chunks": len(chunks),
+            "frames_submitted": submitted_frames,
+            "skipped_chunks": skipped_spans,
+            "orientation": transform.get("orientation", "displayed"),
+            "transformed": bool(transform.get("transformed")),
+        }
     summary = render_summary(fused, samples, associations, _coverage_note(chunks, skipped, submitted_frames, transform))
     write_sam_summary(run.id, summary)
     _persist_tracks_and_masks(session, run, video, samples, associations, fused)
@@ -233,7 +260,10 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
         "requests": calls,
         "frames_submitted": submitted_frames,
         "chunks": len(chunks),
+        "interval": [round(timeline.start, 3), round(timeline.end, 3)],
+        "time_basis": timeline.basis,
         "skipped_sessions": skipped,
+        "skipped_chunks": skipped_spans,
         "coverage_incomplete": bool(skipped),
         "transform": transform,
         "capabilities": sam_capabilities(),
@@ -561,15 +591,26 @@ def _finish(session, run, call, result) -> None:
     )
 
 
-def _prepare_media(source: Path, run_id: str) -> tuple[Path, dict]:
+def _skip(chunk, reason: str, session_id: str = "") -> dict:
+    return {
+        "start": round(chunk.time_start, 3),
+        "end": round(chunk.time_end, 3),
+        "reason": reason,
+        "session_id": session_id or chunk.session_id,
+    }
+
+
+def _prepare_media(source: Path, run_id: str, rotation: int = 0) -> tuple[Path, dict]:
+    """SAM always receives displayed-orientation media, so its boxes are displayed-frame boxes."""
     metadata = probe(source)
-    if sam_video_accepted(metadata.codec, metadata.container):
+    if sam_video_accepted(metadata.codec, metadata.container) and rotation % 360 == 0:
         return source, {
             "transformed": False,
             "codec": metadata.codec,
             "container": metadata.container,
             "width": metadata.display_width,
             "height": metadata.display_height,
+            "orientation": "displayed",
         }
     dest = data_path("runs", run_id, "sam", "prepared.mp4")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -583,6 +624,8 @@ def _prepare_media(source: Path, run_id: str) -> tuple[Path, dict]:
         "libx264",
         "-pix_fmt",
         "yuv420p",
+        "-fps_mode",
+        "passthrough",
         "-movflags",
         "+faststart",
         str(dest),
@@ -602,55 +645,51 @@ def _prepare_media(source: Path, run_id: str) -> tuple[Path, dict]:
         "to_codec": converted.codec,
         "width": converted.display_width,
         "height": converted.display_height,
-        "note": "The file was re-encoded to H.264 so SAM could read it. Boxes are normalized to that media.",
+        "rotation_applied": rotation % 360,
+        "orientation": "displayed",
+        "note": (
+            "The file was re-encoded to H.264 in its displayed orientation so SAM could read it. "
+            "Boxes are normalized to the displayed frame."
+        ),
     }
 
 
-def _chunk_media(source: Path, chunk, chunks, run_id: str, fps: float) -> Path:
-    if len(chunks) == 1:
+def _chunk_media(source: Path, chunk, chunks, run_id: str, fps: float, *, whole: bool = True) -> Path:
+    """The file SAM receives for one chunk. Frame `k` in it is source frame `chunk.frame_times[k]`.
+
+    A cut is re-encoded with accurate seeking and without dropping or
+    duplicating frames. A stream copy would start at a keyframe and shift
+    every frame index.
+    """
+    if len(chunks) == 1 and whole:
         return source
     dest = data_path("runs", run_id, "sam", f"chunk_{chunk.index}.mp4")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    duration = max(chunk.time_end - chunk.time_start, 1 / max(fps, 1))
+    half_frame = 0.5 / max(fps, 1)
+    duration = max(chunk.time_end - chunk.time_start - half_frame, 1 / max(fps, 1))
     command = [
         "ffmpeg",
         "-y",
         "-ss",
-        f"{chunk.time_start:.3f}",
+        f"{chunk.time_start:.6f}",
         "-i",
         str(source),
         "-t",
-        f"{duration:.3f}",
+        f"{duration:.6f}",
         "-an",
-        "-c",
-        "copy",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-fps_mode",
+        "passthrough",
         "-movflags",
         "+faststart",
         str(dest),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0 or not dest.exists():
-        command = [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            f"{chunk.time_start:.3f}",
-            "-i",
-            str(source),
-            "-t",
-            f"{duration:.3f}",
-            "-an",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            str(dest),
-        ]
-        completed = subprocess.run(command, capture_output=True, text=True, check=False)
-        if completed.returncode != 0:
-            raise ProviderError((completed.stderr or "Could not cut a SAM video chunk.")[-500:])
+        raise ProviderError((completed.stderr or "Could not cut a SAM video chunk.")[-500:])
     return dest
 
 

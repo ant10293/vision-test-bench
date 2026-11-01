@@ -216,9 +216,11 @@ def _update_track(track, detection, frame, score, continuity, chunk) -> None:
     track.vy = 0.5 * ((cy - py) / dt) + 0.5 * track.vy
     track.box = detection.bbox
     track.last_seen = frame.timestamp
-    track.hits += 1
     track.scene_chunk = chunk
-    track.detector_id = detection.detector_id or track.detector_id
+    if detection.detector_id != "optical_flow":
+        # A flow hold moves the box. It is not a detection and does not confirm the track.
+        track.hits += 1
+        track.detector_id = detection.detector_id or track.detector_id
     if detection.mask is not None:
         track.last_mask = detection.mask
     if detection.human:

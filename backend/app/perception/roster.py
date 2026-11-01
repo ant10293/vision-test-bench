@@ -75,6 +75,9 @@ def drop_split_objects(roster: AnalysisDocument, document: AnalysisDocument) -> 
         {obj.local_id: obj.label for obj in document.objects},
         {obj.local_id: obj.label for obj in roster.objects},
     )
+    # Two touching objects that each name a tracked instance stay two.
+    bound = {obj.local_id for obj in document.objects if obj.instance_id}
+    mapping = {extra: target for extra, target in mapping.items() if extra not in bound}
     if not mapping:
         return document
     kept = [obj for obj in document.objects if obj.local_id not in mapping]
@@ -444,7 +447,9 @@ def drop_contained_objects(document: AnalysisDocument) -> AnalysisDocument:
     A smaller box that stays inside a larger one is the same object seen twice.
     It remains its own object when any shared frame shows the two apart.
     """
-    mapping = _contained_hosts(document)
+    bound = {obj.local_id for obj in document.objects if obj.instance_id}
+    # An object bound to a tracked instance is a distinct physical instance even when nested.
+    mapping = {inner: outer for inner, outer in _contained_hosts(document).items() if inner not in bound}
     if not mapping:
         return document
     observations = [item for item in document.observations if item.object_local_id not in mapping]

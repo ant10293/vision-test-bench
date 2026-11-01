@@ -102,6 +102,7 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "sampling_preset": payload.get("sampling_preset") or "standard",
         "custom_fps": payload.get("custom_fps"),
         "analysis_pass": payload.get("analysis_pass") or "single",
+        "semantic_mode": _semantic_mode(payload),
         "segmentation_mode": _segmentation_mode(session, payload),
         "segmentation_model_id": _segmentation_model(payload),
         "temperature": temperature,
@@ -272,6 +273,13 @@ def save_prompt(session: Session, key: str, name: str, body: str) -> PromptVersi
     session.commit()
     session.refresh(row)
     return row
+
+
+def _semantic_mode(payload: dict) -> str:
+    mode = payload.get("semantic_mode") or "combined"
+    if mode not in {"combined", "grounded"}:
+        raise ValueError(f"Unknown semantic mode {mode}. Use combined or grounded.")
+    return mode
 
 
 def _segmentation_mode(session: Session, payload: dict) -> str:

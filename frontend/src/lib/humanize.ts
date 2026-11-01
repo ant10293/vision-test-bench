@@ -1,4 +1,4 @@
-const ACRONYMS = new Set(["ai", "cv", "api", "json", "sam", "iou", "gpt", "fps", "vad", "url"]);
+const ACRONYMS = new Set(["ai", "cv", "api", "json", "sam", "iou", "gpt", "fps", "vad", "url", "vlm"]);
 
 const WORDS: Record<string, string> = {
   openai: "OpenAI",

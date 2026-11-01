@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import subprocess
@@ -213,9 +214,12 @@ def snap_timestamps(targets: list[float], pts: list[float]) -> list[float]:
     """Map requested times onto real presentation timestamps."""
     if not pts:
         return _unique(targets)
+    ordered = sorted(pts)
     snapped: list[float] = []
     for target in targets:
-        nearest = min(pts, key=lambda item: abs(item - target))
+        index = bisect.bisect_left(ordered, target)
+        options = [ordered[i] for i in (index - 1, index) if 0 <= i < len(ordered)]
+        nearest = min(options, key=lambda item: abs(item - target))
         snapped.append(round(nearest, 6))
     return _unique(snapped)
 

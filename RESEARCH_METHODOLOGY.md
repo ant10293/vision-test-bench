@@ -10,6 +10,12 @@ The default prompts forbid inventing events, equating an attempt with success, t
 
 Checksum, model id, provider, modality, sampling preset, the timestamps that were extracted and the ones that were submitted, prompt version and the snapshot text, parameters, provider request ids when the API returns them, start and finish times, SDK version, application version, git revision, raw response, validation issues, token counts, and an estimated cost. Sparse frames are never described as a full viewing. The coverage note says how many frames were used and that the rest of the video was not sent.
 
+Coverage also records the requested interval, the time basis (`presentation` when frame times came from the file, `container` when estimated), the largest unexamined gap, every gap longer than the occlusion window, the change peaks that were and were not selected, hard and soft scene boundaries, the tracking floor and dense spans, tracking continuity, segmentation chunks and the chunks skipped with their reason, media transforms such as a subclip offset or a rotation, the semantic mode, and the number of semantic calls. Temporal coverage (how much of the interval was examined) and temporal resolution (how densely) are reported separately. A gap is an interval that was not examined. It is not evidence that nothing happened.
+
+## Combined and grounded runs
+
+The same recording can be run in both semantic orders. Combined asks one call for objects, boxes, and the procedure, then resolves geometry. Grounded asks for objects and boxes first, resolves geometry from the tracker and segmentation, then asks one interpretation call that reads the resolved instances. Grounded costs one more semantic call and records it. Compare the two with the same frames, provider, and model; the difference is the effect of conditioning interpretation on measured geometry. `semantic_raw.json` keeps the scene call's parsed output before any repair, so the effect of repairs can be measured separately.
+
 ## Three recordings
 
 The same document schema is used for a fixed camera, a head-mounted camera in one workspace, and a head-mounted camera that changes places. Reliability is compared per mode. Auto mode may suggest a mode from global motion and scene changes; the researcher can override it.
@@ -20,11 +26,25 @@ Two models disagreeing is not accuracy. Self-reported confidence is not accuracy
 
 ## What the deterministic baseline is for
 
-It shows the ceiling of "something moved" without a semantic claim. Use it to see which parts of a VLM story are not forced by the motion itself.
+It shows the ceiling of "something moved" without a semantic claim. Use it to see which parts of a VLM story are not forced by the motion itself. Its motion and region proposals stay provisional rows. They are never promoted to canonical geometry, so the baseline does not get more accurate boxes from this design; it stops presenting blobs as detections.
+
+## Benchmark
+
+`backend/tests/benchmark_harness.py` scores a run's document against a ground-truth document in the existing shape, with instance ids on observations. It reports box recall and mean IoU, IDF1, identity switches, false merges, occlusion recovery, tracking coverage, short-event recall, grounding correctness, workflow precision and recall, and the recorded latency and call counts. It reuses `identity_eval.py` and `metrics.py` and scores the display set only.
+
+```bash
+cd backend && .venv/bin/python -m tests.benchmark_harness ../data/benchmark
+```
+
+Each case is a folder with `truth.json`, `predicted.json`, and `meta.json`. Only a case whose meta says `"source": "human"` is real-world evidence. The checked-in cases are synthetic and generated media and are labeled as such. Their scores check that the harness and the pipeline agree with themselves. They are not accuracy. No human annotation is in the tree today, so this refactor reports no measured accuracy gain. The ten conditions worth annotating are rotation, scale, lighting, occlusion by a hand, two similar objects exchanging places, an object that leaves and returns, a hard cut, a long static stretch before activity, a short event, and a rotated phone recording.
 
 ## Limits of the current geometry
 
-Camera compensation is a partial affine estimated between samples. It is not visual SLAM and it does not produce a stable world frame. A scene change keeps archived tracks and starts new ids. Appearance can propose that an archived id returned. That proposal is not a confirmation, and the unobserved interval stays explicit.
+Camera compensation is a partial affine estimated between samples. It is not visual SLAM and it does not produce a stable world frame. A hard cut keeps archived tracks and starts new ids. Appearance or a strong temporal match can propose that an archived id returned. That proposal is not a confirmation, and the unobserved interval stays explicit.
+
+Provider video tokenizers can resample a subclip internally. The bench controls the file it sends, not the provider's internal sampling. A stationary object stays invisible to a motion-only detector until another backend, such as segmentation or a manual seed, sees it. Adaptive tracking density can miss a short event in a stretch that looked static; the floor and the gaps are reported so that miss is visible.
+
+These hold in tests: no time-ordered cap drops the rest of the interval; no identity comes from a shared label or the nearest leftover; no optical-flow point is stored as a detection; no SAM session id becomes a global instance id; no model response overwrites a canonical row; no missing detection becomes confirmed absence; no box overlap confirms attachment or a finished step; a combined run adds no unreported call and a grounded run reports its second; an older document still validates and displays; a processing-chunk boundary is not a scene cut; a proposal-only fallback is not described as a detection or as SAM.
 
 ## Identity experiments
 

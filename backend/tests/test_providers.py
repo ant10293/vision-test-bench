@@ -71,6 +71,12 @@ def test_anthropic_sends_reasoning_effort(monkeypatch):
     class _Client:
         messages = _Messages()
 
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
     monkeypatch.setattr(AnthropicProvider, "_client", lambda self, secret, timeout: _Client())
     request = GenerationRequest(
         model_id="claude-sonnet-5-5",
@@ -137,3 +143,67 @@ def test_unpriced_model_does_not_invent_a_zero_invoice():
     cost, known = estimate_cost(caps, 1000, 500)
     assert known is False
     assert cost == 0.0
+
+
+def _serve_models():
+    """A keep-alive HTTP server, so a client holds an open socket after its request."""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            body = json.dumps({"object": "list", "data": []}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_provider_client_closes_on_the_loop_that_opened_it(monkeypatch):
+    """Each job runs on its own loop. A client left open is collected on a later
+    loop, where aclose fails with "Event loop is closed"."""
+    import asyncio
+    import gc
+
+    from openai import AsyncOpenAI
+
+    from app.providers.openai_provider import OpenAIProvider
+
+    server = _serve_models()
+    created = []
+
+    def build(self, secret, timeout):
+        client = AsyncOpenAI(api_key=secret, base_url=f"http://127.0.0.1:{server.server_port}/v1", timeout=timeout)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(OpenAIProvider, "_client", build)
+    try:
+        asyncio.run(OpenAIProvider().list_models("sk-test"))
+        assert created[0].is_closed()
+    finally:
+        server.shutdown()
+
+    failures = []
+
+    async def later_loop():
+        asyncio.get_running_loop().set_exception_handler(lambda _loop, context: failures.append(context))
+        created.clear()
+        gc.collect()
+        await asyncio.sleep(0)
+
+    asyncio.run(later_loop())
+    gc.collect()
+    assert failures == []

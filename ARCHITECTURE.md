@@ -15,11 +15,68 @@ Edits copy the active document, change it, and rematerialize. They do not write 
 
 ## Pipeline
 
-Stages, in order: metadata, preprocess, sample frames, spatial tracking, scene analysis, object extraction, action analysis, state tracking, segmentation, workflow, ambiguity, validation, reinspection, transcription, audio context, artifacts.
+Stages, in order: metadata, preprocess, sample frames, spatial tracking, scene analysis, object extraction, action analysis, state tracking, segmentation, evidence fusion, workflow, ambiguity, validation, reinspection, transcription, audio context, artifacts.
+
+Dedicated perception owns geometry and physical identity. A vision-language model owns semantics: labels, actions, states, relations, and workflow. Evidence fusion is the only writer of canonical geometry and never calls a model.
 
 Transcription and audio context are skipped immediately when the experiment leaves them off, before Whisper is imported. A failure in either stage is recorded and the visual run still finishes. See `AUDIO.md`.
 
 A single-pass experiment makes one model call during scene analysis and records the later stages as slices of that response. A multi-stage experiment calls the model again per stage. Reinspection is skipped unless the experiment asked for it.
+
+### Semantic order
+
+`config_json.semantic_mode` is `combined` (the default, and what a run without the field means) or `grounded`.
+
+| | Combined | Grounded |
+| --- | --- | --- |
+| Scene analysis | One full call: objects, boxes, actions, states, workflow | One discovery call: objects and boxes only |
+| Action analysis, state tracking, ambiguity | Separate calls in multi-stage mode, slices otherwise | Skipped and recorded as skipped |
+| Evidence fusion | Resolve only, zero calls | Resolve only, zero calls |
+| Workflow | A call in multi-stage mode | One interpretation call that reads resolved geometry |
+| Semantic calls, single pass | 1 | 2 |
+
+Combined interprets before segmentation, so its narrative is not conditioned on masks. That keeps the cost it had before. Grounded interprets after geometry at one extra semantic call. `coverage.semantic_calls` counts distinct semantic stages that reached a provider. Every request, including windows, merges, and locate calls, is still its own `model_requests` row with its stage. A combined run adds no call beyond its scene call; fusion's checkpoint records `model_calls: 0`.
+
+### One clock and the whole interval
+
+Stored times are presentation seconds from the first video frame, the clock `ffmpeg -ss` seeks on and the player shows. A subclip starts at its own zero. Its offset is saved in `data/runs/{id}/subclip.json` and every time a model returns on the subclip clock is shifted back before it is stored. Boxes are normalized to the displayed frame, after rotation. Media sent to segmentation is re-encoded upright when the file carries a rotation, so a segmentation box and a tracker box mean the same place.
+
+A frame budget is spread across the requested interval. No stage keeps the first N frames of a time-ordered list. Semantic sampling takes an even floor of `budget // 2 + 1` frames, then one change peak per floor segment per round, then fills the widest gaps. Tracking runs at 2 FPS across the whole interval and spends the rest of `maximum_frames` at the configured rate in windows around motion and scene changes. Frames are decoded about 30 seconds at a time. One tracker runs across those chunks, so a chunk edge is not a scene cut. Coverage records the floor, dense spans, largest gap, gaps longer than the occlusion window, and `continuity` (`supported`, `partial`, or `insufficient`). A floor too sparse for the occlusion window is reported as insufficient. It is not hidden behind a continuous-looking track.
+
+A scene boundary is `hard` only for a sustained appearance break the earlier view does not return from. A lighting change, a covered lens, a brief occlusion, and unstable motion are `soft`. Only a hard cut archives tracks. A camera occlusion longer than about a second can still read as hard.
+
+### Evidence resolution
+
+Raw rows from the model, the tracker, and segmentation are all kept. `AnalysisDocument.observations` is the display set: every overlay, crop, metric, prompt, and verification predicate reads it. `AnalysisDocument.raw_observations` holds the rows the display set does not show, for the perception panel.
+
+Each row carries `geometry_origin` (`detected`, `optical_flow`, `vlm_estimated`, `unobserved`) and four supports that are never folded into one score: detection (`proposal`, `detected`, `mask`, `none`), association (`associated`, `referenced`, `weak`, `ambiguous`, `unmatched`, `conflict`), temporal (`single`, `repeated`, `flow_only`), and semantic (`unlabeled`, `provisional`, `labeled`). Motion and MSER regions are proposals. A manual seed is a detection. A SAM row with a mask is a mask. An optical-flow hold is `none`; it updates position and is not counted as a detection hit.
+
+Per object per analyzed time, a tracker row is eligible for canonical when it is a real detection with repeated temporal support. A SAM row is eligible when its association is `associated`. Eligible rows that overlap by IoU 0.5 or more resolve to one canonical row with an `evidence_ref`. Rows that disagree become a conflict: neither is canonical, both are kept, and a `resolve_conflict_*` ambiguity says so. A model estimate within 0.45 s of a canonical row is hidden. Without a canonical row the display set shows the model estimate, then the best non-conflict measurement as a provisional row. A proposal-only track therefore stays provisional and is never described as a detection or as SAM. Resolution is idempotent. A gap in tracking adds no absence row.
+
+### Association
+
+Semantic objects bind to tracked instances by one-to-one assignment on temporal box IoU (accept 0.35, margin 0.12, within 0.45 s). Two or more shared times above the floor is `associated`. One shared time is `weak`. A rival within the margin is `ambiguous`. Neither weak nor ambiguous sets an instance id. A model that names a tracked id it was shown keeps it as `referenced` unless repeated shared times contradict it or two objects claim it. A track that never coexists with the chosen one is a continuation candidate: a strong match to it becomes a `proposed` re-identification hypothesis and is not merged. A label, a confidence, or the nearest leftover center is never evidence. A label change does not change an instance id.
+
+SAM association is per tracking session. A session id is never copied into `instance_id`. A concept prompt only narrows which objects a track may bind to. A SAM track that disagrees with a bound tracker instance is a conflict.
+
+### Retired repairs
+
+Earlier repairs stay for model-only runs and are fenced off measured geometry with `fence_repair`, which hands a repair only the model estimates at times their object has no canonical row.
+
+| Repair | Now |
+| --- | --- |
+| Shape-specific boxing text | Removed. One general localization sentence remains. |
+| `reconcile_identity` | Model estimates only, at times without a canonical row |
+| `drop_contained_objects`, `drop_split_objects` | Never drop an object bound to an instance |
+| `locate_missing` | Skips objects that have canonical rows |
+| Native-video re-ground | Only objects that still lack canonical geometry |
+| Later-stage and window boxes | Stored as raw rows after fusion; they cannot replace a canonical row |
+| SAM confidence and nearest-center shortcuts | Removed in favor of temporal one-to-one association |
+| `apply_assembly` | Reads measured rows only. Joins are `INFERRED`, keep the model's outcome, and never mark a step completed. With no measured rows it makes no claim. |
+
+### Historical documents
+
+Schema version stays `1.0.0`. Every new field defaults to empty, zero, or the legacy behavior. A row with an empty `observation_role` is part of the display set, so an older document displays as it was stored. Stored revisions are not rewritten. A role on any row means evidence fusion has run; model responses are tagged `vlm_estimated` when parsed and receive a role only from the resolver.
 
 Progress is the count of finished stages and the frame or object counters stored on each stage. It is not a synthetic percentage.
 
@@ -36,7 +93,7 @@ Viewpoint and task constraint are separate fields. The three research modes are 
 | Unconstrained head-mounted | head-mounted | unconstrained |
 | Auto | chosen from motion and scene changes | matching the choice |
 
-The user can override auto. Image motion is not reported as object motion in the world. `world_coordinates_supported` stays false. The head-mounted baseline estimates a partial affine camera motion (Lucas–Kanade plus `estimateAffinePartial2D`) and tracks residual regions in the image. Fixed-camera tracking can use a background subtractor. Unconstrained recordings are split into scene chunks. A scene change archives the tracks it already has. It does not delete them, and it does not continue an id across the cut by itself.
+The user can override auto. Image motion is not reported as object motion in the world. `world_coordinates_supported` stays false. The head-mounted baseline estimates a partial affine camera motion (Lucas–Kanade plus `estimateAffinePartial2D`) and tracks residual regions in the image. Fixed-camera tracking can use a background subtractor. Unconstrained recordings are split into scene chunks at hard cuts. A hard cut archives the tracks it already has. It does not delete them, and it does not continue an id across the cut by itself.
 
 ## Perception
 
@@ -86,4 +143,4 @@ Alignment maps execution actions onto template steps by action type, roles, and 
 
 ## Where files live
 
-`data/originals` immutable uploads, `data/proxies`, `data/frames`, `data/runs/{id}` working JSON and crops, `data/runs/{id}/embeddings` cached appearance vectors, `data/transcripts/{checksum}` cached local transcripts, `data/learnloop.db`. API keys, if saved in the app, are Fernet-encrypted under `data/.credential_key` (mode 0600) or read from the environment. Exports omit them.
+`data/originals` immutable uploads, `data/proxies`, `data/frames`, `data/runs/{id}` working JSON and crops, `data/runs/{id}/semantic_raw.json` the scene call before any repair, `data/runs/{id}/subclip.mp4` and `subclip.json` when a native-video model receives part of a recording, `data/runs/{id}/embeddings` cached appearance vectors, `data/transcripts/{checksum}` cached local transcripts, `data/learnloop.db`. API keys, if saved in the app, are Fernet-encrypted under `data/.credential_key` (mode 0600) or read from the environment. Exports omit them.

@@ -167,7 +167,13 @@ def apply_assembly(document: AnalysisDocument) -> AnalysisDocument:
 
 
 def find_joins(document: AnalysisDocument) -> list[Join]:
-    times = sorted({round(item.timestamp, 3) for item in document.observations})
+    times = sorted(
+        {
+            round(item.timestamp, 3)
+            for item in document.observations
+            if item.geometry_origin not in {"vlm_estimated", "unobserved"}
+        }
+    )
     boxes = _boxes(document)
     found: list[Join] = []
     for guest_id, series in boxes.items():
@@ -311,9 +317,15 @@ def _claimed_kind(document: AnalysisDocument, guest_id: str, hosts: list[str], s
 
 
 def _boxes(document: AnalysisDocument) -> dict[str, list[tuple[float, tuple[float, float, float, float]]]]:
+    """Measured boxes only. A model estimate is not evidence of contact.
+
+    Rows from older documents carry no origin and are read as they were stored.
+    """
     grouped: dict[str, list[tuple[float, tuple[float, float, float, float]]]] = {}
     for observation in document.observations:
         if observation.bbox is None or observation.visibility.value == "absent":
+            continue
+        if observation.geometry_origin in {"vlm_estimated", "unobserved"}:
             continue
         grouped.setdefault(observation.object_local_id, []).append(
             (round(observation.timestamp, 3), _tuple(observation.bbox))
@@ -383,8 +395,9 @@ def _rewrite_join_action(
             object_local_ids=[join.guest_id, *join.host_ids],
             initial_state=f"{guest} separate from {host}",
             final_state=final_state,
-            outcome=ActionOutcome.COMPLETED,
-            uncertainty=0.4,
+            # Sustained contact is inferred from boxes. It does not confirm a finished join.
+            outcome=ActionOutcome.UNKNOWN,
+            uncertainty=0.5,
             evidence=evidence,
         )
         actions.append(chosen)
@@ -396,8 +409,8 @@ def _rewrite_join_action(
             "description": statement,
             "initial_state": chosen.initial_state or f"{guest} separate from {host}",
             "final_state": final_state,
-            "outcome": ActionOutcome.COMPLETED,
-            "uncertainty": min(chosen.uncertainty, 0.4),
+            "outcome": chosen.outcome,
+            "uncertainty": max(chosen.uncertainty, 0.5),
             "object_local_ids": ids,
             "evidence": evidence,
             "end": max(chosen.end, join.joined_from),
@@ -433,8 +446,8 @@ def _rewrite_removal_action(
             object_local_ids=[join.guest_id, *join.host_ids],
             initial_state=initial_state,
             final_state=final_state,
-            outcome=ActionOutcome.COMPLETED,
-            uncertainty=0.4,
+            outcome=ActionOutcome.UNKNOWN,
+            uncertainty=0.5,
             evidence=evidence,
         )
         actions.append(chosen)
@@ -446,8 +459,8 @@ def _rewrite_removal_action(
             "description": statement,
             "initial_state": initial_state,
             "final_state": final_state,
-            "outcome": ActionOutcome.COMPLETED,
-            "uncertainty": min(chosen.uncertainty, 0.4),
+            "outcome": chosen.outcome,
+            "uncertainty": max(chosen.uncertainty, 0.5),
             "object_local_ids": ids,
             "evidence": evidence,
             "end": max(chosen.end, released),
@@ -514,7 +527,7 @@ def _rewrite_steps(steps, action_id: str, name: str, completion: str, statement:
                 "expected_action": name,
                 "completion_condition": completion,
                 "observed_result": statement,
-                "uncertainty": min(step.uncertainty, 0.4),
+                "uncertainty": max(step.uncertainty, 0.5),
                 "evidence": evidence,
             }
         )

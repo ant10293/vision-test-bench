@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { diagnosticEntries, rawRowsNear } from "../lib/analysis";
 import { api, formatTime } from "../lib/api";
 import { humanize } from "../lib/humanize";
 import type { Bundle, PerceptionHypothesis } from "../lib/types";
@@ -47,8 +48,8 @@ export function PerceptionPanel({ bundle }: { bundle: Bundle }) {
         {perception.notes && <p className="text-xs text-[var(--muted)]">{perception.notes}</p>}
       </div>
       <div className="flex flex-wrap gap-3 text-xs text-[var(--muted)]">
-        {Object.entries(diagnostics).map(([key, value]) => (
-          <span key={key}>{humanize(key)} {String(value)}</span>
+        {diagnosticEntries(diagnostics).map(([key, value]) => (
+          <span key={key}>{humanize(key)} {value}</span>
         ))}
       </div>
       <ul className="space-y-2">
@@ -95,8 +96,39 @@ export function PerceptionPanel({ bundle }: { bundle: Bundle }) {
           <button className="btn" disabled={!keep || !drop || keep === drop} onClick={() => refresh(api.mergeInstances(bundle.run.id, keep, drop))}>Merge instances</button>
         </div>
       )}
+      <RawRows bundle={bundle} time={time} onSeek={setTime} />
       {error && <p className="text-xs text-[var(--rose)]">{error}</p>}
     </section>
+  );
+}
+
+function RawRows({ bundle, time, onSeek }: { bundle: Bundle; time: number; onSeek: (time: number) => void }) {
+  const raw = bundle.raw_observations;
+  if (!raw || !raw.total) return null;
+  const near = rawRowsNear(raw.rows, time);
+  return (
+    <div className="space-y-1" data-testid="raw-observations">
+      <h3 className="text-sm">Raw evidence</h3>
+      <p className="text-xs text-[var(--muted)]">
+        {raw.total} stored {raw.total === 1 ? "row is" : "rows are"} hidden from the overlay because a canonical row, a conflict, or a nearer estimate covers that time.
+        {raw.truncated ? " The list is truncated." : ""}
+      </p>
+      {near.length > 0 ? (
+        <ul className="space-y-1 text-xs">
+          {near.map((row, index) => (
+            <li key={`${row.object_local_id}-${row.timestamp}-${row.source_model}-${index}`}>
+              <button onClick={() => onSeek(row.timestamp)}>{formatTime(row.timestamp)}</button>{" "}
+              {humanize(row.object_local_id)} · {row.source_model || row.geometry_authority || "model"} · {humanize(row.geometry_origin || "unknown")}
+              {row.detection_support ? ` · detection ${row.detection_support}` : ""}
+              {row.association_support ? ` · association ${row.association_support}` : ""}
+              {row.association_status === "conflict" ? " · conflict" : ""}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-[var(--muted)]">No raw row is within half a second of the playhead.</p>
+      )}
+    </div>
   );
 }
 
