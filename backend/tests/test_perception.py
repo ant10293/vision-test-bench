@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
+
+import certifi
 import numpy as np
+import pytest
 from app.perception.assignment import linear_assignment
 from app.perception.encoder import (
+    Dinov2Encoder,
     HistogramEncoder,
     cache_key,
     cached_encode,
@@ -250,6 +255,30 @@ def test_reference_rules_and_embedding_cache(tmp_path):
     except EncoderUnavailable:
         missing = True
     assert missing
+
+
+def test_dinov2_load_verifies_downloads_without_a_prompt(monkeypatch):
+    torch = pytest.importorskip("torch")
+    seen = {}
+
+    class Model:
+        def eval(self):
+            return self
+
+        def to(self, device):
+            return self
+
+    def fake_load(repo, name, **kwargs):
+        seen.update(kwargs, repo=repo, name=name, cert=os.environ.get("SSL_CERT_FILE"))
+        return Model()
+
+    monkeypatch.setenv("SSL_CERT_FILE", "placeholder")
+    monkeypatch.delenv("SSL_CERT_FILE")
+    monkeypatch.setattr(torch.hub, "load", fake_load)
+    Dinov2Encoder()._load()
+    assert seen["repo"] == "facebookresearch/dinov2"
+    assert seen["trust_repo"] is True
+    assert seen["cert"] == certifi.where()
 
 
 def test_legacy_scene_history_does_not_replace_the_new_id():

@@ -8,8 +8,10 @@ in place of DINOv2.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
+import certifi
 import cv2
 import numpy as np
 
@@ -161,8 +163,12 @@ class Dinov2Encoder:
             device = "mps"
         elif torch.cuda.is_available():
             device = "cuda"
+        # torch.hub downloads through urllib, which has no CA bundle on python.org
+        # builds and reports the failed verification as "no internet connection".
+        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
         try:
-            model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+            # The repo is fixed here. The default trust check would wait on stdin.
+            model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14", trust_repo=True)
         except Exception as exc:
             raise EncoderUnavailable(
                 f"DINOv2 weights could not be loaded ({exc}). No other encoder was substituted."
