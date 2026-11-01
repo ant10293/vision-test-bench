@@ -1064,7 +1064,7 @@ function logUsage(row: Record<string, unknown>): LogUsage {
 
 export function LogsPage() {
   const bundle = useOptionalBundle();
-  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [open, setOpen] = useState<string | null>(null);
   const rows = useQuery({
     queryKey: ["requests", bundle?.run.id ?? "pending"],
     queryFn: () => api.requests(bundle?.run.id ?? ""),
@@ -1107,7 +1107,7 @@ export function LogsPage() {
                 </tr>
               )) : requests.map((row) => {
                 const id = String(row.id);
-                const expanded = Boolean(open[id]);
+                const expanded = open === id;
                 const usage = logUsage(row);
                 const completed = row.status === "completed";
                 return (
@@ -1117,7 +1117,7 @@ export function LogsPage() {
                     expanded={expanded}
                     completed={completed}
                     usage={usage}
-                    onToggle={() => setOpen((current) => ({ ...current, [id]: !current[id] }))}
+                    onToggle={() => setOpen((current) => (current === id ? null : id))}
                   />
                 );
               })}
