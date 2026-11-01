@@ -9,10 +9,12 @@ video numbers does not.
 
 from __future__ import annotations
 
+import copy
 import json
 
 from app.pipeline.parsing import extract_json_object, parse_analysis
 from app.schemas.analysis import AnalysisDocument, ObservationPrediction
+from app.schemas.enums import Visibility
 
 # A phone frame is about 1.78. Anything under this can honestly have square boxes.
 _MIN_ASPECT = 1.35
@@ -77,6 +79,19 @@ FRAME_BOX_SCHEMA = {
     },
     "required": ["observations"],
 }
+
+
+def frame_box_schema(object_ids: list[str]) -> dict:
+    """The contract for one call. Only the ids on its roster can be written.
+
+    Without this a model can answer with 1, 2, 3 or Obj1, and that whole window is
+    unusable and keeps the video boxes it was meant to replace.
+    """
+    schema = copy.deepcopy(FRAME_BOX_SCHEMA)
+    fields = schema["properties"]["observations"]["items"]["properties"]
+    fields["object_local_id"] = {"type": "string", "enum": sorted(object_ids)}
+    fields["visibility"] = {"type": "string", "enum": [item.value for item in Visibility]}
+    return schema
 
 
 def frame_boxes_usable(observations: list[ObservationPrediction], width: int, height: int) -> bool:

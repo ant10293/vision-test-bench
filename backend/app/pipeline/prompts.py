@@ -26,7 +26,8 @@ Rules:
 
 SCENE = """
 Identify the physical objects that are actually visible. Do not assume a task.
-Leave the person's hands, fingers, and arms, and the stationary background the parts rest on, out of the object list; name a hand as the actor when it holds or covers a part, and keep a board, tray, base, or anything that is picked up or built on.
+Leave the person's hands, fingers, and arms out of the object list, and name a hand as the actor when it holds or covers a part.
+Never list the workspace as an object. The surface the parts rest on or the work happens over is background, whatever it looks like: a table, mat, tray, lid, board, box, or sheet. List such an item only when a hand picks it up or moves it, or when it is a small base that parts are mounted on.
 For each object provide a stable local_id (Object_1, Object_2, ...), a cautious descriptive label,
 visual characteristics, initial state, whether it is manipulated, and whether identity is uncertain.
 Avoid naming an object more precisely than the pictures support.
@@ -143,7 +144,7 @@ DISCOVERY = """
 Discovery pass. Identify the physical objects and give each one an observation with a box on the
 moments supplied. Copy a tracked instance id into instance_id when the object is that instance.
 Return objects, observations, camera, summary, and ambiguities about identity or visibility.
-Leave actions, states, transitions, relationships, workflow_steps, and dependencies empty.
+Leave actions, states, transitions, relationships, workflow_steps, and dependencies out of this pass.
 A later call interprets them after the boxes are measured.
 """.strip()
 

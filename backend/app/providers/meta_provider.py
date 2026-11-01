@@ -100,13 +100,21 @@ class MetaProvider:
             raise UnsupportedMode(
                 f"{request.model_id} does not accept temperature. Leave temperature unset."
             )
-        if request.json_schema and caps.structured_output:
+        if request.json_schema:
+            from app.pipeline.contracts import validate_strict_schema
+
+            if not caps.structured_output:
+                raise UnsupportedMode(
+                    f"{request.model_id} is not recorded as supporting structured output. "
+                    "The request was not sent unconstrained."
+                )
+            validate_strict_schema(request.json_schema)
             kwargs["text"] = {
                 "format": {
                     "type": "json_schema",
-                    "name": "learnloop_analysis",
+                    "name": request.schema_name,
                     "schema": request.json_schema,
-                    "strict": False,
+                    "strict": True,
                 }
             }
         started = time.perf_counter()
@@ -116,6 +124,10 @@ class MetaProvider:
         except UnsupportedMode:
             raise
         except Exception as exc:
+            if request.json_schema and _rejected_schema(exc):
+                from app.pipeline.contracts import SchemaContractError
+
+                raise SchemaContractError(f"Meta rejected the {request.schema_name} schema: {exc}") from exc
             raise translate(exc) from exc
         usage = getattr(response, "usage", None)
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
@@ -123,7 +135,7 @@ class MetaProvider:
         cost, known = estimate_cost(caps, input_tokens, output_tokens)
         text = getattr(response, "output_text", "") or ""
         status = str(getattr(response, "status", "") or "")
-        incomplete = _incomplete_reason(response) if status == "incomplete" else ""
+        incomplete = _unfinished_reason(response, status, text)
         return ProviderResponse(
             text=text,
             raw={
@@ -162,9 +174,31 @@ class MetaProvider:
         ]
 
 
-def _incomplete_reason(response) -> str:
-    details = getattr(response, "incomplete_details", None)
-    return str(getattr(details, "reason", "") or "unknown")
+def _unfinished_reason(response, status: str, text: str) -> str:
+    """Why this response is not a finished answer. Empty only when it is one."""
+    if status == "incomplete":
+        details = getattr(response, "incomplete_details", None)
+        return str(getattr(details, "reason", "") or "unknown")
+    if not status:
+        return "missing_status"
+    if status != "completed":
+        return f"status_{status}"
+    if _refused(response):
+        return "refusal"
+    return "" if text.strip() else "empty_output"
+
+
+def _refused(response) -> bool:
+    for item in getattr(response, "output", None) or []:
+        for part in getattr(item, "content", None) or []:
+            if getattr(part, "type", "") == "refusal":
+                return True
+    return False
+
+
+def _rejected_schema(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return getattr(exc, "status_code", None) == 400 and ("schema" in message or "text.format" in message)
 
 
 def _usage_dict(usage) -> dict:

@@ -21,6 +21,7 @@ from app.perception.resolve import fence_repair
 from app.perception.roster import drop_contained_objects, omit_workspace_and_hands
 from app.perception.types import TrackingCancelled
 from app.pipeline.actions import collapse_repeated_actions
+from app.pipeline.contracts import StructuredOutputError
 from app.pipeline.infer import (
     SEMANTIC_LISTS,
     BudgetExceeded,
@@ -61,6 +62,7 @@ async def execute_job(session: Session, job: Job) -> None:
         job.finished_at = utcnow()
         session.commit()
         return
+    run_id = run.id
     video = session.get(VideoAsset, run.video_id)
     if video is None:
         _fail_job(session, job, run, "video missing")
@@ -135,10 +137,17 @@ async def execute_job(session: Session, job: Job) -> None:
             session.rollback()
             log.exception("verification waiting on run %s was not settled", run.id)
     except Exception as exc:
+        session.rollback()
+        if session.get(AnalysisRun, run_id) is None:
+            # The run was deleted while it ran, and its job row went with it.
+            log.info("run %s was deleted during execution; stopped its job", run_id)
+            return
         run.status = "failed"
         run.error = _error_text(exc)
         run.finished_at = utcnow()
-        if job.attempt < job.max_attempts and not isinstance(exc, (UnsupportedMode, BudgetExceeded)):
+        if job.attempt < job.max_attempts and not isinstance(
+            exc, (UnsupportedMode, BudgetExceeded, StructuredOutputError)
+        ):
             job.status = "pending"
             job.error = _error_text(exc)
             job.worker_id = ""

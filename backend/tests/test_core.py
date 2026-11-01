@@ -162,8 +162,8 @@ def test_window_note_names_the_shared_timestamps():
     assert "tight box around that object alone" in opening
     assert "color cast" in SCENE
     assert "hands, fingers, and arms" in SCENE
-    assert "stationary background the parts rest on" in SCENE
-    assert "picked up or built on" in SCENE
+    assert "Never list the workspace as an object" in SCENE
+    assert "a hand picks it up or moves it" in SCENE
     # Localization rules are generic. No object shape is named in the prompts.
     for text in (opening, SCENE):
         lowered = text.lower()

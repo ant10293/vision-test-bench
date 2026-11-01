@@ -322,6 +322,10 @@ def _fill_alias(data: dict[str, Any], canonical: str, aliases: tuple[str, ...], 
             kept.append(row)
     if kept:
         data[canonical] = kept
+    elif canonical in data:
+        # Unreadable rows must not reject the records that did parse. A renamed list may still fill this.
+        data[f"{canonical}_unreadable"] = raw
+        data[canonical] = []
 
 
 def _present(value: Any) -> bool:
@@ -483,6 +487,15 @@ def _first_number(row: dict[str, Any], window: dict[str, Any], keys: tuple[str, 
     return None
 
 
+def _named_time(row: dict[str, Any], word: str) -> float | None:
+    """A clock field named for its role, such as end_s, start_timestamp, or observation_start_s."""
+    pattern = re.compile(rf"(^|_){word}(_|$)")
+    for key, value in row.items():
+        if _number(value) and pattern.search(key.lower()):
+            return float(value)
+    return None
+
+
 def _copy_aliases(row: dict[str, Any], aliases: dict[str, str]) -> None:
     """Fill a schema field from the name a model used instead. A value already present wins."""
     for field, alias in aliases.items():
@@ -499,12 +512,25 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         {
             "action_type": "operation",
             "actor": "responsible_agent",
+            "local_id": "action_local_id",
             "object_local_ids": "involved_objects",
             "initial_state": "initiating_state",
             "final_state": "concluding_state",
             "uncertainty": "uncertainty_self_assessed",
         },
     )
+    _copy_aliases(
+        row,
+        {
+            "actor": "actor_label",
+            "object_local_ids": "objects_used",
+            "description": "visual_evidence_summary",
+            "initial_state": "initial_state_description",
+            "final_state": "final_state_description",
+            "uncertainty": "uncertainty_score",
+        },
+    )
+    _copy_aliases(row, {"final_state": "end_state"})
     if not row.get("local_id") and row.get("action_id"):
         row["local_id"] = str(row["action_id"])
     if not row.get("local_id") and row.get("action_local_id"):
@@ -533,6 +559,14 @@ def _align_action(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["end"] = row["end_sec"]
     if row.get("end") is None and _number(row.get("end_seconds")):
         row["end"] = row["end_seconds"]
+    if row.get("start") is None:
+        named = _named_time(row, "start")
+        if named is not None:
+            row["start"] = named
+    if row.get("end") is None:
+        named = _named_time(row, "end")
+        if named is not None:
+            row["end"] = named
     # The interval is sometimes a two-number list named time_range. Without
     # that name, start and end stay empty and the action is dropped.
     span = row.get("time_range_s") or row.get("time_range") or row.get("interval_sec")
@@ -742,6 +776,20 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
     _copy_aliases(
         row,
         {
+            "local_id": "procedure_local_id",
+            "name": "procedure_name",
+            "required_objects": "required_objects_ids",
+            "expected_action": "expected_action_description",
+            "completion_condition": "completion_outcome",
+            "observed_result": "observed_end_state",
+            "preconditions": "prerequisites_text",
+            "action_local_ids": "related_action_local_ids",
+            "uncertainty": "uncertainty_score",
+        },
+    )
+    _copy_aliases(
+        row,
+        {
             "local_id": "step_local_id",
             "required_objects": "required_object_local_ids",
             "name": "goal_description",
@@ -768,6 +816,10 @@ def _align_step(item: dict[str, Any], index: int) -> dict[str, Any] | None:
         row["time_start"] = _first_number(row, window, ("start", "start_time", "from"))
     if row.get("time_end") is None:
         row["time_end"] = _first_number(row, window, ("end", "end_time", "to"))
+    if row.get("time_start") is None:
+        row["time_start"] = _named_time(row, "start")
+    if row.get("time_end") is None:
+        row["time_end"] = _named_time(row, "end")
     if not row.get("name") and row.get("label"):
         row["name"] = str(row["label"])
     if not row.get("name") and row.get("action"):
@@ -821,7 +873,16 @@ def _align_dependency(item: dict[str, Any], index: int) -> dict[str, Any] | None
     from app.schemas.analysis import DependencyPrediction
 
     item = dict(item)
-    _copy_aliases(item, {"category": "necessity", "rationale": "dependency_rationale"})
+    _copy_aliases(
+        item,
+        {
+            "category": "necessity",
+            "rationale": "dependency_rationale",
+            "from_step": "from_workflow_step_id",
+            "to_step": "to_workflow_step_id",
+        },
+    )
+    _copy_aliases(item, {"category": "relation_type", "rationale": "dependency_note"})
     row = dict(item)
     if not row.get("from_step"):
         source = row.get("from_step_id") or row.get("from_step_local_id")
@@ -964,7 +1025,13 @@ def _align_relationship(item: dict[str, Any], index: int) -> dict[str, Any] | No
     from app.schemas.analysis import RelationshipPrediction
 
     row = dict(item)
-    _copy_aliases(row, {"object_ids": "between", "relation": "relationship"})
+    _copy_aliases(row, {"object_ids": "between", "relation": "relationship", "other_local_id": "object_local_id"})
+    interval = row.get("valid_interval")
+    if isinstance(interval, list) and len(interval) >= 2:
+        if row.get("time_start") is None and _number(interval[0]):
+            row["time_start"] = float(interval[0])
+        if row.get("time_end") is None and _number(interval[1]):
+            row["time_end"] = float(interval[1])
     if not row.get("subject_local_id"):
         subject = row.get("object_a") or row.get("subject")
         if subject:
@@ -1016,6 +1083,7 @@ def _align_ambiguity(item: dict[str, Any], index: int) -> dict[str, Any] | None:
 
     row = dict(item)
     _copy_aliases(row, {"issue": "specific_issue", "detail": "impact", "label": "ambiguity_source"})
+    _copy_aliases(row, {"issue": "title", "detail": "text", "kind": "ambiguity_kind"})
     if not row.get("local_id"):
         row["local_id"] = f"Ambiguity_{index}"
     if not row.get("description"):

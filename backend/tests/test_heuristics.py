@@ -173,7 +173,7 @@ def test_canonical_rows_skip_the_reground_call(monkeypatch):
     frames = [SimpleNamespace(id=f"f{t}", timestamp=float(t)) for t in range(3)]
     run = SimpleNamespace(id="run", config_json={})
     video = SimpleNamespace(display_width=640, display_height=480)
-    result = asyncio.run(infer._reground_video_boxes(None, run, None, document, frames, video))
+    result = asyncio.run(infer._reground_video_boxes(None, run, None, document, frames, video, SimpleNamespace()))
     assert result == document
 
 

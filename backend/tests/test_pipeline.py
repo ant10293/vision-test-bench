@@ -486,3 +486,40 @@ def test_cancel_returns_a_duration_when_the_start_has_no_timezone(client):
     stage = session.scalar(select(PipelineStageRun).where(PipelineStageRun.run_id == run_id))
     assert stage.status == "canceled"
     session.close()
+
+
+def test_deleting_a_run_while_it_executes_stops_the_job_without_crashing(client, tmp_path: Path, monkeypatch):
+    from app.db import SessionLocal
+    from app.demo.encode import write_clip
+    from app.demo.scenarios import SCENARIOS, render_scenario
+    from app.models.runs import AnalysisRun, Job
+    from app.pipeline import runner
+    from app.pipeline.infer import register_fixture
+    from sqlalchemy import select
+
+    project = client.post("/api/projects", json={"name": "Bench"}).json()
+    clip = tmp_path / "fixed.mp4"
+    write_clip(render_scenario(SCENARIOS["fixed_camera"]()), clip)
+    with clip.open("rb") as handle:
+        video = client.post(
+            "/api/videos", data={"project_id": project["id"]}, files={"file": ("fixed.mp4", handle, "video/mp4")}
+        ).json()
+    register_fixture(video["checksum"], "fixed_camera")
+    run_id = client.post(
+        "/api/runs",
+        json={"video_id": video["id"], "provider_id": "fixture", "model_id": "authored-fixture"},
+    ).json()["id"]
+
+    async def delete_then_touch_the_run(session, run, _video, _stage):
+        other = SessionLocal()
+        other.delete(other.get(AnalysisRun, run_id))
+        other.commit()
+        other.close()
+        run.error = "still working"
+
+    monkeypatch.setattr(runner, "_dispatch", delete_then_touch_the_run)
+    session = SessionLocal()
+    job = session.scalar(select(Job).where(Job.run_id == run_id))
+    asyncio.run(runner.execute_job(session, job))
+    assert session.get(AnalysisRun, run_id) is None
+    session.close()

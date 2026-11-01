@@ -516,3 +516,30 @@ def test_a_part_seen_apart_before_it_is_inside_stays_its_own_object():
     )
     kept = drop_contained_objects(document)
     assert _ids(kept) == {"Object_1", "Object_7"}
+
+
+def test_a_large_still_box_is_the_surface_whatever_it_is_called():
+    lid = (0.0, 0.0, 1.0, 0.69)
+    part = (0.40, 0.40, 0.10, 0.10)
+    document = _window(
+        [("Object_1", "purple flat lid or board"), ("Object_2", "gray body")],
+        [item for time in (0, 1, 2) for item in (_obs("Object_1", time, *lid), _obs("Object_2", time, *part))],
+    )
+    assert _ids(omit_workspace_and_hands(document)) == {"Object_2"}
+
+
+def test_a_large_part_that_moves_is_not_the_surface():
+    document = _window(
+        [("Object_1", "large gray panel")],
+        [_obs("Object_1", time, 0.05 + 0.15 * time, 0.1, 0.55, 0.55) for time in (0, 1, 2)],
+    )
+    assert _ids(omit_workspace_and_hands(document)) == {"Object_1"}
+
+
+def test_a_small_mounted_base_stays():
+    document = _window(
+        [("Object_1", "wooden base")],
+        [_obs("Object_1", time, 0.3, 0.3, 0.3, 0.3) for time in (0, 1, 2)],
+    )
+    assert _ids(omit_workspace_and_hands(document)) == {"Object_1"}
+

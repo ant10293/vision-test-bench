@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.models.media import FrameAsset
 from app.models.runs import AnalysisRun, ModelRequestRow
 from app.perception.locate import apply_located, choose_locate_times, reference_time, same_surface
+from app.pipeline.contracts import SchemaContractError
 from app.pipeline.infer import model_for_call
 from app.pipeline.parsing import ParseFailure, extract_json_object
 from app.pipeline.prompts import LOCATE_PART
@@ -74,7 +75,7 @@ _SCHEMA = {
                     },
                     "confidence": {"anyOf": [{"type": "number"}, {"type": "null"}]},
                 },
-                "required": ["timestamp", "visibility", "bbox"],
+                "required": ["timestamp", "visibility", "bbox", "confidence"],
             },
         }
     },
@@ -157,6 +158,10 @@ async def locate_missing(
         if in_flight:
             await asyncio.gather(*in_flight, return_exceptions=True)
 
+    for failure in failures.values():
+        # A broken contract is our defect, not one part the model failed to find. It must not pass as worse boxes.
+        if isinstance(failure, SchemaContractError):
+            raise failure
     errors = [f"{object_id}: {failures[object_id]}" for object_id, _times in targets if object_id in failures]
     if pending and sent >= budget:
         errors.append(f"{pending[0][0]}: request budget reached")
@@ -318,6 +323,8 @@ async def _lookup(
     async with gate:
         finish_provider_call(session, run, row, response)
         session.commit()
+    if response.incomplete_reason:
+        raise ParseFailure(f"locate call stopped before finishing ({response.incomplete_reason})", response.text)
     sizes = {
         round(float(frame.timestamp), 3): (int(frame.width), int(frame.height))
         for frame in stills

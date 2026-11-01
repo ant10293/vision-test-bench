@@ -203,6 +203,20 @@ def test_a_failed_locate_frees_its_budget_slot(session, monkeypatch):
     assert [item.object_local_id for item in boxed] == ["Object_2"]
 
 
+def test_a_broken_contract_fails_the_run_instead_of_losing_boxes(session, monkeypatch):
+    from app.pipeline.contracts import SchemaContractError
+    from app.pipeline.locate_pass import locate_missing
+
+    class Broken(_Provider):
+        async def generate(self, secret, request):
+            raise SchemaContractError("#.observations[] must require every property.")
+
+    run, frames = _flat_frames(session)
+    _install(monkeypatch, Broken())
+    with pytest.raises(SchemaContractError, match="must require every property"):
+        asyncio.run(locate_missing(session, run, _document("Object_1"), frames))
+
+
 def test_a_full_budget_does_not_start_a_locate_call(session, monkeypatch):
     from app.models.runs import ModelRequestRow
     from app.pipeline.locate_pass import locate_missing

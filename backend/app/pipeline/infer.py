@@ -13,19 +13,28 @@ from app.models.media import FrameAsset, VideoAsset
 from app.models.runs import AnalysisRun, ModelRequestRow
 from app.perception.evidence import evidence_text
 from app.perception.ground import apply_perception
-from app.perception.roster import align_to_roster, drop_split_objects
+from app.perception.roster import align_to_roster, drop_split_objects, omit_workspace_and_hands
 from app.perception.sam_fusion import prompt_prior, sam_evidence_block
+from app.pipeline.contracts import (
+    OutputContract,
+    SchemaContractError,
+    StructuredOutputError,
+    contract_for,
+    schema_hash,
+    validate_output,
+)
 from app.pipeline.frame_boxes import (
-    FRAME_BOX_SCHEMA,
     FRAME_BOX_WINDOW,
     frame_box_prompt,
     frame_box_rejection,
+    frame_box_schema,
     merge_frame_boxes,
     parse_frame_boxes,
 )
 from app.pipeline.merge import restore_omitted_records
 from app.pipeline.parsing import ParseFailure, parse_analysis, parse_interpretation
 from app.pipeline.prompts import DISCOVERY, INTERPRETATION, compose
+from app.providers.meta_provider import MAX_OUTPUT_TOKENS
 from app.providers.model_list import capabilities_for, resolve_model_id
 from app.providers.registry import get_provider, needs_secret, run_transport
 from app.providers.types import (
@@ -35,7 +44,11 @@ from app.providers.types import (
     UnsupportedMode,
     rough_input_tokens,
 )
-from app.schemas.analysis import AnalysisDocument, Coverage, InterpretationResponse
+from app.schemas.analysis import (
+    AnalysisDocument,
+    Coverage,
+    InterpretationResponse,
+)
 from app.services.costs import fail_provider_call, finish_provider_call, open_provider_call
 from app.services.credentials import load_secret
 from app.services.experiments import adopt_video_modality
@@ -229,10 +242,12 @@ async def produce_document(
         system += "\n\n" + INTERPRETATION
 
     interpreting = purpose == "interpretation"
-    schema = (InterpretationResponse if interpreting else AnalysisDocument).model_json_schema()
     # These two calls are the only source of actions and steps for the run.
     single_pass = purpose == "full" and config.get("analysis_pass") == "single" and stage == "scene_analysis"
     parser = parse_interpretation if interpreting or single_pass else None
+    contract = contract_for(run.provider_id, stage, purpose, config.get("analysis_pass"))
+    legacy_model = InterpretationResponse if interpreting else AnalysisDocument
+    schema = contract.schema if contract else legacy_model.model_json_schema()
     video_file = adopt_video_modality(run)
     user = (
         f"Recording duration {video.duration_sec:.3f} seconds. "
@@ -284,13 +299,16 @@ async def produce_document(
             schema,
             attach_video=True,
             parser=parser,
+            contract=contract,
         )
         if offset:
             from app.pipeline.clip_time import shift_to_source
 
             document = shift_to_source(document, offset)
         if purpose != "interpretation":
-            document = await _reground_video_boxes(session, run, stage, document, frames, video)
+            # A surface on the roster spends a box on every frame and can never be a part.
+            document = omit_workspace_and_hands(document)
+            document = await _reground_video_boxes(session, run, stage, document, frames, video, coverage)
         return _with_perception(document, spatial_document)
     selected = _budget_frames(frames, int(config.get("max_frames") or 48))
     if not video_file:
@@ -313,6 +331,7 @@ async def produce_document(
             schema,
             attach_video=bool(video_file),
             parser=parser,
+            contract=contract,
         )
         if partials:
             # The previous window is the one that shares this boundary.
@@ -332,6 +351,7 @@ async def produce_document(
         schema,
         attach_video=False,
         parser=parser,
+        contract=contract,
     )
     merged = drop_split_objects(partials[0], restore_omitted_records(merged, partials))
     return _with_perception(merged, spatial_document)
@@ -356,6 +376,7 @@ async def _call(
     attach_video: bool = False,
     modality: str | None = None,
     parser=None,
+    contract: OutputContract | None = None,
 ) -> AnalysisDocument:
     config = run.config_json or {}
     if run.input_tokens and False:
@@ -389,6 +410,7 @@ async def _call(
         video_path=video_path,
         modality=sent_modality,
         json_schema=schema,
+        schema_name=contract.name if contract else "learnloop_analysis",
         temperature=config.get("temperature"),
         reasoning_effort=config.get("reasoning_effort"),
         image_detail=config.get("image_detail") or "high",
@@ -415,6 +437,17 @@ async def _call(
             "image_detail": request.image_detail,
             "estimated_input_tokens": estimate,
             "sdk_note": "recorded on the response",
+            "schema_name": request.schema_name,
+            "schema_hash": schema_hash(schema),
+            **(
+                {
+                    "strict_output": True,
+                    "output_token_limit": MAX_OUTPUT_TOKENS,
+                    "schema_version": contract.version if contract else None,
+                }
+                if run.provider_id == "meta"
+                else {}
+            ),
             **({"requested_model_id": requested} if requested != model_id else {}),
             **({"openai_transport": transport} if run.provider_id == "openai" else {}),
             **({"anthropic_transport": transport} if run.provider_id == "anthropic" else {}),
@@ -429,8 +462,10 @@ async def _call(
         fail_provider_call(row, exc)
         session.commit()
         raise
-    finish_provider_call(session, run, row, response)
+    saved = finish_provider_call(session, run, row, response)
     session.commit()
+    if contract is not None:
+        return _accept_contract_output(session, contract, response, row, saved, stage)
     if response.incomplete_reason:
         raise ParseFailure(
             f"{model_id} stopped before finishing its answer ({response.incomplete_reason}) "
@@ -441,6 +476,26 @@ async def _call(
 
     parsed = (parser or parse_analysis)(response.text)
     return mark_estimates(parsed) if isinstance(parsed, AnalysisDocument) else parsed
+
+
+def _accept_contract_output(session, contract, response, row, saved, stage) -> AnalysisDocument:
+    """Validate against the contract that was sent. The raw text stays on the response row either way."""
+    from app.perception.resolve import mark_estimates
+
+    label = f"{stage} call {row.provider_request_id or row.id}"
+    try:
+        document = validate_output(contract, response.text, incomplete_reason=response.incomplete_reason, label=label)
+    except StructuredOutputError as exc:
+        row.error = str(exc)[:2000]
+        saved.raw_json = {**(saved.raw_json or {}), "output_check": {"result": exc.code, **exc.diagnostics}}
+        session.commit()
+        raise
+    saved.raw_json = {
+        **(saved.raw_json or {}),
+        "output_check": {"result": "valid", "raw_output_chars": len(response.text)},
+    }
+    session.commit()
+    return mark_estimates(document)
 
 
 def _video_file(video: VideoAsset, run: AnalysisRun | None = None):
@@ -501,7 +556,9 @@ def _displayed_frame_instruction(video: VideoAsset) -> str:
     )
 
 
-async def _reground_video_boxes(session, run, stage, document: AnalysisDocument, frames, video: VideoAsset):
+async def _reground_video_boxes(
+    session, run, stage, document: AnalysisDocument, frames, video: VideoAsset, coverage: Coverage
+):
     """Measure boxes on the displayed frames.
 
     A video answer can report the right width and height and still place the
@@ -544,23 +601,36 @@ async def _reground_video_boxes(session, run, stage, document: AnalysisDocument,
                 user,
                 window,
                 video,
-                FRAME_BOX_SCHEMA,
+                frame_box_schema(sorted(roster_ids)),
                 attach_video=False,
                 modality="sampled_frames",
                 parser=lambda text, frame_w=width, frame_h=height: parse_frame_boxes(text, frame_w, frame_h),
             )
+        except SchemaContractError:
+            raise
+        except SchemaContractError:
+            raise
         except Exception:
             logger.exception("frame box pass failed; the video boxes were kept")
+            _note_unmeasured(coverage, window, "the call failed")
             break
         reason = frame_box_rejection(fresh.observations, width, height, roster_ids)
         if reason:
-            logger.info("frame box pass skipped: %s", reason)
+            logger.warning("frame box pass skipped: %s", reason)
+            _note_unmeasured(coverage, window, reason)
             continue
         merged = fence_repair(merged, lambda doc, answer=fresh: merge_frame_boxes(doc, answer))
         replaced = True
     if replaced:
         logger.info("replaced video-file boxes with boxes measured on the displayed frames")
     return merged
+
+
+def _note_unmeasured(coverage: Coverage, window, reason: str) -> None:
+    """Say which moments still show unmeasured video-file boxes, so a run cannot look measured when it is not."""
+    start, end = _frame_time(window[0]), _frame_time(window[-1])
+    note = f"Boxes from {start:.1f}s to {end:.1f}s were not measured on frames: {reason}."
+    coverage.temporal_coverage_note = f"{coverage.temporal_coverage_note or ''} {note}".strip()
 
 
 def _note_video_coverage(coverage: Coverage, *, timeline_frames: int | None = None) -> None:

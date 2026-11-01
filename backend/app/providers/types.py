@@ -111,6 +111,7 @@ class GenerationRequest:
     video_path: Path | None = None
     modality: str = "sampled_frames"
     json_schema: dict | None = None
+    schema_name: str = "learnloop_analysis"
     temperature: float | None = None
     reasoning_effort: str | None = None
     image_detail: str = "high"

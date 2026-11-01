@@ -105,7 +105,7 @@ echo "App       http://127.0.0.1:${APP_PORT}"
 
 # Job control would put the API in the background and the terminal would freeze it,
 # so the page would load while every data request hung.
-backend/.venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port "$API_PORT" --reload &
+backend/.venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port "$API_PORT" --reload --timeout-graceful-shutdown 5 &
 API_PID=$!
 trap 'kill "$API_PID" 2>/dev/null || true' EXIT INT TERM
 

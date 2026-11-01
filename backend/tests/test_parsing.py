@@ -97,6 +97,11 @@ def test_every_list_is_read_from_a_renamed_key():
     assert len(document.relationships) == len(document.ambiguities) == 1
 
 
+def test_unreadable_action_rows_leave_a_clean_failure_not_a_schema_error():
+    with pytest.raises(ParseFailure, match="could not be read"):
+        parse_analysis('{"objects": [], "actions": [{"action_type": "lift"}]}')
+
+
 def test_unreadable_steps_beside_real_actions_keep_the_actions():
     evidence = '"evidence": {"classification": "INFERRED", "note": "n", "provenance": "AI_PREDICTION"}'
     document = parse_analysis(
@@ -109,6 +114,19 @@ def test_unreadable_steps_beside_real_actions_keep_the_actions():
 def test_unreadable_action_records_are_a_failure_not_an_empty_list():
     with pytest.raises(ParseFailure, match="1 records under actions_mystery"):
         parse_analysis('{"objects": [], "actions_mystery": [{"what": "unreadable"}]}')
+
+
+def test_action_times_are_read_from_role_named_fields():
+    evidence = '"evidence": {"classification": "INFERRED", "note": "n", "provenance": "AI_PREDICTION"}'
+    document = parse_interpretation(
+        '{"actions_collapsed": [{"action_type": "pick_up", "action_local_id": "Action_1", "start_timestamp": 0.5, '
+        '"end_s": 2.0, "actor_label": "both hands", "objects_used": ["Object_1"], "end_state": "held", '
+        + evidence + "}]}"
+    )
+    action = document.actions[0]
+    assert (action.local_id, action.start, action.end, action.actor) == ("Action_1", 0.5, 2.0, "both hands")
+    assert action.object_local_ids == ["Object_1"]
+    assert action.final_state == "held"
 
 
 def test_interpretation_without_action_lists_is_rejected():

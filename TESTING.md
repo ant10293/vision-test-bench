@@ -63,3 +63,15 @@ cd frontend && npx playwright install chromium && npx playwright test
 ```
 
 The Playwright run boots the API with seeding enabled, waits until a fixture analysis completes, opens it, renames an object, opens the workflow graph, and downloads the export zip.
+
+## Meta output contracts
+
+`backend/tests/test_meta_contracts.py` covers schema correctness, runaway output, realistic answers, and the discovery, interpretation, single-pass, multi-pass, and multi-window paths with a fake provider. It needs no API key.
+
+The live check spends real tokens and only runs when asked:
+
+```bash
+cd backend && .venv/bin/python scripts/live_meta_contract.py --yes --model muse-wonder-1.0 --video ../data/devlab/proxies/069a8b2c9715.mp4
+```
+
+It reports whether Meta accepted each schema, whether the response completed, whether it validated, its token usage, and whether repeated keys appeared. A failure is evidence about Meta's decoder. It has no non-strict fallback.

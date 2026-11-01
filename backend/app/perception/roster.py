@@ -11,6 +11,7 @@ angle, not a new object.
 from __future__ import annotations
 
 import re
+import statistics
 
 import numpy as np
 
@@ -396,9 +397,9 @@ def omit_workspace_and_hands(document: AnalysisDocument) -> AnalysisDocument:
     The scene prompt already tells the model to leave those out of the object
     list. A surface it records anyway is not an object, and its box would
     otherwise cover the parts. A board, tray, or base, and anything picked up,
-    stays.
+    stays unless its box shows it is the scene itself.
     """
-    dropped = {obj.local_id for obj in document.objects if _workspace_or_hand(obj)}
+    dropped = {obj.local_id for obj in document.objects if _workspace_or_hand(obj) or _fills_the_scene(document, obj)}
     if not dropped:
         return document
 
@@ -430,6 +431,27 @@ def omit_workspace_and_hands(document: AnalysisDocument) -> AnalysisDocument:
             ],
         }
     )
+
+
+# The name of a surface varies between runs: table, tray, lid, board. Its box does not.
+# Picked-up parts move, and even a finished assembly stays well under this share of the frame.
+_SCENE_AREA = 0.25
+_SCENE_DRIFT = 0.03
+_SCENE_MIN_BOXES = 3
+
+
+def _fills_the_scene(document: AnalysisDocument, obj) -> bool:
+    """A large box that never moves is the surface the work happens on, whatever it was called."""
+    boxes = [
+        item.bbox for item in document.observations if item.object_local_id == obj.local_id and item.bbox is not None
+    ]
+    if len(boxes) < _SCENE_MIN_BOXES:
+        return False
+    if statistics.median(box.w * box.h for box in boxes) < _SCENE_AREA:
+        return False
+    centers_x = [box.x + box.w / 2 for box in boxes]
+    centers_y = [box.y + box.h / 2 for box in boxes]
+    return max(statistics.pstdev(centers_x), statistics.pstdev(centers_y)) <= _SCENE_DRIFT
 
 
 def _workspace_or_hand(obj) -> bool:

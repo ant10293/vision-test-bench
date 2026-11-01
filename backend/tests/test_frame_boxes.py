@@ -97,3 +97,18 @@ def test_frame_boxes_replace_the_same_moment_only():
     first, second = merged.observations
     assert first.bbox is not None and (first.bbox.x, first.bbox.w, first.bbox.h) == (0.4, 0.09, 0.05)
     assert second.bbox is not None and second.bbox.w == 0.05
+
+
+def test_frame_box_contract_only_allows_the_roster_ids():
+    from app.pipeline.contracts import validate_strict_schema
+    from app.pipeline.frame_boxes import FRAME_BOX_SCHEMA, frame_box_schema
+
+    schema = frame_box_schema(["Object_2", "Object_3"])
+    validate_strict_schema(schema)
+    fields = schema["properties"]["observations"]["items"]["properties"]
+    assert fields["object_local_id"]["enum"] == ["Object_2", "Object_3"]
+    assert fields["visibility"]["enum"] == ["visible", "partial", "occluded", "absent"]
+    assert FRAME_BOX_SCHEMA["properties"]["observations"]["items"]["properties"]["object_local_id"] == {
+        "type": "string"
+    }
+
