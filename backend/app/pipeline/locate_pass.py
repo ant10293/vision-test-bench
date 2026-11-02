@@ -349,7 +349,8 @@ def _on_the_same_surface(
         if candidate is not None and candidate.size and same_surface(reference, candidate):
             kept.append((timestamp, bbox, visibility, confidence))
         else:
-            kept.append((timestamp, None, visibility, None))
+            # The refused box and score ride along so the refusal can be recorded.
+            kept.append((timestamp, None, visibility, None, bbox, confidence))
     return kept
 
 

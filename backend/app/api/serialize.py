@@ -168,6 +168,7 @@ def bundle(session: Session, run: AnalysisRun) -> dict:
         "objects": objects,
         "observations": _observations(session, revision_id, (revision.document_json or {}) if revision else {}),
         "raw_observations": _raw_observations((revision.document_json or {}) if revision else {}),
+        "box_decisions": _box_decisions((revision.document_json or {}) if revision else {}),
         "states": _states(session, revision_id),
         "transitions": _transitions(session, revision_id),
         "relationships": _relationships(session, revision_id),
@@ -406,6 +407,24 @@ def _raw_observations(document: dict) -> dict:
             }
             for row in rows[:RAW_LIMIT]
         ],
+    }
+
+
+def _box_decisions(document: dict) -> dict:
+    """Boxes pipeline steps removed or moved. Counts cover every row, including a truncated tail."""
+    rows = document.get("box_decisions") or []
+    counts: dict[tuple[str, str, str], int] = {}
+    for row in rows:
+        key = (row.get("step", ""), row.get("reason_code", ""), row.get("outcome", "dropped"))
+        counts[key] = counts.get(key, 0) + 1
+    return {
+        "total": len(rows),
+        "truncated": len(rows) > RAW_LIMIT,
+        "counts": [
+            {"step": step, "reason_code": reason, "outcome": outcome, "count": count}
+            for (step, reason, outcome), count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "rows": rows[:RAW_LIMIT],
     }
 
 

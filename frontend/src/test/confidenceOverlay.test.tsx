@@ -52,7 +52,7 @@ beforeEach(() => {
     time: 1,
     playing: false,
     overlay: true,
-    layers: { tracks: false, trajectory: false, uncertain: false, confidence: true, conflicts: false },
+    layers: { tracks: false, trajectory: false, uncertain: false, confidence: true, conflicts: false, drops: false },
   });
 });
 
@@ -154,5 +154,45 @@ describe("frame stepping on the picture", () => {
 
     fireEvent.click(next);
     expect(useInspector.getState().time).toBeCloseTo(1.1);
+  });
+});
+
+describe("dropped box layer", () => {
+  const withDrops = {
+    ...bundle,
+    box_decisions: {
+      total: 1,
+      truncated: false,
+      counts: [],
+      rows: [{
+        step: "locate",
+        reason_code: "low_confidence",
+        outcome: "dropped",
+        object_local_id: "Object_1",
+        timestamp: 1,
+        bbox: { x: 0.5, y: 0.5, w: 0.1, h: 0.1 },
+        confidence: 0.2,
+        other_object_id: null,
+        detail: "",
+      }],
+    },
+  } as unknown as Bundle;
+
+  it("has no toggle when the run recorded nothing", () => {
+    useInspector.setState({ time: 1 });
+    stage();
+    expect(screen.queryByRole("button", { name: "Show dropped" })).toBeNull();
+  });
+
+  it("draws the reason only after the toggle is on", () => {
+    useInspector.setState({ time: 1 });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <VideoStage bundle={withDrops} />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByTestId("dropped-box")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show dropped" }));
+    expect(within(screen.getByTestId("dropped-box")).getByText(/Object_1 · Low confidence/)).toBeInTheDocument();
   });
 });

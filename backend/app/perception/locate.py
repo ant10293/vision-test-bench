@@ -12,7 +12,14 @@ from __future__ import annotations
 import numpy as np
 
 from app.perception.continuity import GROWTH, SHRINK
-from app.schemas.analysis import AnalysisDocument, BBox, Evidence, ObservationPrediction
+from app.perception.decisions import with_decisions
+from app.schemas.analysis import (
+    AnalysisDocument,
+    BBox,
+    BoxDecision,
+    Evidence,
+    ObservationPrediction,
+)
 from app.schemas.enums import Continuity, EvidenceClass, Provenance, Visibility
 
 # A follow-up box may be rotated. It may not be a different surface, such as skin.
@@ -130,24 +137,67 @@ def apply_located(
         for item in document.observations
         if item.bbox is not None
     }
-    others: dict[float, list[BBox]] = {}
+    others: dict[float, list[tuple[str, BBox]]] = {}
     for item in document.observations:
         if item.object_local_id == object_id or item.bbox is None:
             continue
-        others.setdefault(round(item.timestamp, 3), []).append(item.bbox)
+        others.setdefault(round(item.timestamp, 3), []).append((item.object_local_id, item.bbox))
     added: list[ObservationPrediction] = []
-    for timestamp, bbox, visibility, confidence in (_with_confidence(item) for item in found):
+    decisions: list[BoxDecision] = []
+
+    def refuse(timestamp, bbox, confidence, reason: str, detail: str, other: str | None = None) -> None:
+        decisions.append(
+            BoxDecision(
+                step="locate",
+                reason_code=reason,
+                object_local_id=object_id,
+                timestamp=timestamp,
+                bbox=bbox,
+                confidence=confidence,
+                other_object_id=other,
+                detail=detail,
+            )
+        )
+
+    for item in found:
+        timestamp, bbox, visibility, confidence = _with_confidence(item)
         key = round(timestamp, 3)
-        if bbox is None or visibility == "absent":
+        if bbox is None and len(item) > 4:
+            refuse(timestamp, item[4], item[5], "surface_mismatch", "The pixels in this box do not match the reference crop.")
+            continue
+        if bbox is None:
+            continue
+        if visibility == "absent":
+            refuse(timestamp, bbox, confidence, "box_marked_absent", "The answer gave a box and also called the part absent.")
             continue
         if confidence is not None and confidence < MIN_CONFIDENCE:
+            refuse(
+                timestamp, bbox, confidence, "low_confidence", f"Scored {confidence:.2f}, under the {MIN_CONFIDENCE:.2f} limit."
+            )
             continue
         if (key, object_id) in occupied:
+            refuse(timestamp, bbox, confidence, "slot_occupied", "This part already has a box on this frame.")
             continue
         area = bbox.w * bbox.h
         if not box_fits(area, reference_area):
+            refuse(
+                timestamp,
+                bbox,
+                confidence,
+                "extent_mismatch",
+                f"{area / max(reference_area, 1e-9):.2f} times the reference area. The allowed range is {1 / SHRINK:g} to {GROWTH:g}.",
+            )
             continue
-        if any(_iou(bbox, other) >= 0.55 for other in others.get(key, [])):
+        overlap = next(((other_id, _iou(bbox, other)) for other_id, other in others.get(key, []) if _iou(bbox, other) >= 0.55), None)
+        if overlap is not None:
+            refuse(
+                timestamp,
+                bbox,
+                confidence,
+                "duplicate_overlap",
+                f"IoU {overlap[1]:.2f} with {overlap[0]}. The limit is 0.55.",
+                overlap[0],
+            )
             continue
         added.append(
             ObservationPrediction(
@@ -169,6 +219,7 @@ def apply_located(
                 confidence=confidence,
             )
         )
+    document = with_decisions(document, decisions)
     if not added:
         return document
     observations = [*document.observations, *added]

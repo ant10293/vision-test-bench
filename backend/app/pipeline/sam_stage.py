@@ -457,7 +457,11 @@ def _persist_tracks_and_masks(session, run, video, samples, associations, docume
                 image = read_bgr(frame_path)
             except Exception:
                 image = None
-        files = materialize_record(record, directory, f"{index:05d}", image_bgr=image) if record else None
+        files = (
+            materialize_record(record, directory, f"{index:05d}", image_bgr=image, decode=image is not None)
+            if record
+            else None
+        )
         mask_path = ""
         meta = {
             "session_id": sample.session_id,
@@ -494,15 +498,17 @@ def _persist_tracks_and_masks(session, run, video, samples, associations, docume
 def _record_for_sample(sample: TrackSample) -> SamRecord | None:
     if not sample.mask_data and not sample.mask_payload:
         return None
+    width = sample.source_width or 1
+    height = sample.source_height or 1
     return SamRecord(
         frame_index=sample.frame_index,
         track_id=sample.raw_track_id,
-        x1=0,
-        y1=0,
-        x2=1,
-        y2=1,
-        width=sample.source_width or 1,
-        height=sample.source_height or 1,
+        x1=round(sample.bbox.x * width),
+        y1=round(sample.bbox.y * height),
+        x2=round((sample.bbox.x + sample.bbox.w) * width),
+        y2=round((sample.bbox.y + sample.bbox.h) * height),
+        width=width,
+        height=height,
         confidence=sample.confidence,
         mask_payload=sample.mask_payload,
         mask_encoding=sample.mask_encoding or "unknown",
@@ -552,7 +558,7 @@ def _mask_meta(record: SamRecord, files, status: str, request_id: str, session_i
         "session_id": session_id,
         "request_id": request_id,
         "association_status": status,
-        "decode": "ok" if files.decoded else "failed",
+        "decode": "ok" if files.decoded else "failed" if files.error else "deferred",
         "decode_error": files.error,
         "frame_index": record.frame_index,
         "transform": "normalized by the width and height SAM reported on the box",

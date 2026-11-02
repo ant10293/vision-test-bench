@@ -3,8 +3,8 @@ import { Eye, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { AssetPreview, PreviewNav } from "./AssetPreview";
 import { api } from "../lib/api";
-import type { Bundle, Observation, TrackPointSample } from "../lib/types";
-import { coverageAt, frameObjectStills, overlayObservations, tracksAt } from "../lib/analysis";
+import type { BoxDecision, Bundle, Observation, TrackPointSample } from "../lib/types";
+import { coverageAt, decisionsNear, frameObjectStills, overlayObservations, tracksAt } from "../lib/analysis";
 import { formatConfidence } from "../lib/confidence";
 import { humanize, labeledId } from "../lib/humanize";
 import { panStage, stageViewAt, stageZoomByWheel, clampStageView, MAX_STAGE_ZOOM, MIN_STAGE_ZOOM, type StageView } from "../lib/stageZoom";
@@ -126,6 +126,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
   const vlmBoxes = overlay ? overlayObservations(bundle.observations, time, "vlm").filter((item) => !trackedIds.has(item.object_local_id)) : [];
   const inferredBoxes = overlay ? overlayObservations(bundle.observations, time, "inferred") : [];
   const conflictBoxes = overlay && layers.conflicts ? overlayObservations(bundle.observations, time, "conflict") : [];
+  const dropBoxes = overlay && layers.drops ? decisionsNear(bundle.box_decisions?.rows ?? [], time).filter((row) => row.bbox) : [];
   const stills = frameObjectStills(bundle, time);
   const allPoints = bundle.tracks?.points ?? [];
   const trackHits = tracksAt(allPoints, time);
@@ -288,7 +289,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
           onPause={() => setPlaying(false)}
           onClick={(event) => void seedAt(event)}
         />
-        {(vlmBoxes.length > 0 || inferredBoxes.length > 0 || samBoxes.length > 0 || conflictBoxes.length > 0) && (
+        {(vlmBoxes.length > 0 || inferredBoxes.length > 0 || samBoxes.length > 0 || conflictBoxes.length > 0 || dropBoxes.length > 0) && (
           <svg
             className="pointer-events-none absolute"
             style={{ left: content.x, top: content.y, width: content.w, height: content.h, ...frameTransform }}
@@ -305,6 +306,9 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
             ))}
             {conflictBoxes.map((obs) => (
               <ObservationBox key={obs.id} obs={obs} bundle={bundle} content={content} fontReady={fontReady} showConfidence={layers.confidence} showId dashed conflict />
+            ))}
+            {dropBoxes.map((row, index) => (
+              <DecisionBox key={`${row.step}-${row.reason_code}-${row.object_local_id}-${row.timestamp}-${index}`} row={row} content={content} />
             ))}
           </svg>
         )}
@@ -377,6 +381,11 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
           <button className="btn" aria-pressed={layers.conflicts} onClick={() => useInspector.getState().setLayer("conflicts", !layers.conflicts)}>
             {layers.conflicts ? "Hide conflicts" : "Show conflicts"}
           </button>
+          {(bundle.box_decisions?.total ?? 0) > 0 && (
+            <button className="btn" aria-pressed={layers.drops} onClick={() => useInspector.getState().setLayer("drops", !layers.drops)}>
+              {layers.drops ? "Hide dropped" : "Show dropped"}
+            </button>
+          )}
           <button className="btn" aria-pressed={layers.confidence} onClick={() => useInspector.getState().setLayer("confidence", !layers.confidence)}>
             {layers.confidence ? "Hide confidence" : "Show confidence"}
           </button>
@@ -459,6 +468,21 @@ function coverageLabel(state: string) {
   if (state === "conflict") return "model and SAM disagree";
   if (state === "unassigned") return "SAM track was not linked to this object";
   return "unobserved";
+}
+
+function DecisionBox({ row, content }: { row: BoxDecision; content: { vw: number; vh: number } }) {
+  if (!row.bbox) return null;
+  const x = row.bbox.x * content.vw;
+  const y = row.bbox.y * content.vh;
+  const moved = row.outcome === "reassigned" && row.other_object_id ? ` → ${row.other_object_id}` : "";
+  return (
+    <g data-testid="dropped-box">
+      <rect x={x} y={y} width={row.bbox.w * content.vw} height={row.bbox.h * content.vh} fill="none" stroke="#E6A23C" strokeWidth={2} strokeDasharray="6 4" />
+      <text x={x} y={Math.max(LABEL_SIZE, y - 4)} fill="#E6A23C" fontSize={LABEL_SIZE} fontFamily="IBM Plex Sans, sans-serif">
+        {`✕ ${row.object_local_id}${moved} · ${humanize(row.reason_code)}`}
+      </text>
+    </g>
+  );
 }
 
 function ObservationBox({

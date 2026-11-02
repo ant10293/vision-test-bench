@@ -297,6 +297,18 @@ export interface StageInfo {
   finished_at: string | null;
 }
 
+export interface BoxDecision {
+  step: string;
+  reason_code: string;
+  outcome: "dropped" | "reassigned";
+  object_local_id: string;
+  timestamp: number | null;
+  bbox: BBox | null;
+  confidence: number | null;
+  other_object_id: string | null;
+  detail: string;
+}
+
 export interface Bundle {
   run: RunSummary;
   video: VideoInfo | null;
@@ -344,6 +356,12 @@ export interface Bundle {
   objects: LabObject[];
   observations: Observation[];
   raw_observations?: { total: number; truncated: boolean; rows: RawObservation[] };
+  box_decisions?: {
+    total: number;
+    truncated: boolean;
+    counts: { step: string; reason_code: string; outcome: string; count: number }[];
+    rows: BoxDecision[];
+  };
   states: {
     id: string;
     object_local_id: string;

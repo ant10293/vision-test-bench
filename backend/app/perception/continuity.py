@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 
 from app.perception.assignment import center, iou
+from app.perception.decisions import box_decision, merged_decisions
 from app.schemas.analysis import (
     AmbiguityPrediction,
     AnalysisDocument,
@@ -58,6 +59,7 @@ def reconcile_identity(document: AnalysisDocument) -> AnalysisDocument:
     rebuilt: list[ObservationPrediction] = list(passthrough)
     removed: dict[str, int] = {}
     reassigned: dict[str, int] = {}
+    decisions = []
     history = _history(document.observations, references)
     for timestamp in sorted(by_time):
         group = by_time[timestamp]
@@ -70,6 +72,7 @@ def reconcile_identity(document: AnalysisDocument) -> AnalysisDocument:
         for observation, target in moved_small:
             rebuilt.append(_retarget(observation, target))
             reassigned[target] = reassigned.get(target, 0) + 1
+            decisions.append(_moved(observation, target))
             occupied.add(target)
             _remember(history, target, timestamp, observation)
         for observation in undersized:
@@ -85,10 +88,23 @@ def reconcile_identity(document: AnalysisDocument) -> AnalysisDocument:
         for observation, target in moved_large:
             rebuilt.append(_retarget(observation, target))
             reassigned[target] = reassigned.get(target, 0) + 1
+            decisions.append(_moved(observation, target))
             _remember(history, target, timestamp, observation)
         for observation in oversized:
             if id(observation) not in assigned_ids:
                 removed[observation.object_local_id] = removed.get(observation.object_local_id, 0) + 1
+                reference = references[observation.object_local_id]
+                decisions.append(
+                    box_decision(
+                        "identity_reconcile",
+                        "extent_growth_exceeded",
+                        observation,
+                        detail=(
+                            f"{_area(observation.bbox) / max(reference, 1e-9):.1f} times this part's established area. "
+                            f"The limit is {GROWTH:g}, and no other part fit the box."
+                        ),
+                    )
+                )
         rebuilt.extend(kept)
         for observation in kept:
             _remember(history, observation.object_local_id, timestamp, observation)
@@ -120,7 +136,24 @@ def reconcile_identity(document: AnalysisDocument) -> AnalysisDocument:
     rebuilt.sort(key=lambda item: (item.timestamp, item.object_local_id))
     if not removed and not reassigned and len(rebuilt) == len(document.observations):
         return document
-    return document.model_copy(update={"observations": rebuilt, "ambiguities": ambiguities})
+    return document.model_copy(
+        update={
+            "observations": rebuilt,
+            "ambiguities": ambiguities,
+            "box_decisions": merged_decisions(document.box_decisions, decisions),
+        }
+    )
+
+
+def _moved(observation: ObservationPrediction, target: str):
+    return box_decision(
+        "identity_reconcile",
+        "size_matched_other_part",
+        observation,
+        outcome="reassigned",
+        other_object_id=target,
+        detail=f"The box size fits {target}, not {observation.object_local_id}.",
+    )
 
 
 def _samples(document: AnalysisDocument) -> dict[str, list[float]]:

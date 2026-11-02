@@ -7,6 +7,7 @@ observe something, and a model can infer something. Neither field implies the ot
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from app import SCHEMA_VERSION
 from app.schemas.enums import (
@@ -354,6 +355,20 @@ class InterpretationResponse(BaseModel):
     ambiguities: list[AmbiguityPrediction]
 
 
+class BoxDecision(BaseModel):
+    """A box a pipeline step removed or moved. The box is kept as it was before that step."""
+
+    step: str
+    reason_code: str
+    outcome: Literal["dropped", "reassigned"] = "dropped"
+    object_local_id: str
+    timestamp: float | None = None
+    bbox: BBox | None = None
+    confidence: float | None = None
+    other_object_id: str | None = None
+    detail: str = ""
+
+
 class AnalysisDocument(BaseModel):
     schema_version: str = SCHEMA_VERSION
     summary: str = ""
@@ -367,6 +382,8 @@ class AnalysisDocument(BaseModel):
     # Producer outputs that the resolver did not display: superseded model
     # estimates, unassociated or conflicting segmentation. Kept for inspection.
     raw_observations: list[ObservationPrediction] = Field(default_factory=list)
+    # Written by the pipeline only, so it stays out of the schema sent to a model.
+    box_decisions: SkipJsonSchema[list[BoxDecision]] = Field(default_factory=list)
     states: list[StatePrediction] = Field(default_factory=list)
     transitions: list[TransitionPrediction] = Field(default_factory=list)
     relationships: list[RelationshipPrediction] = Field(default_factory=list)

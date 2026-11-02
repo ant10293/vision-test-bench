@@ -5,7 +5,7 @@ from app.pipeline.frame_boxes import (
     parse_frame_boxes,
     square_normalized,
 )
-from app.schemas.analysis import AnalysisDocument, BBox, Evidence, ObservationPrediction
+from app.schemas.analysis import AnalysisDocument, BBox, Evidence, ObjectPrediction, ObservationPrediction
 from app.schemas.enums import EvidenceClass, Provenance
 
 
@@ -112,3 +112,25 @@ def test_frame_box_contract_only_allows_the_roster_ids():
         "type": "string"
     }
 
+
+
+def test_a_frame_answer_adds_a_moment_the_video_answer_left_out():
+    video_only_first_frame = AnalysisDocument(
+        objects=[ObjectPrediction(local_id="Object_1", label="part")],
+        observations=[_obs("Object_1", 0.0, 0.05, 0.05)],
+    )
+    fresh = AnalysisDocument(
+        observations=[
+            _obs("Object_1", 4.0, 0.09, 0.05, x=0.4, y=0.3),
+            _obs("Object_9", 4.0, 0.09, 0.05, x=0.1, y=0.1),
+        ]
+    )
+    merged = merge_frame_boxes(video_only_first_frame, fresh)
+    assert [(item.object_local_id, item.timestamp) for item in merged.observations] == [
+        ("Object_1", 0.0),
+        ("Object_1", 4.0),
+    ]
+    added = merged.observations[1]
+    assert added.bbox is not None and added.bbox.x == 0.4
+    assert added.evidence.classification == EvidenceClass.DIRECTLY_OBSERVED
+    assert added.evidence.frame_timestamps == [4.0]

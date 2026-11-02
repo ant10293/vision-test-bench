@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 
+import cv2
+import numpy as np
 import pytest
 
 os.environ.setdefault("LEARNLOOP_WORKER_ENABLED", "0")
@@ -22,6 +24,7 @@ from app.perception.sam_fusion import (
 )
 from app.perception.sam_masks import materialize_record, write_mask_png
 from app.providers.sam import (
+    SamRecord,
     SpatialMark,
     concept_text,
     frame_timestamp,
@@ -511,3 +514,52 @@ def test_sam_configuration_requires_a_meta_key_and_keeps_the_primary_model(tmp_p
     assert legacy.observations == []
     assert stages == set() or True
     session.close()
+
+
+def test_a_real_mask_decodes_and_its_cutout_lands_inside_its_box(tmp_path):
+    pytest.importorskip("meta_sam_parser")
+    record = SamRecord(
+        frame_index=0,
+        track_id="1",
+        x1=4,
+        y1=2,
+        x2=9,
+        y2=7,
+        width=20,
+        height=10,
+        confidence=None,
+        mask_payload="x=0;y=0;data=5,5,!!!!!(QO(0lu8?",
+        mask_encoding="one_bit",
+        mask_height=5,
+        mask_width=5,
+        mask_data="5,5,!!!!!(QO(0lu8?",
+    )
+    image = np.zeros((10, 20, 3), dtype=np.uint8)
+    image[2:7, 4:9] = 200
+    files = materialize_record(record, tmp_path, "mask", image_bgr=image)
+    assert files.decoded and files.png_path is not None and files.cutout_path is not None
+    cutout = cv2.imread(str(files.cutout_path), cv2.IMREAD_UNCHANGED)
+    assert cutout.shape[0] <= 5 and cutout.shape[1] <= 5
+    assert (cutout[cutout[..., 3] > 0][:, :3] == 200).all()
+
+
+def test_a_deferred_mask_keeps_its_payload_without_decoding(tmp_path):
+    record = SamRecord(
+        frame_index=0,
+        track_id="1",
+        x1=0,
+        y1=0,
+        x2=5,
+        y2=5,
+        width=20,
+        height=10,
+        confidence=None,
+        mask_payload="x=0;y=0;data=5,5,!!!!!(QO(0lu8?",
+        mask_encoding="one_bit",
+        mask_height=5,
+        mask_width=5,
+        mask_data="5,5,!!!!!(QO(0lu8?",
+    )
+    files = materialize_record(record, tmp_path, "mask", decode=False)
+    assert files.raw_path is not None and files.raw_path.read_text() == record.mask_data
+    assert files.png_path is None and not files.decoded and files.error == ""

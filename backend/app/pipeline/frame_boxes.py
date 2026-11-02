@@ -12,9 +12,10 @@ from __future__ import annotations
 import copy
 import json
 
+from app.perception.decisions import box_decision, with_decisions
 from app.pipeline.parsing import extract_json_object, parse_analysis
 from app.schemas.analysis import AnalysisDocument, ObservationPrediction
-from app.schemas.enums import Visibility
+from app.schemas.enums import EvidenceClass, Visibility
 
 # A phone frame is about 1.78. Anything under this can honestly have square boxes.
 _MIN_ASPECT = 1.35
@@ -187,7 +188,8 @@ def merge_frame_boxes(document: AnalysisDocument, fresh: AnalysisDocument) -> An
     """Copy boxes from a frame answer onto the matching object and timestamp.
 
     An absent answer clears the box. The score has to come from that same answer,
-    because the video score was about a different corner.
+    because the video score was about a different corner. A moment the video
+    answer left out is added, because this answer looked at that frame.
     """
     incoming: dict[tuple[str, float], ObservationPrediction] = {}
     for item in fresh.observations:
@@ -197,12 +199,25 @@ def merge_frame_boxes(document: AnalysisDocument, fresh: AnalysisDocument) -> An
     if not incoming:
         return document
     updated = []
+    cleared = []
+    matched = set()
     for item in document.observations:
-        match = incoming.get((item.object_local_id, round(item.timestamp, 3)))
+        key = (item.object_local_id, round(item.timestamp, 3))
+        match = incoming.get(key)
+        matched.add(key)
         if match is None:
             updated.append(item)
             continue
         if match.bbox is None:
+            if item.bbox is not None:
+                cleared.append(
+                    box_decision(
+                        "frame_boxes",
+                        "frame_answer_absent",
+                        item,
+                        detail="The answer measured on this frame called the part absent.",
+                    )
+                )
             updated.append(
                 item.model_copy(update={"bbox": None, "visibility": match.visibility, "confidence": None})
             )
@@ -216,7 +231,22 @@ def merge_frame_boxes(document: AnalysisDocument, fresh: AnalysisDocument) -> An
                 }
             )
         )
-    return drop_copied_boxes(document.model_copy(update={"observations": updated}))
+    known = {obj.local_id for obj in document.objects}
+    updated.extend(
+        item.model_copy(
+            update={
+                "evidence": item.evidence.model_copy(
+                    update={
+                        "classification": EvidenceClass.DIRECTLY_OBSERVED,
+                        "frame_timestamps": [item.timestamp],
+                    }
+                )
+            }
+        )
+        for key, item in incoming.items()
+        if key not in matched and item.object_local_id in known
+    )
+    return drop_copied_boxes(with_decisions(document.model_copy(update={"observations": updated}), cleared))
 
 
 def drop_copied_boxes(document: AnalysisDocument) -> AnalysisDocument:
@@ -227,15 +257,16 @@ def drop_copied_boxes(document: AnalysisDocument) -> AnalysisDocument:
         if item.bbox is None:
             continue
         grouped.setdefault(round(item.timestamp, 3), []).append(index)
-    clear: set[int] = set()
+    clear: dict[int, int] = {}
     for indexes in grouped.values():
         ranked = sorted(indexes, key=lambda index: (observations[index].confidence or 0), reverse=True)
         kept: list[int] = []
         for index in ranked:
             box = observations[index].bbox
             assert box is not None
-            if any(_iou(box, observations[other].bbox) >= 0.9 for other in kept):
-                clear.add(index)
+            winner = next((other for other in kept if _iou(box, observations[other].bbox) >= 0.9), None)
+            if winner is not None:
+                clear[index] = winner
                 continue
             kept.append(index)
     if not clear:
@@ -248,7 +279,17 @@ def drop_copied_boxes(document: AnalysisDocument) -> AnalysisDocument:
             updated.append(item)
             continue
         updated.append(item.model_copy(update={"bbox": None, "visibility": Visibility.ABSENT, "confidence": None}))
-    return document.model_copy(update={"observations": updated})
+    decisions = [
+        box_decision(
+            "frame_boxes",
+            "duplicate_copied_box",
+            observations[index],
+            other_object_id=observations[winner].object_local_id,
+            detail=f"The same rectangle was given to {observations[winner].object_local_id}, which scored higher or came first.",
+        )
+        for index, winner in clear.items()
+    ]
+    return with_decisions(document.model_copy(update={"observations": updated}), decisions)
 
 
 def _visibility(item: ObservationPrediction) -> str:

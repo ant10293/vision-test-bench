@@ -16,6 +16,7 @@ import statistics
 import numpy as np
 
 from app.perception.assignment import iou, linear_assignment
+from app.perception.decisions import merged_decisions, object_dropped
 from app.schemas.analysis import (
     AmbiguityPrediction,
     AnalysisDocument,
@@ -399,15 +400,27 @@ def omit_workspace_and_hands(document: AnalysisDocument) -> AnalysisDocument:
     otherwise cover the parts. A board, tray, or base, and anything picked up,
     stays unless its box shows it is the scene itself.
     """
-    dropped = {obj.local_id for obj in document.objects if _workspace_or_hand(obj) or _fills_the_scene(document, obj)}
+    reasons: dict[str, tuple[str, str]] = {}
+    for obj in document.objects:
+        if _workspace_or_hand(obj):
+            reasons[obj.local_id] = ("workspace_or_hand", f"The name {obj.label!r} is a hand or a resting surface.")
+        elif _fills_the_scene(document, obj):
+            reasons[obj.local_id] = ("fills_the_scene", "Its large box never moved, so it is the surface the work happens on.")
+    dropped = set(reasons)
     if not dropped:
         return document
+    decisions = [
+        row
+        for object_id, (reason, detail) in reasons.items()
+        for row in object_dropped(document, object_id, "workspace_filter", reason, detail=detail)
+    ]
 
     def kept(ids: list[str]) -> list[str]:
         return [item for item in ids if item not in dropped]
 
     return document.model_copy(
         update={
+            "box_decisions": merged_decisions(document.box_decisions, decisions),
             "objects": [obj for obj in document.objects if obj.local_id not in dropped],
             "observations": [item for item in document.observations if item.object_local_id not in dropped],
             "states": [item for item in document.states if item.object_local_id not in dropped],
@@ -476,6 +489,18 @@ def drop_contained_objects(document: AnalysisDocument) -> AnalysisDocument:
         return document
     observations = [item for item in document.observations if item.object_local_id not in mapping]
     objects = [obj for obj in document.objects if obj.local_id not in mapping]
+    decisions = [
+        row
+        for inner, outer in sorted(mapping.items())
+        for row in object_dropped(
+            document,
+            inner,
+            "contained_objects",
+            "contained_in_object",
+            other_object_id=outer,
+            detail=f"Its box stayed inside {outer} on every frame where both were visible.",
+        )
+    ]
     ambiguities = list(document.ambiguities)
     used = {item.local_id for item in ambiguities}
     for inner, outer in sorted(mapping.items()):
@@ -504,6 +529,7 @@ def drop_contained_objects(document: AnalysisDocument) -> AnalysisDocument:
         )
     return document.model_copy(
         update={
+            "box_decisions": merged_decisions(document.box_decisions, decisions),
             "objects": objects,
             "observations": observations,
             "states": [

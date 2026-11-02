@@ -204,6 +204,7 @@ def align_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def parse_analysis(text: str) -> AnalysisDocument:
     payload = align_payload(extract_json_object(text))
+    payload.pop("box_decisions", None)
     if not payload.keys() & AnalysisDocument.model_fields.keys():
         raise ParseFailure("response has none of the analysis fields", text)
     _require_kept_records(payload, text)

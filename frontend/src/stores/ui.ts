@@ -14,6 +14,7 @@ interface InspectorState {
     uncertain: boolean;
     confidence: boolean;
     conflicts: boolean;
+    drops: boolean;
   };
   seedMode: boolean;
   selectedObject: string | null;
@@ -44,6 +45,7 @@ export const useInspector = create<InspectorState>((set) => ({
     uncertain: false,
     confidence: true,
     conflicts: false,
+    drops: false,
   },
   seedMode: false,
   selectedObject: null,

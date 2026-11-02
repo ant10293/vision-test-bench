@@ -1,5 +1,5 @@
 import { humanize } from "./humanize";
-import type { Bundle, LabObject, Observation, RawObservation, TrackPointSample } from "./types";
+import type { BoxDecision, Bundle, LabObject, Observation, RawObservation, TrackPointSample } from "./types";
 
 export type FrameObjectStill = {
   id: string;
@@ -116,6 +116,13 @@ export function diagnosticEntries(diagnostics: Record<string, unknown>): [string
 }
 
 /** Raw rows near the playhead, for inspection only. They are never drawn as a second overlay. */
+/** Removed and moved boxes around the playhead, nearest first. */
+export function decisionsNear(rows: BoxDecision[], time: number, window = 0.45): BoxDecision[] {
+  return rows
+    .filter((row) => row.timestamp != null && Math.abs(row.timestamp - time) <= window)
+    .sort((a, b) => Math.abs((a.timestamp ?? 0) - time) - Math.abs((b.timestamp ?? 0) - time) || a.object_local_id.localeCompare(b.object_local_id));
+}
+
 export function rawRowsNear(rows: RawObservation[], time: number, window = 0.5, limit = 12): RawObservation[] {
   return rows
     .filter((row) => Math.abs(row.timestamp - time) <= window)

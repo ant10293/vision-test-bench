@@ -588,7 +588,7 @@ def _confidence(fields: dict[str, str]) -> float | None:
 
 
 def _mask_parts(data: str) -> tuple[int, int, str, str]:
-    """data is H,W,marker+payload. Only the first character after H,W, is the marker."""
+    """data is H,W,marker+payload. The decoder reads the marker as part of the payload."""
     parts = data.split(",", 2)
     if len(parts) < 3:
         return 0, 0, "unknown", ""
@@ -602,7 +602,7 @@ def _mask_parts(data: str) -> tuple[int, int, str, str]:
         return height, width, "unknown", ""
     marker = rest[0]
     encoding = {"!": "one_bit", "~": "lossless"}.get(marker, "unknown")
-    return height, width, encoding, rest[1:]
+    return height, width, encoding, rest
 
 
 def _data_from_payload(record: SamRecord) -> str:

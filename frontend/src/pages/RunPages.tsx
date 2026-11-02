@@ -6,6 +6,7 @@ import { ShotFrame } from "../components/ShotFrame";
 import { BeforeAfter } from "../components/BeforeAfter";
 import { RunsTable } from "../components/RunsTable";
 import { Bone, FieldBone } from "../components/Skeleton";
+import { DecisionPanel } from "../components/DecisionPanel";
 import { PerceptionPanel } from "../components/PerceptionPanel";
 import { Timeline } from "../components/Timeline";
 import { VideoStage } from "../components/VideoStage";
@@ -693,6 +694,7 @@ export function ObjectsPage() {
           )}
         </div>
       )}
+      {bundle && <DecisionPanel bundle={bundle} />}
       {bundle && <PerceptionPanel bundle={bundle} />}
     </div>
   );

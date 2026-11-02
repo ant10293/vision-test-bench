@@ -13,9 +13,11 @@ import logging
 from dataclasses import dataclass
 
 from app.perception.assignment import iou
+from app.perception.decisions import box_decision, merged_decisions
 from app.schemas.analysis import (
     AmbiguityPrediction,
     AnalysisDocument,
+    BoxDecision,
     DependencyPrediction,
     Evidence,
     ObservationPrediction,
@@ -62,6 +64,8 @@ def retain_prior_records(incoming: AnalysisDocument, prior: AnalysisDocument) ->
     scene is a renamed copy, so the scene ids and their boxes stay.
     """
     update: dict[str, object] = {}
+    if prior.box_decisions:
+        update["box_decisions"] = merged_decisions(prior.box_decisions, incoming.box_decisions)
     for name in _STAGE_LISTS:
         current = getattr(incoming, name)
         previous = getattr(prior, name)
@@ -153,7 +157,8 @@ def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDoc
     if len(partials) < 2:
         return merged
     maps = [_object_id_map(partial, merged) for partial in partials]
-    observations, conflicts = _union_observations(partials, maps, merged)
+    observations, conflicts, decisions = _union_observations(partials, maps, merged)
+    decisions = merged_decisions(merged.box_decisions, decisions)
     states = list(merged.states) or _states(partials, maps)
     transitions = list(merged.transitions) or _transitions(partials, maps)
     relationships = list(merged.relationships) or _relationships(partials, maps)
@@ -172,11 +177,13 @@ def restore_omitted_records(merged: AnalysisDocument, partials: list[AnalysisDoc
         and steps == list(merged.workflow_steps)
         and dependencies == list(merged.dependencies)
         and ambiguities == list(merged.ambiguities)
+        and decisions == list(merged.box_decisions)
     )
     if unchanged:
         return merged
     return merged.model_copy(
         update={
+            "box_decisions": decisions,
             "observations": observations,
             "states": states,
             "transitions": transitions,
@@ -200,7 +207,7 @@ def _union_observations(
     partials: list[AnalysisDocument],
     maps: list[dict[str, str]],
     merged: AnalysisDocument,
-) -> tuple[list[ObservationPrediction], list[AmbiguityPrediction]]:
+) -> tuple[list[ObservationPrediction], list[AmbiguityPrediction], list[BoxDecision]]:
     """Choose one observation per object and timestamp.
 
     A box from a window that saw the frame outranks a box from the text-only
@@ -212,10 +219,20 @@ def _union_observations(
     groups: dict[tuple, list[_Candidate]] = {}
     order: list[tuple] = []
     position = 0
+    decisions: list[BoxDecision] = []
     for window_index, (partial, mapping) in enumerate(zip(partials, maps, strict=True)):
         uncertain_ids = {obj.local_id: obj.uncertain_identity for obj in partial.objects}
         for item in partial.observations:
             if item.object_local_id not in mapping:
+                if item.bbox is not None:
+                    decisions.append(
+                        box_decision(
+                            "window_merge",
+                            "window_id_unaligned",
+                            item,
+                            detail=f"Window {window_index + 1} used this id, and it matched no merged part.",
+                        )
+                    )
                 continue
             copy = item.model_copy(update={"object_local_id": mapping[item.object_local_id]})
             key = _key(copy)
@@ -241,6 +258,19 @@ def _union_observations(
     for key in order:
         selected, conflict = _resolve_image_candidates(key, groups[key], used_ids)
         chosen[key] = selected
+        if conflict is not None:
+            decisions.extend(
+                box_decision(
+                    "window_merge",
+                    "window_conflict_lost",
+                    candidate.item,
+                    detail=f"Window {candidate.window_index + 1} disagreed with the box that was kept.",
+                )
+                for candidate in groups[key]
+                if candidate.item.bbox is not None
+                and candidate.item is not selected
+                and not _same_place(candidate.item, selected)
+            )
         if _substantive(selected):
             protected.add(key)
         if conflict is not None:
@@ -265,10 +295,18 @@ def _union_observations(
                     _box_list(current),
                     _box_list(item),
                 )
+                decisions.append(
+                    box_decision(
+                        "window_merge",
+                        "text_merge_overridden",
+                        item,
+                        detail="The text-only merge disagreed with a window that saw this frame.",
+                    )
+                )
             continue
         if item.bbox is not None:
             chosen[key] = item
-    return [chosen[key] for key in order], conflicts
+    return [chosen[key] for key in order], conflicts, decisions
 
 
 def _resolve_image_candidates(
