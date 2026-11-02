@@ -223,6 +223,19 @@ describe("recovery page", () => {
     },
   };
 
+  it("shows a skeleton until the analysis arrives", () => {
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <BundleContext.Provider value={null}>
+          <RecoveryPage />
+        </BundleContext.Provider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("Loading recovery")).toHaveClass("sr-only");
+    expect(container.querySelector("[aria-busy='true'] .stage-frame .bone-fill")).toBeInTheDocument();
+    expect(screen.queryByTestId("recovery-page")).not.toBeInTheDocument();
+  });
+
   function show() {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const view = render(

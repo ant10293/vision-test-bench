@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { PreviewNav } from "../components/AssetPreview";
+import { Bone, FieldBone } from "../components/Skeleton";
 import { api, formatTime, formatWhen } from "../lib/api";
 import { useOptionalBundle } from "../lib/bundleContext";
 import { humanize } from "../lib/humanize";
@@ -37,11 +38,60 @@ const NEAR_SEC = 0.45;
 const INSPECT_LABEL_SIZE = 14;
 const MIN_LABEL_SIZE = 10;
 const SQUARE_BUTTON = { width: 28, height: 28, minWidth: 28, minHeight: 28, display: "inline-flex", alignItems: "center", justifyContent: "center" };
+const OBJECT_PLACEHOLDERS = 3;
 
 export function RecoveryPage() {
   const bundle = useOptionalBundle();
-  if (!bundle) return <p className="text-sm text-[var(--muted)]">Loading the analysis…</p>;
+  if (!bundle) return <RecoverySkeleton />;
   return <RecoveryWorkspace bundle={bundle} />;
+}
+
+function RecoverySkeleton() {
+  const objects = Array.from({ length: OBJECT_PLACEHOLDERS }, (_, index) => index);
+  return (
+    <div className="space-y-3" aria-busy="true">
+      <p className="sr-only">Loading recovery</p>
+      <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_400px]" aria-hidden="true">
+        <section className="panel min-w-0 space-y-2 p-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            {objects.map((index) => <span key={index} className="btn"><Bone width="4rem" /></span>)}
+          </div>
+          <p className="text-xs"><Bone width="80%" /></p>
+          <div className="stage-frame overflow-hidden rounded-lg bg-black">
+            <Bone className="bone-fill" />
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="mono"><Bone width="3rem" /></span>
+            {LAYERS.map((layer) => <span key={layer.key} className="btn">{layer.label}</span>)}
+            <span className="btn">+ point</span>
+            <span className="btn">− point</span>
+          </div>
+          <div className="space-y-1 border-t border-[var(--line)] pt-2">
+            {objects.map((index) => (
+              <div key={index} className="grid grid-cols-[110px_1fr] items-center gap-2">
+                <span className="text-xs"><Bone width="70%" /></span>
+                <div className="h-5 overflow-hidden rounded"><Bone className="bone-fill" /></div>
+              </div>
+            ))}
+          </div>
+        </section>
+        <div className="min-w-0 space-y-3">
+          <section className="panel space-y-2 p-4 text-sm">
+            <h2 className="text-base">Seeds</h2>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <FieldBone compact />
+              <FieldBone compact />
+            </div>
+            <p className="text-xs"><Bone width="90%" /></p>
+            <div className="border-t border-[var(--line)] pt-3">
+              <span className="btn primary"><Bone width="8rem" /></span>
+            </div>
+          </section>
+          <div className="panel p-3 text-sm"><Bone width="10rem" /></div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
@@ -815,7 +865,7 @@ function ProblemList({
   const describe = (target: RecoveryTarget) => `${humanize(target.object_local_id)} at ${target.time_start.toFixed(2)}s`;
   return (
     <details className="panel p-3 text-sm" data-testid="recovery-candidates">
-      <summary className="cursor-pointer">Suspected problems ({pending ? "…" : targets.length})</summary>
+      <summary className="cursor-pointer">Suspected problems ({pending ? <Bone width="2ch" /> : targets.length})</summary>
       <ul className="mt-2 max-h-72 space-y-1 overflow-auto">
         {targets.map((target) => (
           <li key={target.target_id} className="flex items-center gap-2 text-xs">
