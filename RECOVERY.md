@@ -35,6 +35,8 @@ A SAM score never raises or lowers an outcome.
 4. **Run SAM** sends the checked plan. Seeds whose clips overlap and that share a direction go out in one request when that bills no more than separate ones.
 5. Results appear on the lanes and the frame. **Accept as a new revision** applies every pending result at once.
 
+The **X** on a suspected problem dismisses it for this run, and **Show dismissed** restores it. Dismissing changes no boxes and does not make a box trustworthy. A dismissal matches the object and exact time range, so a changed range is flagged again. The detector's reasons are stored with it, so repeated false alarms can be counted later.
+
 Changing a seed or limit requires checking again. Limits and earlier runs are in the collapsed panel.
 
 ## Frame and coordinate mapping

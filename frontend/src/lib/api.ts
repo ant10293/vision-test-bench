@@ -147,6 +147,10 @@ export const api = {
   },
   run: (id: string) => request<Bundle>(`/api/runs/${id}`),
   recoveryCandidates: (runId: string) => request<RecoveryCandidates>(`/api/runs/${runId}/recovery/candidates`),
+  dismissRecoveryProblem: (runId: string, targetId: string) =>
+    request<RecoveryCandidates>(`/api/runs/${runId}/recovery/dismissals/${targetId}`, { method: "POST" }),
+  restoreRecoveryProblem: (runId: string, targetId: string) =>
+    request<RecoveryCandidates>(`/api/runs/${runId}/recovery/dismissals/${targetId}`, { method: "DELETE" }),
   recoveryExperiments: (runId: string) => request<RecoveryExperiment[]>(`/api/runs/${runId}/recovery/experiments`),
   recoveryExperiment: (id: string) => request<RecoveryExperiment>(`/api/recovery/experiments/${id}`),
   createRecovery: (runId: string, payload: Record<string, unknown>) =>

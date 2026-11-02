@@ -44,6 +44,18 @@ def candidates(run_id: str, session: Session = Depends(get_session)) -> dict:
     return _guard(lambda: recovery.list_candidates(session, run))
 
 
+@router.post("/runs/{run_id}/recovery/dismissals/{target_id}")
+def dismiss(run_id: str, target_id: str, session: Session = Depends(get_session)) -> dict:
+    run = _run(session, run_id)
+    return _guard(lambda: recovery.dismiss_target(session, run, target_id))
+
+
+@router.delete("/runs/{run_id}/recovery/dismissals/{target_id}")
+def restore(run_id: str, target_id: str, session: Session = Depends(get_session)) -> dict:
+    run = _run(session, run_id)
+    return _guard(lambda: recovery.restore_target(session, run, target_id))
+
+
 @router.get("/runs/{run_id}/recovery/experiments")
 def experiments(run_id: str, session: Session = Depends(get_session)) -> list[dict]:
     _run(session, run_id)

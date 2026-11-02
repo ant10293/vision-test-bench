@@ -1,3 +1,4 @@
+import { humanize } from "./humanize";
 import type { BBox, Bundle } from "./types";
 
 export type RecoveryOutcome = "supported" | "provisional" | "conflicting" | "rejected";
@@ -39,6 +40,7 @@ export interface RecoveryTarget {
   difficulty?: string;
   recoverable?: boolean;
   blocker?: string;
+  dismissed?: boolean;
   direction?: string;
   support?: { observations_in_interval: number; measured_in_interval: number; usable_seeds: number };
 }
@@ -130,6 +132,8 @@ export interface RecoveryExperiment {
   status: string;
   mode: string;
   generation: number;
+  created_at: string;
+  pending_proposals: number;
   targets: RecoveryTarget[];
   limits: Record<string, number | boolean>;
   plan: RecoveryPlan | null;
@@ -303,6 +307,15 @@ export function layerBoxes(
     }
   }
   return nearest(boxes, time);
+}
+
+/** What an earlier run covered, in words a person can recognize it by. */
+export function runCoverage(targets: RecoveryTarget[]): string {
+  if (!targets.length) return "No targets";
+  const objects = [...new Set(targets.map((item) => humanize(item.object_local_id)))].sort();
+  const start = Math.min(...targets.map((item) => item.time_start));
+  const end = Math.max(...targets.map((item) => item.time_end));
+  return `${objects.join(", ")} · ${start.toFixed(1)}–${end.toFixed(1)}s`;
 }
 
 /** One box or set of points queued for the next SAM request, and the stretch it should track. */

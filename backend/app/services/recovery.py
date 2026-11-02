@@ -19,13 +19,18 @@ import time
 from pathlib import Path
 
 import cv2
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.domain import SceneChunk
 from app.models.media import VideoAsset
-from app.models.recovery import RecoveryExperiment, RecoveryProposal, RecoveryRequest
+from app.models.recovery import (
+    RecoveryDismissal,
+    RecoveryExperiment,
+    RecoveryProposal,
+    RecoveryRequest,
+)
 from app.models.runs import AnalysisRevision, AnalysisRun
 from app.models.util import utcnow
 from app.perception.recovery_targets import find_targets
@@ -151,7 +156,10 @@ def list_candidates(session: Session, run: AnalysisRun) -> dict:
     document = _document(session, run.active_revision_id)
     spatial = _usable_spatial(run.id)
     seeds = collect_seeds(document, spatial, boundaries=_boundaries(session, run.id))
-    targets = find_targets(document, spatial, seeds)
+    dismissed = set(session.scalars(select(RecoveryDismissal.target_id).where(RecoveryDismissal.run_id == run.id)))
+    targets = [
+        {**item, "dismissed": item["target_id"] in dismissed} for item in find_targets(document, spatial, seeds)
+    ]
     return {
         "run_id": run.id,
         "revision_id": run.active_revision_id,
@@ -165,6 +173,37 @@ def list_candidates(session: Session, run: AnalysisRun) -> dict:
         "price_per_frame_usd": settings.sam_price_per_frame_usd,
         "default_limits": DEFAULT_LIMITS,
     }
+
+
+def dismiss_target(session: Session, run: AnalysisRun, target_id: str) -> dict:
+    """Hide a suspected problem on this run. No observation or revision changes."""
+    current = {item["target_id"]: item for item in list_candidates(session, run)["targets"]}
+    target = current.get(target_id)
+    if target is None:
+        raise RecoveryError(f"Unknown suspected problem {target_id}.")
+    if not target["dismissed"]:
+        session.add(
+            RecoveryDismissal(
+                run_id=run.id,
+                target_id=target_id,
+                object_local_id=target["object_local_id"],
+                time_start=target["time_start"],
+                time_end=target["time_end"],
+                reasons_json=target["reasons"],
+            )
+        )
+        session.commit()
+    return list_candidates(session, run)
+
+
+def restore_target(session: Session, run: AnalysisRun, target_id: str) -> dict:
+    row = session.scalar(
+        select(RecoveryDismissal).where(RecoveryDismissal.run_id == run.id, RecoveryDismissal.target_id == target_id)
+    )
+    if row is not None:
+        session.delete(row)
+        session.commit()
+    return list_candidates(session, run)
 
 
 def _listed_seeds(seeds: list[Seed], per_object: int = 60) -> list[dict]:
@@ -1538,6 +1577,15 @@ def experiment_dict(session: Session, experiment: RecoveryExperiment) -> dict:
     requests = session.scalars(select(RecoveryRequest).where(RecoveryRequest.experiment_id == experiment.id)).all()
     remote_submitted = any(row.submission in {"submitted", "completed"} and row.source != "cache" for row in requests)
     limits = {key: value for key, value in (experiment.limits_json or {}).items() if not key.startswith("_")}
+    pending = session.scalar(
+        select(func.count())
+        .select_from(RecoveryProposal)
+        .where(
+            RecoveryProposal.experiment_id == experiment.id,
+            RecoveryProposal.generation == experiment.generation,
+            RecoveryProposal.decision == "pending",
+        )
+    )
     return {
         "id": experiment.id,
         "run_id": experiment.run_id,
@@ -1545,6 +1593,7 @@ def experiment_dict(session: Session, experiment: RecoveryExperiment) -> dict:
         "status": experiment.status,
         "mode": experiment.mode,
         "generation": experiment.generation,
+        "pending_proposals": pending or 0,
         "targets": experiment.targets_json,
         "limits": limits,
         "plan": experiment.plan_json or None,

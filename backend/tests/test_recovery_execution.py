@@ -253,6 +253,46 @@ def test_candidates_find_the_gap_and_its_seeds(client, tmp_path):
     assert data["seed_counts"]["independently_supported"] > 0
 
 
+def test_dismissing_hides_a_problem_survives_a_reload_and_can_be_undone(client, tmp_path, monkeypatch):
+    from app.db import SessionLocal
+    from app.models.runs import AnalysisRevision
+
+    run_id, revision_id, _times = _setup(client, tmp_path)
+    fake = _install(monkeypatch, FakeSam())
+    before = _counts()
+    session = SessionLocal()
+    original = json.dumps(session.get(AnalysisRevision, revision_id).document_json, sort_keys=True)
+    session.close()
+    url = f"/api/runs/{run_id}/recovery"
+    target = client.get(f"{url}/candidates").json()["targets"][0]
+    assert target["dismissed"] is False
+
+    def flag():
+        rows = client.get(f"{url}/candidates").json()["targets"]
+        return next(item["dismissed"] for item in rows if item["target_id"] == target["target_id"])
+
+    assert client.post(f"{url}/dismissals/{target['target_id']}").status_code == 200
+    assert flag() is True
+    # Dismissing twice keeps one record.
+    assert client.post(f"{url}/dismissals/{target['target_id']}").status_code == 200
+    assert client.delete(f"{url}/dismissals/{target['target_id']}").status_code == 200
+    assert flag() is False
+    assert client.post(f"{url}/dismissals/not-a-target").status_code == 400
+    # Nothing but the flag changed, and it does not make a box trustworthy.
+    assert _counts() == before and fake.calls == []
+    session = SessionLocal()
+    assert json.dumps(session.get(AnalysisRevision, revision_id).document_json, sort_keys=True) == original
+    session.close()
+
+
+def test_a_dismissal_does_not_change_seed_trust(client, tmp_path):
+    run_id, _revision, _times = _setup(client, tmp_path)
+    url = f"/api/runs/{run_id}/recovery"
+    data = client.get(f"{url}/candidates").json()
+    client.post(f"{url}/dismissals/{data['targets'][0]['target_id']}")
+    assert client.get(f"{url}/candidates").json()["seed_counts"] == data["seed_counts"]
+
+
 def test_creating_an_experiment_runs_nothing(client, tmp_path, monkeypatch, no_language_model):
     run_id, _revision, _times = _setup(client, tmp_path)
     fake = _install(monkeypatch, FakeSam())
@@ -455,6 +495,7 @@ def test_live_then_replay_gives_the_same_rows_with_no_new_calls(client, tmp_path
     assert all(call["kind"] == "spatial" for call in fake.calls)
     proposal = data["proposals"][0]
     assert proposal["decision"] == "pending"
+    assert data["pending_proposals"] == 1
     assert proposal["metrics"]["counts"]["supported"] > 0
     assert proposal["metrics"]["previously_missing_frames"] > 0
     assert proposal["metrics"]["usage"]["requests"] == 2
@@ -760,6 +801,8 @@ def test_rejecting_keeps_the_analysis_and_the_proposal(client, tmp_path, monkeyp
     assert result["proposals"][0]["decision"] == "rejected"
     assert result["proposals"][0]["rows"]
     assert client.get(f"/api/runs/{run_id}").json()["revision"]["id"] == revision_id
+    listed = client.get(f"/api/runs/{run_id}/recovery/experiments").json()
+    assert listed[0]["pending_proposals"] == 0
 
 
 def test_accept_refuses_a_changed_analysis(client, tmp_path, monkeypatch):

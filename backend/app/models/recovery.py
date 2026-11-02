@@ -79,3 +79,20 @@ class RecoveryProposal(Base):
     applied_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class RecoveryDismissal(Base):
+    """A person said a suspected problem is not one. It hides the flag and changes no evidence."""
+
+    __tablename__ = "recovery_dismissals"
+    __table_args__ = (UniqueConstraint("run_id", "target_id", name="uq_recovery_dismissal_target"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("analysis_runs.id", ondelete="CASCADE"), index=True)
+    target_id: Mapped[str] = mapped_column(String(32))
+    object_local_id: Mapped[str] = mapped_column(String(80))
+    time_start: Mapped[float] = mapped_column(Float)
+    time_end: Mapped[float] = mapped_column(Float)
+    # The detector's reasons at the time, so repeated false alarms can be counted later.
+    reasons_json: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)

@@ -344,6 +344,42 @@ describe("recovery page", () => {
     await waitFor(() => expect(decide).toHaveBeenCalledWith("experiment-1", { decision: "accepted", proposal_ids: ["p1", "p2"], include_provisional: false }));
   });
 
+  it("dismisses a problem from the list and the lane, and restores it", async () => {
+    const candidates = (flag: boolean) => ({ run_id: "run-1", revision_id: "r", targets: [{ ...target, dismissed: flag }], seeds: [], seed_counts: {}, objects: [], price_per_frame_usd: null });
+    const dismiss = vi.spyOn(api, "dismissRecoveryProblem").mockResolvedValue(candidates(true) as never);
+    const restore = vi.spyOn(api, "restoreRecoveryProblem").mockResolvedValue(candidates(false) as never);
+    show();
+    const lane = screen.getByTestId("lane-Object_1");
+    await waitFor(() => expect(lane.querySelector('[data-kind="problem"]')).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss problem for Object 1 at 2.00s" }));
+    await waitFor(() => expect(dismiss).toHaveBeenCalledWith("run-1", "t1"));
+    await waitFor(() => expect(lane.querySelector('[data-kind="problem"]')).toBeNull());
+    expect(screen.getByText("Suspected problems (0)")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show dismissed (1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restore problem for Object 1 at 2.00s" }));
+    await waitFor(() => expect(restore).toHaveBeenCalledWith("run-1", "t1"));
+    await waitFor(() => expect(lane.querySelector('[data-kind="problem"]')).not.toBeNull());
+    expect(screen.getByText("Suspected problems (1)")).toBeInTheDocument();
+  });
+
+  it("opens an earlier run from a readable row", async () => {
+    const earlier = { ...planned, created_at: "2026-11-01T19:42:00", pending_proposals: 2, status: "completed", targets: [{ ...target, object_local_id: "Object_2", time_start: 11, time_end: 13 }, { ...target, time_start: 12, time_end: 14.5 }] };
+    vi.spyOn(api, "recoveryExperiments").mockResolvedValue([earlier] as never);
+    const read = vi.spyOn(api, "recoveryExperiment").mockResolvedValue(earlier as never);
+    show();
+    const row = await screen.findByRole("button", { name: /Object 1, Object 2 · 11.0–14.5s/ });
+    expect(row).toHaveTextContent("2 pending review");
+    fireEvent.click(row);
+    await waitFor(() => expect(read).toHaveBeenCalledWith("experiment-1"));
+    await waitFor(() => expect(row).toHaveAttribute("aria-current", "true"));
+  });
+
+  it("keeps limits in the seeds panel, apart from earlier runs", () => {
+    show();
+    expect(within(screen.getByTestId("seed-list")).getByLabelText("Provider requests")).toBeInTheDocument();
+    expect(screen.queryByTestId("earlier-runs")).toBeNull();
+  });
+
   it("draws problems and seeds on the object's lane", async () => {
     const { overlay } = show();
     press(overlay, 15, 15);

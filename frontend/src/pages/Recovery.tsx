@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { PreviewNav } from "../components/AssetPreview";
-import { api, formatTime } from "../lib/api";
+import { api, formatTime, formatWhen } from "../lib/api";
 import { useOptionalBundle } from "../lib/bundleContext";
 import { humanize } from "../lib/humanize";
 import {
@@ -15,6 +15,7 @@ import {
   manualTargets,
   nextStep,
   placeSeed,
+  runCoverage,
   stepTimes,
   trackRange,
   usage,
@@ -35,6 +36,7 @@ const RUNNING_POLL_MS = 1500;
 const NEAR_SEC = 0.45;
 const INSPECT_LABEL_SIZE = 14;
 const MIN_LABEL_SIZE = 10;
+const SQUARE_BUTTON = { width: 28, height: 28, minWidth: 28, minHeight: 28, display: "inline-flex", alignItems: "center", justifyContent: "center" };
 
 export function RecoveryPage() {
   const bundle = useOptionalBundle();
@@ -72,7 +74,9 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
   });
   const data = experiment.data ?? null;
   const proposals = useMemo(() => (data?.proposals ?? []).filter((item) => item.current), [data]);
-  const targets = candidates.data?.targets ?? [];
+  const allTargets = candidates.data?.targets ?? [];
+  const targets = useMemo(() => allTargets.filter((item) => !item.dismissed), [allTargets]);
+  const dismissed = useMemo(() => allTargets.filter((item) => item.dismissed), [allTargets]);
   const objectIds = useMemo(() => new Set(bundle.objects.map((item) => item.local_id)), [bundle.objects]);
   const draftsKey = JSON.stringify([drafts, maxRequests, maxFrames, maxBilled, budget]);
   const plan = data?.plan && plannedKey === draftsKey ? data.plan : null;
@@ -105,6 +109,14 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
     mutationFn: (work: () => Promise<RecoveryExperiment>) => work(),
     onMutate: () => setError(""),
     onSuccess: publish,
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const problemAction = useMutation({
+    mutationFn: ({ targetId, restore }: { targetId: string; restore: boolean }) =>
+      restore ? api.restoreRecoveryProblem(runId, targetId) : api.dismissRecoveryProblem(runId, targetId),
+    onMutate: () => setError(""),
+    onSuccess: (result) => client.setQueryData(["recovery-candidates", runId], result),
     onError: (err: Error) => setError(err.message),
   });
 
@@ -199,7 +211,7 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
   return (
     <div className="space-y-3" data-testid="recovery-page">
       <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_400px]">
-        <div className="min-w-0 space-y-2">
+        <section className="panel min-w-0 space-y-2 p-3">
           <div className="flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Object to seed">
             {bundle.objects.map((object) => (
               <button
@@ -236,7 +248,7 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
             <button className="btn" aria-pressed={pointTool === "negative"} onClick={() => setPointTool(pointTool === "negative" ? "none" : "negative")}>− point</button>
           </div>
           <ObjectLanes bundle={bundle} targets={targets} proposals={proposals} drafts={drafts} time={time} objectId={objectId} onSeek={seek} onObject={setObjectId} />
-          <details className="panel p-3 text-xs">
+          <details className="border-t border-[var(--line)] pt-2 text-xs">
             <summary className="cursor-pointer text-sm">What is at this frame</summary>
             <div className="mt-2 h-40 space-y-1 overflow-auto" data-testid="box-inspector">
               {boxes.length === 0 ? (
@@ -252,7 +264,7 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
               )}
             </div>
           </details>
-        </div>
+        </section>
         <div className="min-w-0 space-y-3">
           <SeedList
             drafts={drafts}
@@ -262,40 +274,86 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
             onDirection={setDirection}
             onSeek={seek}
             onChange={setDrafts}
-          />
-          <RunPanel
-            drafts={drafts}
-            data={data}
-            plan={plan}
-            pending={act.isPending}
-            error={error}
-            onPreview={preview}
-            onLive={(hash, keys) => act.mutate(() => api.recoveryLive(experimentId, { confirm: true, plan_hash: hash, ...(keys ? { resubmit_keys: keys } : {}) }))}
-            onReplay={() => act.mutate(() => api.recoveryReplay(experimentId))}
-            onCancel={() => act.mutate(() => api.recoveryCancel(experimentId))}
-          />
+          >
+            <details className="text-xs" data-testid="recovery-limits">
+              <summary className="cursor-pointer text-[var(--muted)]">Limits</summary>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <Limit label="Provider requests" value={maxRequests} onChange={setMaxRequests} />
+                <Limit label="Frames per request" value={maxFrames} onChange={setMaxFrames} />
+                <Limit label="Total billed frames" value={maxBilled} onChange={setMaxBilled} />
+                <Limit label="Cost budget (USD)" value={budget} onChange={setBudget} />
+              </div>
+            </details>
+            <RunPanel
+              drafts={drafts}
+              data={data}
+              plan={plan}
+              pending={act.isPending}
+              error={error}
+              onPreview={preview}
+              onLive={(hash, keys) => act.mutate(() => api.recoveryLive(experimentId, { confirm: true, plan_hash: hash, ...(keys ? { resubmit_keys: keys } : {}) }))}
+              onReplay={() => act.mutate(() => api.recoveryReplay(experimentId))}
+              onCancel={() => act.mutate(() => api.recoveryCancel(experimentId))}
+            />
+          </SeedList>
           <ResultsPanel data={data} proposals={proposals} provisional={provisional} onProvisional={setProvisional} pending={act.isPending} onDecide={decide} onSeek={seek} />
-          <ProblemList targets={targets} pending={candidates.isPending} onSeek={seek} onObject={setObjectId} onSuggested={useSuggested} />
-          <details className="panel p-3 text-sm">
-            <summary className="cursor-pointer">Limits and earlier runs</summary>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <Limit label="Provider requests" value={maxRequests} onChange={setMaxRequests} />
-              <Limit label="Frames per request" value={maxFrames} onChange={setMaxFrames} />
-              <Limit label="Total billed frames" value={maxBilled} onChange={setMaxBilled} />
-              <Limit label="Cost budget (USD)" value={budget} onChange={setBudget} />
-            </div>
-            {(history.data?.length ?? 0) > 0 && (
-              <label className="field-label mt-2"><span>Earlier runs</span>
-                <select className="field" value={experimentId} onChange={(event) => { setExperimentId(event.target.value); setPlannedKey(""); }}>
-                  <option value="">Choose a run</option>
-                  {history.data?.map((item) => <option key={item.id} value={item.id}>{item.id.slice(0, 8)} · {humanize(item.status)} · {item.targets.length} seeds</option>)}
-                </select>
-              </label>
-            )}
-          </details>
+          <ProblemList
+            targets={targets}
+            dismissed={dismissed}
+            pending={candidates.isPending}
+            busy={problemAction.isPending}
+            error={problemAction.isError ? error : ""}
+            onSeek={seek}
+            onObject={setObjectId}
+            onSuggested={useSuggested}
+            onDismiss={(targetId) => problemAction.mutate({ targetId, restore: false })}
+            onRestore={(targetId) => problemAction.mutate({ targetId, restore: true })}
+          />
+          <EarlierRuns
+            runs={history.data ?? []}
+            selected={experimentId}
+            onOpen={(id) => {
+              setExperimentId(id);
+              setPlannedKey("");
+            }}
+          />
         </div>
       </div>
     </div>
+  );
+}
+
+function EarlierRuns({
+  runs,
+  selected,
+  onOpen,
+}: {
+  runs: RecoveryExperiment[];
+  selected: string;
+  onOpen: (id: string) => void;
+}) {
+  if (!runs.length) return null;
+  return (
+    <details className="panel p-3 text-sm" data-testid="earlier-runs">
+      <summary className="cursor-pointer">Earlier runs ({runs.length})</summary>
+      <ul className="mt-2 max-h-72 space-y-1 overflow-auto">
+        {runs.map((run) => (
+          <li key={run.id}>
+            <button
+              className="w-full rounded border border-[var(--line)] p-2 text-left text-xs"
+              aria-current={run.id === selected ? "true" : undefined}
+              style={run.id === selected ? { borderColor: "var(--teal)" } : undefined}
+              onClick={() => onOpen(run.id)}
+            >
+              <span className="block font-medium">{formatWhen(run.created_at)} · {runCoverage(run.targets)}</span>
+              <span className="block text-[var(--muted)]">
+                {humanize(run.status)}{run.pending_proposals > 0 ? ` · ${run.pending_proposals} pending review` : ""}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -458,7 +516,7 @@ function ObjectLanes({
   const duration = Math.max(bundle.video?.duration_sec ?? 1, 0.1);
   const percent = (value: number) => `${Math.min(Math.max(value / duration, 0), 1) * 100}%`;
   return (
-    <div className="panel space-y-1 p-3" data-testid="object-lanes">
+    <div className="space-y-1 border-t border-[var(--line)] pt-2" data-testid="object-lanes">
       <div className="grid grid-cols-[110px_1fr] items-center gap-2">
         <span aria-hidden="true" />
         <input
@@ -540,6 +598,7 @@ function SeedList({
   onDirection,
   onSeek,
   onChange,
+  children,
 }: {
   drafts: SeedDraft[];
   seconds: number;
@@ -548,6 +607,7 @@ function SeedList({
   onDirection: (value: TrackDirection) => void;
   onSeek: (time: number) => void;
   onChange: (drafts: SeedDraft[]) => void;
+  children: ReactNode;
 }) {
   return (
     <section className="panel space-y-2 p-4 text-sm" data-testid="seed-list">
@@ -579,11 +639,12 @@ function SeedList({
                   {draft.origin} · tracks {draft.start.toFixed(2)}–{draft.end.toFixed(2)}s{draft.direction === "auto" ? "" : `, ${draft.direction}`}{draft.points.length ? ` · ${draft.points.length} points` : ""}
                 </span>
               </button>
-              <button className="btn shrink-0 !p-0" style={{ width: 28, height: 28, minWidth: 28, minHeight: 28, display: "inline-flex", alignItems: "center", justifyContent: "center" }} aria-label={`Remove seed for ${humanize(draft.objectId)} at ${draft.timestamp.toFixed(2)}s`} onClick={() => onChange(drafts.filter((item) => item.id !== draft.id))}><X size={14} strokeWidth={1.75} /></button>
+              <button className="btn shrink-0 !p-0" style={SQUARE_BUTTON} aria-label={`Remove seed for ${humanize(draft.objectId)} at ${draft.timestamp.toFixed(2)}s`} onClick={() => onChange(drafts.filter((item) => item.id !== draft.id))}><X size={14} strokeWidth={1.75} /></button>
             </li>
           ))}
         </ul>
       )}
+      {children}
     </section>
   );
 }
@@ -615,7 +676,7 @@ function RunPanel({
   const cached = plan?.totals.cached_requests ?? 0;
   const canRun = Boolean(plan && remote > 0 && plan.violations.length === 0);
   return (
-    <section className="panel space-y-2 p-4 text-sm" data-testid="recovery-plan">
+    <div className="space-y-2 border-t border-[var(--line)] pt-3" data-testid="recovery-plan">
       {running ? (
         <>
           <p>SAM is running. Cutting the clip and uploading can take a minute.</p>
@@ -661,7 +722,7 @@ function RunPanel({
         </p>
       )}
       {error && <p className="text-xs text-[var(--rose)]" role="alert">{error}</p>}
-    </section>
+    </div>
   );
 }
 
@@ -729,17 +790,29 @@ function ResultsPanel({
 
 function ProblemList({
   targets,
+  dismissed,
   pending,
+  busy,
+  error,
   onSeek,
   onObject,
   onSuggested,
+  onDismiss,
+  onRestore,
 }: {
   targets: RecoveryTarget[];
+  dismissed: RecoveryTarget[];
   pending: boolean;
+  busy: boolean;
+  error: string;
   onSeek: (time: number) => void;
   onObject: (id: string) => void;
   onSuggested: (target: RecoveryTarget) => void;
+  onDismiss: (targetId: string) => void;
+  onRestore: (targetId: string) => void;
 }) {
+  const [showDismissed, setShowDismissed] = useState(false);
+  const describe = (target: RecoveryTarget) => `${humanize(target.object_local_id)} at ${target.time_start.toFixed(2)}s`;
   return (
     <details className="panel p-3 text-sm" data-testid="recovery-candidates">
       <summary className="cursor-pointer">Suspected problems ({pending ? "…" : targets.length})</summary>
@@ -757,10 +830,33 @@ function ProblemList({
               <span className="block text-[var(--muted)]">{target.reasons.map(humanize).join(", ")}</span>
             </button>
             {target.recoverable && (target.seeds?.length ?? 0) > 0 && <button className="btn" onClick={() => onSuggested(target)}>Use suggested seed</button>}
+            <button className="btn shrink-0 !p-0" style={SQUARE_BUTTON} disabled={busy} title="Not a problem" aria-label={`Dismiss problem for ${describe(target)}`} onClick={() => onDismiss(target.target_id)}>
+              <X size={14} strokeWidth={1.75} />
+            </button>
           </li>
         ))}
       </ul>
-      {!pending && targets.length === 0 && <p className="mt-2 text-xs text-[var(--muted)]">Nothing was flagged. That does not mean every box is correct.</p>}
+      {!pending && targets.length === 0 && <p className="mt-2 text-xs text-[var(--muted)]">Nothing is flagged. That does not mean every box is correct.</p>}
+      {dismissed.length > 0 && (
+        <div className="mt-2 space-y-1 text-xs">
+          <button className="text-[var(--muted)] underline" aria-expanded={showDismissed} onClick={() => setShowDismissed(!showDismissed)}>
+            {showDismissed ? "Hide" : "Show"} dismissed ({dismissed.length})
+          </button>
+          {showDismissed && (
+            <ul className="space-y-1">
+              {dismissed.map((target) => (
+                <li key={target.target_id} className="flex items-center gap-2 text-[var(--muted)]">
+                  <span className="min-w-0 flex-1">
+                    {humanize(target.object_local_id)} · {target.time_start.toFixed(2)}–{target.time_end.toFixed(2)}s · {target.reasons.map(humanize).join(", ")}
+                  </span>
+                  <button className="btn" disabled={busy} aria-label={`Restore problem for ${describe(target)}`} onClick={() => onRestore(target.target_id)}>Restore</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {error && <p className="mt-2 text-xs text-[var(--rose)]" role="alert">{error}</p>}
     </details>
   );
 }
