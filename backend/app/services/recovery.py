@@ -11,14 +11,17 @@ revision through the existing correction path.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import subprocess
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
+import numpy as np
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -39,6 +42,7 @@ from app.perception.recovery_validate import (
     PROVISIONAL,
     REJECTED,
     SUPPORTED,
+    ValidationPolicy,
     combine_passes,
     remaining_gaps,
     validate_track,
@@ -61,11 +65,19 @@ from app.perception.spatial_prompts import (
     build_spatial_plan,
     choose_direction,
 )
+from app.perception.track_segments import track_report
 from app.pipeline.perception_stage import load_spatial_document
 from app.pipeline.sam_stage import _encode, _samples_from_result
 from app.pipeline.sampling_stage import timeline_for
-from app.providers.sam import SamAdapter, VideoChunk, parse_sam_output, sam_video_accepted
-from app.providers.types import ProviderResponse, Usage
+from app.providers.sam import (
+    SamAdapter,
+    VideoChunk,
+    concept_text,
+    decode_mask_raster,
+    parse_sam_output,
+    sam_video_accepted,
+)
+from app.providers.types import ProviderError, ProviderResponse, Usage
 from app.schemas.analysis import (
     AmbiguityPrediction,
     AnalysisDocument,
@@ -99,6 +111,7 @@ DEFAULT_LIMITS = {
 }
 # A manual seed is drawn on a paused video, which can sit one frame off. An automatic one cannot.
 MANUAL_TOLERANCE_FRAMES = 1.5
+CONCEPT_DIRECTION = "concept"
 _CLAIM_LOCK = threading.Lock()
 _APPLY_LOCK = threading.Lock()
 
@@ -301,6 +314,23 @@ def _manual_target(item: dict, known: dict) -> dict:
         "details": [],
         "direction": "auto",
     }
+    reacquires = item.get("reacquires")
+    if reacquires:
+        target["reacquires"] = {
+            "failure_id": str(reacquires.get("failure_id") or ""),
+            "failure_time": float(reacquires.get("failure_time") or start),
+            "experiment_id": str(reacquires.get("experiment_id") or ""),
+            "strategy": str(reacquires.get("strategy") or "manual"),
+        }
+        target["reasons"] = ["reacquisition"]
+    if item.get("strategy") == "concept":
+        # Finds possible locations only. Nothing here says which physical part any of them is.
+        target["strategy"] = "concept"
+        try:
+            target["concept"] = concept_text(str(item.get("concept") or obj.label))
+        except ProviderError as exc:
+            raise RecoveryError(str(exc)) from exc
+        return target
     return _apply_seed_choice(target, item)
 
 
@@ -478,7 +508,11 @@ def build_plan(session: Session, experiment: RecoveryExperiment) -> dict:
     groups: list[dict] = []
     width, height = int(video.display_width or 0), int(video.display_height or 0)
     seen: set[tuple] = set()
+    concept_targets: list[dict] = []
     for target in experiment.targets_json or []:
+        if target.get("strategy") == "concept":
+            concept_targets.append(target)
+            continue
         passes, reason = _chosen_passes(target, seeds, limits)
         if not passes:
             blocked.append(_blocked(target, reason))
@@ -511,6 +545,16 @@ def build_plan(session: Session, experiment: RecoveryExperiment) -> dict:
             requests.append(_request_spec(run, video, group, f"rec{prefix}r{index}", width, height))
         except (SeedMappingError, ValueError) as exc:
             blocked.extend(_blocked(item["target"], str(exc)) for item in group["entries"])
+    for target in concept_targets:
+        frames = _clip_frames(timeline.pts, float(target["time_start"]), float(target["time_end"]))
+        if timeline.basis != "presentation":
+            blocked.append(_blocked(target, "Frame times are estimates for this video, so results could not be placed exactly."))
+        elif not frames:
+            blocked.append(_blocked(target, "No source frames fall inside the planned interval."))
+        elif len(frames) > int(limits["max_frames_per_request"]):
+            blocked.append(_blocked(target, f"This interval has {len(frames)} frames, and the limit per request is {limits['max_frames_per_request']}."))
+        else:
+            requests.append(_concept_spec(video, target, frames, f"rec{prefix}r{len(requests)}", width, height))
     price = settings.sam_price_per_frame_usd
     for spec in requests:
         spec["cached"] = _cache_path(run.id, spec["key"]).exists()
@@ -600,6 +644,29 @@ def _request_spec(run, video, group: dict, session_id: str, width: int, height: 
         "width": width,
         "height": height,
         "billed_frames": billed_frames(earliest, len(frames), group["direction"]),
+        "model_id": MODEL_ID,
+    }
+
+
+def _concept_spec(video, target: dict, frames: list[float], session_id: str, width: int, height: int) -> dict:
+    """A concept pass binds no object. Its boxes are only candidates for a person to identify."""
+    phrase = target["concept"]
+    return {
+        "key": cache_key(video.checksum_sha256, frames, width, height, phrase, CONCEPT_DIRECTION),
+        "session_id": session_id,
+        "prompt": phrase,
+        "prompt_kind": "concept",
+        "direction": CONCEPT_DIRECTION,
+        "bindings": {},
+        "objects": [],
+        "target_id": target["target_id"],
+        "object_local_id": target["object_local_id"],
+        "frame_times": frames,
+        "source_start": frames[0],
+        "source_end": frames[-1],
+        "width": width,
+        "height": height,
+        "billed_frames": billed_frames(0, len(frames), "forward"),
         "model_id": MODEL_ID,
     }
 
@@ -746,12 +813,34 @@ def load_response(run_id: str, key: str) -> dict | None:
     return payload if isinstance(payload, dict) and payload.get("cache_key") == key else None
 
 
-def replay(session: Session, experiment: RecoveryExperiment) -> dict:
+def _validation_policy(experiment: RecoveryExperiment) -> ValidationPolicy:
+    return ValidationPolicy(**((experiment.limits_json or {}).get("_validation") or {}))
+
+
+def _set_validation(experiment: RecoveryExperiment, overrides: dict | None) -> None:
+    """Thresholds for a replay. Provider responses and their cache keys do not depend on them."""
+    if overrides is None:
+        return
+    known = {item.name: item.type for item in dataclasses.fields(ValidationPolicy)}
+    clean: dict = {}
+    for name, value in overrides.items():
+        if name not in known:
+            raise RecoveryError(f"Unknown validation setting {name}.")
+        try:
+            clean[name] = int(value) if known[name] == "int" else float(value)
+        except (TypeError, ValueError) as exc:
+            raise RecoveryError(f"The validation setting {name} must be a number.") from exc
+    experiment.limits_json = {**(experiment.limits_json or {}), "_validation": clean}
+
+
+def replay(session: Session, experiment: RecoveryExperiment, validation: dict | None = None) -> dict:
     """Re-run parsing, timing, association, validation, and comparison from stored responses.
 
     A missing response stays missing. A replay never becomes a live request.
     """
     _not_running(experiment)
+    _set_validation(experiment, validation)
+    before = (experiment.summary_json or {}).get("totals")
     plan = build_plan(session, experiment)
     experiment.plan_json = plan
     found = {spec["key"]: load_response(experiment.run_id, spec["key"]) for spec in plan["requests"]}
@@ -767,6 +856,7 @@ def replay(session: Session, experiment: RecoveryExperiment) -> dict:
         return results(session, experiment)
     summary = evaluate(session, experiment, {key: value for key, value in found.items() if value})
     summary["missing_responses"] = len(missing)
+    summary["previous_totals"] = before
     experiment.summary_json = summary
     experiment.status = "partial" if missing else "completed"
     experiment.error = f"{len(missing)} planned requests have no stored response." if missing else ""
@@ -969,7 +1059,7 @@ async def _send_one(session, experiment, run, spec, row, adapter, source, limits
         model_id=MODEL_ID,
         modality="native_video",
         parameters={
-            "prompt_kind": "spatial",
+            "prompt_kind": spec.get("prompt_kind", "spatial"),
             "experiment_id": experiment.id,
             "cache_key": spec["key"],
             "propagation_direction": spec["direction"],
@@ -1002,7 +1092,11 @@ async def _send_one(session, experiment, run, spec, row, adapter, source, limits
     started = time.perf_counter()
     task = asyncio.create_task(
         adapter.segment_video(
-            None, spec["prompt"], prompt_kind="spatial", file_id=file_id, propagation_direction=spec["direction"]
+            None,
+            spec["prompt"],
+            prompt_kind=spec.get("prompt_kind", "spatial"),
+            file_id=file_id,
+            propagation_direction=None if spec["direction"] == CONCEPT_DIRECTION else spec["direction"],
         )
     )
     deadline = started + float(limits["timeout_s"])
@@ -1142,7 +1236,11 @@ def evaluate(session: Session, experiment: RecoveryExperiment, responses: dict[s
     boundaries = _boundaries(session, run_id)
     anchors = _measured_anchors(document, spatial)
     plan = experiment.plan_json
+    policy = _validation_policy(experiment)
     specs = [spec for spec in plan["requests"] if spec["key"] in responses]
+    tracked: dict[str, list[dict]] = {}
+    reacquisitions = {item["target_id"]: item.get("reacquires") for item in experiment.targets_json or []}
+    neighbor_rows: dict[str, list[dict]] = {}
     passes: dict[str, list[list[dict]]] = {}
     gaps_frames: dict[str, list[float]] = {}
     usage: dict[str, dict] = {}
@@ -1181,13 +1279,30 @@ def evaluate(session: Session, experiment: RecoveryExperiment, responses: dict[s
                 for sample in others
             ]
             validated = validate_track(
-                [_sample_dict(sample) for sample in rows],
+                [{**_sample_dict(sample), "mask_stats": mask_stats(sample)} for sample in rows],
                 seed=entry["seed"],
                 association=association,
                 anchors=anchors.get(local_id, []),
                 neighbors=neighbors,
                 media_size=(spec["width"], spec["height"]),
                 boundaries=boundaries,
+                policy=policy,
+            )
+            pass_id = f"{spec['session_id']}:{raw}:{entry['seed']['seed_id'][:8]}"
+            neighbor_rows.setdefault(target_id, []).extend(neighbors)
+            tracked.setdefault(target_id, []).append(
+                {
+                    "rows": validated,
+                    "seed": entry["seed"],
+                    "pass_id": pass_id,
+                    "experiment_id": experiment.id,
+                    "request_key": spec["key"],
+                    "session_id": spec["session_id"],
+                    "raw_track_id": raw,
+                    "request_id": payload.get("request_id", ""),
+                    "direction": spec["direction"],
+                    "frame_times": spec["frame_times"],
+                }
             )
             for row in validated:
                 row["request_key"] = spec["key"]
@@ -1197,6 +1312,9 @@ def evaluate(session: Session, experiment: RecoveryExperiment, responses: dict[s
                 row["direction"] = spec["direction"]
                 row["seed_id"] = entry["seed"]["seed_id"]
                 row["seed_trust"] = entry["seed"]["trust"]
+                row["pass_id"] = pass_id
+                row["segment_id"] = f"{pass_id}/{row['segment']}" if row.get("segment") else ""
+                row["reacquired"] = bool(reacquisitions.get(target_id))
                 row["context"] = not (entry["time_start"] - 1e-6 <= row["timestamp"] <= entry["time_end"] + 1e-6)
             passes.setdefault(target_id, []).append(validated)
             gaps_frames[target_id] = sorted(set(gaps_frames.get(target_id, [])) | set(spec["frame_times"]))
@@ -1224,10 +1342,13 @@ def evaluate(session: Session, experiment: RecoveryExperiment, responses: dict[s
         target_id = target["target_id"]
         if target_id not in passes:
             continue
-        combined = combine_passes(passes[target_id])
+        combined = combine_passes(passes[target_id], policy)
         start, end = float(target["time_start"]), float(target["time_end"])
         gaps = remaining_gaps(combined, gaps_frames[target_id], start, end)
         metrics = _metrics(target, combined, gaps, document, usage[target_id], identity[target_id], dropped[target_id], synthetic)
+        metrics["track"] = track_report(target, tracked[target_id], neighbor_rows.get(target_id, []), policy)
+        metrics["counts"]["no_detection_frames"] = metrics["track"]["no_detection_frames"]
+        metrics["counts"]["unusable_frames"] = metrics["track"]["unusable_frames"]
         session.add(
             RecoveryProposal(
                 experiment_id=experiment.id,
@@ -1256,7 +1377,7 @@ def evaluate(session: Session, experiment: RecoveryExperiment, responses: dict[s
 
 def _spec_samples(spec: dict, payload: dict) -> list:
     plan = SamRequestPlan(
-        kind="spatial",
+        kind=spec.get("prompt_kind", "spatial"),
         prompt=spec["prompt"],
         session_id=spec["session_id"],
         bindings={int(key): value for key, value in spec["bindings"].items()},
@@ -1275,6 +1396,24 @@ def _spec_samples(spec: dict, payload: dict) -> list:
         frame_times=times,
     )
     return _samples_from_result(parse_sam_output(payload.get("text") or ""), payload.get("request_id", ""), plan, chunk, 0.0)
+
+
+def mask_stats(sample) -> dict | None:
+    """Mask area, fill of its box, and region count. None when no mask decodes, which proves nothing."""
+    data = sample.mask_data if isinstance(sample.mask_data, str) else ""
+    if not data:
+        return None
+    raster = decode_mask_raster(SimpleNamespace(mask_data=data, mask_payload=sample.mask_payload or ""))
+    height, width = int(sample.mask_height or 0), int(sample.mask_width or 0)
+    if raster is None or height <= 0 or width <= 0:
+        return None
+    try:
+        grid = np.frombuffer(bytes(raster), dtype=np.uint8).reshape(height, width) > 0
+    except ValueError:
+        return None
+    pixels = int(grid.sum())
+    regions, _labels = cv2.connectedComponents(grid.astype(np.uint8))
+    return {"pixels": pixels, "fill": round(pixels / (height * width), 4), "components": max(regions - 1, 0)}
 
 
 def _sample_dict(sample) -> dict:
@@ -1445,9 +1584,13 @@ def merge_proposal(
     ]
     added: list[ObservationPrediction] = []
     conflict_times: list[float] = []
+    lost_times: list[float] = []
     for row in proposal.rows_json or []:
         if row.get("context") or row["outcome"] == REJECTED:
             continue
+        # Kept visible as a conflict, which never becomes canonical. Whether it is right is for a person to judge.
+        if row.get("lifecycle") == "lost":
+            lost_times.append(row["timestamp"])
         if row["outcome"] == PROVISIONAL and not include_provisional:
             continue
         box = row["bbox"]
@@ -1486,6 +1629,19 @@ def merge_proposal(
             gap["end"],
             local_id,
         )
+    if lost_times:
+        _add_ambiguity(
+            document,
+            f"recovery_track_lost_{local_id}_{min(lost_times):.2f}",
+            AmbiguityKind.CONFLICTING_EVIDENCE,
+            (
+                f"SAM kept returning boxes for {local_id} from {min(lost_times):.2f}s to {max(lost_times):.2f}s after the "
+                "track broke. They are kept as conflicts and were not trusted. The object may be hidden or out of view."
+            ),
+            min(lost_times),
+            max(lost_times),
+            local_id,
+        )
     if conflict_times:
         _add_ambiguity(
             document,
@@ -1521,6 +1677,8 @@ def _add_ambiguity(document, local_id, kind, description, start, end, object_id)
 def _observation(row: dict, local_id: str, track_ref: str, outcome: str, experiment_id: str) -> ObservationPrediction:
     association = {SUPPORTED: "associated", PROVISIONAL: "referenced", CONFLICTING: "conflict"}[outcome]
     continuity = Continuity.CONTINUOUS if outcome == SUPPORTED else Continuity.UNCERTAIN
+    if outcome == SUPPORTED and row.get("reacquired"):
+        continuity = Continuity.REASSOCIATED
     return ObservationPrediction(
         object_local_id=local_id,
         timestamp=row["timestamp"],
@@ -1530,7 +1688,10 @@ def _observation(row: dict, local_id: str, track_ref: str, outcome: str, experim
         evidence=Evidence(
             classification=EvidenceClass.DIRECTLY_OBSERVED,
             provenance=Provenance.CV_DETECTION,
-            note=f"Recovery experiment {experiment_id}, outcome {outcome}, seed {row.get('seed_trust', '')}.",
+            note=(
+                f"Recovery experiment {experiment_id}, outcome {outcome}, seed {row.get('seed_trust', '')}, "
+                f"segment {row.get('segment_id', '')}."
+            ),
             frame_timestamps=[row["timestamp"]],
         ),
         confidence=row.get("confidence"),

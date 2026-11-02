@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -10,7 +10,7 @@ from app.db import get_session
 from app.models.recovery import RecoveryExperiment
 from app.models.runs import AnalysisRun
 from app.pipeline.lineage import load_lineage
-from app.services import recovery, recovery_diagnostics
+from app.services import recovery, recovery_diagnostics, recovery_reacquisition
 
 router = APIRouter(prefix="/api")
 
@@ -56,6 +56,12 @@ def restore(run_id: str, target_id: str, session: Session = Depends(get_session)
     return _guard(lambda: recovery.restore_target(session, run, target_id))
 
 
+@router.get("/runs/{run_id}/recovery/reacquisition")
+def reacquisition(run_id: str, session: Session = Depends(get_session)) -> dict:
+    run = _run(session, run_id)
+    return _guard(lambda: recovery_reacquisition.reacquisition(session, run))
+
+
 @router.get("/runs/{run_id}/recovery/experiments")
 def experiments(run_id: str, session: Session = Depends(get_session)) -> list[dict]:
     _run(session, run_id)
@@ -99,9 +105,10 @@ def dry_run(experiment_id: str, session: Session = Depends(get_session)) -> dict
 
 
 @router.post("/recovery/experiments/{experiment_id}/replay")
-def replay(experiment_id: str, session: Session = Depends(get_session)) -> dict:
+def replay(experiment_id: str, payload: dict | None = Body(default=None), session: Session = Depends(get_session)) -> dict:
+    """Validates stored responses again, with optional `validation` thresholds. It never contacts a provider."""
     row = _experiment(session, experiment_id)
-    return _guard(lambda: recovery.replay(session, row))
+    return _guard(lambda: recovery.replay(session, row, (payload or {}).get("validation")))
 
 
 @router.post("/recovery/experiments/{experiment_id}/live")

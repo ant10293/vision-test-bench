@@ -35,7 +35,7 @@ const proposal = {
   ],
 } as unknown as RecoveryProposal;
 
-const none = { vlm: false, tracker: false, sam: false, recovered: false, raw: false, canonical: false };
+const none = { vlm: false, tracker: false, sam: false, recovered: false, reacquired: false, raw: false, canonical: false };
 
 describe("recovery layers", () => {
   it("draws only the selected layer", () => {
@@ -74,7 +74,7 @@ describe("recovery layers", () => {
   });
 
   it("does not hold a box past its time", () => {
-    expect(layerBoxes(bundle, [proposal], 5, { vlm: true, tracker: true, sam: true, recovered: true, raw: true, canonical: true })).toEqual([]);
+    expect(layerBoxes(bundle, [proposal], 5, { vlm: true, tracker: true, sam: true, recovered: true, reacquired: true, raw: true, canonical: true })).toEqual([]);
   });
 
   it("draws every raw SAM box, keeps two tracks apart, and marks unassigned ones", () => {
@@ -178,6 +178,7 @@ describe("recovery page", () => {
     vi.spyOn(api, "recoveryCandidates").mockResolvedValue({ run_id: "run-1", revision_id: "r", targets: [target], seeds: [], seed_counts: {}, objects: [], price_per_frame_usd: null } as never);
     vi.spyOn(api, "recoveryExperiments").mockResolvedValue([]);
     vi.spyOn(api, "recoveryDiagnostics").mockResolvedValue({ experiment_id: "", generation: 0, note: "", requests: [] });
+    vi.spyOn(api, "recoveryReacquisition").mockResolvedValue({ run_id: "run-1", objects: [], note: "" });
   });
   afterEach(() => {
     cleanup();
@@ -444,6 +445,98 @@ describe("recovery page", () => {
     expect(within(panel).getByText(/SAM track 7 was not prompted/)).toBeInTheDocument();
     expect(within(panel).getByText(/no object/)).toHaveTextContent("4 boxes");
     expect(screen.getByRole("button", { name: "All SAM output" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  const failure = {
+    failure_id: "f1", experiment_id: "e1", time: 3, last_good_time: 2.9, last_supported_time: 2.5, direction: "forward",
+    reason: "large_spatial_jump", detail: "A large jump broke the track.", state: "occluded", state_basis: "The box shrank.",
+  };
+  const segment = {
+    segment_id: "reca:1:x/f0", physical_instance_id: "track_1", object_local_id: "Object_1", experiment_id: "e1", session_id: "reca", raw_track_id: "1",
+    direction: "forward", seed: { seed_id: "x", trust: "human_verified", source: "human", timestamp: 1 }, init_event: "trusted_seed", start: 1, end: 2.9,
+    last_supported_time: 2.5, status: "lost", identity: { status: "linked", basis: [], detail: "A person confirmed the seed." },
+    counts: { supported: 5, provisional: 1, conflicting: 0, rejected: 0 }, frames: 6,
+  };
+  const planItem = (extra: Record<string, unknown> = {}) => ({
+    failure, status: "open", uncertain_interval: { start: 3, end: 4 }, last_supported_time: 2.5, reappearance_frames: [3.5], recommended: "candidate_detection",
+    strategies: [
+      { strategy: "candidate_detection", available: true, requires_remote: true, note: "Stored boxes may show the object.", evidence: [
+        { source: "vlm", trust: "candidate", seed_id: "s9", timestamp: 3.5, bbox: box, explanation: "", needs_confirmation: true, may_be: ["Object_2"] },
+      ] },
+      { strategy: "concept_redetection", available: true, requires_remote: true, note: "Finds locations.", evidence: [], concept: "washer" },
+    ],
+    blocked_reason: "No trustworthy evidence.", needs_stronger_evidence: false, attempts: [],
+    explanation: "SAM kept returning boxes (9 after the failure), and tracking became unreliable at 3.00s.",
+    ...extra,
+  });
+  const historyWith = (plan: unknown) => ({
+    run_id: "run-1", note: "Plans only.",
+    objects: [{
+      object_local_id: "Object_1", physical_instance_id: "track_1", label: "washer", segments: [segment], failures: [failure],
+      unresolved: [{ start: 3, end: 4, frames: 9, no_detection_frames: 2, unusable_frames: 7 }], plans: [plan],
+      stats: { raw_frames_returned: 15, track_breaks: 1, no_detection_frames: 2, unusable_frames: 7 }, evidence_limits: [],
+    }],
+  });
+
+  it("shows a segment, a failure that seeks, and what cannot be claimed", async () => {
+    vi.spyOn(api, "recoveryReacquisition").mockResolvedValue(historyWith(planItem()) as never);
+    show();
+    const panel = await screen.findByTestId("track-history");
+    expect(within(panel).getByText(/tracking became unreliable at 3.00s/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Possibly hidden/)).toBeInTheDocument();
+    expect(panel.querySelector('[data-kind="unresolved"]')?.getAttribute("title")).toContain("2 with no SAM box");
+    fireEvent.click(within(panel).getByRole("button", { name: "Go to the failure at 3.00 seconds" }));
+    expect(useInspector.getState().time).toBe(3);
+    fireEvent.click(within(panel).getByRole("button", { name: "Last supported 2.50s" }));
+    expect(useInspector.getState().time).toBe(2.5);
+  });
+
+  it("makes a person confirm a candidate, and the seed records which failure it answers", async () => {
+    vi.spyOn(api, "recoveryReacquisition").mockResolvedValue(historyWith(planItem()) as never);
+    const created = vi.spyOn(api, "createRecovery").mockResolvedValue(planned as never);
+    vi.spyOn(api, "recoveryDryRun").mockResolvedValue(planned as never);
+    vi.spyOn(api, "recoveryExperiment").mockResolvedValue(planned as never);
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "This is the object" }));
+    expect(screen.getByTestId("seed-list")).toHaveTextContent("reacquires the track lost at 3.00s");
+    fireEvent.click(screen.getByRole("button", { name: /Check 1 seed/ }));
+    await waitFor(() => expect(created).toHaveBeenCalled());
+    const sent = (created.mock.calls[0][1] as { manual_targets: Record<string, unknown>[] }).manual_targets[0];
+    expect(sent).toMatchObject({ seed_id: "s9", confirm_seed: true, direction: "both", time_start: 3, reacquires: { failure_id: "f1", strategy: "candidate_detection" } });
+    expect(sent.seed).toBeUndefined();
+  });
+
+  it("links a drawn seed to the failure and only plans a concept search", async () => {
+    vi.spyOn(api, "recoveryReacquisition").mockResolvedValue(historyWith(planItem()) as never);
+    const created = vi.spyOn(api, "createRecovery").mockResolvedValue(planned as never);
+    const dry = vi.spyOn(api, "recoveryDryRun").mockResolvedValue(planned as never);
+    vi.spyOn(api, "recoveryExperiment").mockResolvedValue(planned as never);
+    const live = vi.spyOn(api, "recoveryLive");
+    const { overlay } = show();
+    fireEvent.click(await screen.findByRole("button", { name: "Draw a new seed" }));
+    expect(useInspector.getState().time).toBe(3.5);
+    press(overlay, 40, 40, 60, 60);
+    expect(screen.getByTestId("seed-list")).toHaveTextContent("reacquires the track lost at 3.00s");
+    fireEvent.click(screen.getByRole("button", { name: /Plan a concept search/ }));
+    await waitFor(() => expect(dry).toHaveBeenCalled());
+    expect((created.mock.calls[0][1] as { manual_targets: Record<string, unknown>[] }).manual_targets[0]).toMatchObject({ strategy: "concept", concept: "washer" });
+    expect(live).not.toHaveBeenCalled();
+  });
+
+  it("offers no reacquisition controls once a failure is resolved, and keeps the gap", async () => {
+    const plan = planItem({ status: "resolved", explanation: "A new seed at 4.00s started a separate segment with 34 supported boxes." });
+    vi.spyOn(api, "recoveryReacquisition").mockResolvedValue(historyWith(plan) as never);
+    show();
+    const panel = await screen.findByTestId("track-history");
+    expect(within(panel).getByText(/34 supported boxes/)).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Draw a new seed" })).toBeNull();
+    expect(panel.querySelector('[data-kind="unresolved"]')).not.toBeNull();
+  });
+
+  it("draws reacquired boxes on their own layer", () => {
+    const again = { ...proposal, rows: proposal.rows.map((row) => ({ ...row, reacquired: true })) } as RecoveryProposal;
+    expect(layerBoxes(bundle, [again], 1, { ...none, recovered: true })).toEqual([]);
+    expect(layerBoxes(bundle, [again], 1, { ...none, reacquired: true })[0].layer).toBe("reacquired");
   });
 
   it("keeps limits in the seeds panel, apart from earlier runs", () => {

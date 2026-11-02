@@ -2,7 +2,7 @@ import { humanize } from "./humanize";
 import type { BBox, Bundle } from "./types";
 
 export type RecoveryOutcome = "supported" | "provisional" | "conflicting" | "rejected";
-export type RecoveryLayer = "vlm" | "tracker" | "sam" | "recovered" | "raw" | "canonical";
+export type RecoveryLayer = "vlm" | "tracker" | "sam" | "recovered" | "reacquired" | "raw" | "canonical";
 
 export interface RecoverySeed {
   seed_id: string;
@@ -99,6 +99,9 @@ export interface ProposalRow {
   direction: string;
   seed_trust: string;
   checks: { check: string; passed: boolean; detail: string }[];
+  lifecycle?: string;
+  segment_id?: string;
+  reacquired?: boolean;
 }
 
 export interface RecoveryProposal {
@@ -113,7 +116,7 @@ export interface RecoveryProposal {
   rows: ProposalRow[];
   applied_revision_id: string | null;
   metrics: {
-    counts: Record<RecoveryOutcome | "unobserved_frames", number>;
+    counts: Record<RecoveryOutcome | "unobserved_frames", number> & { no_detection_frames?: number; unusable_frames?: number };
     previously_missing_frames: number;
     new_supported_frames: number;
     original_rows_in_interval: number;
@@ -172,6 +175,7 @@ export const LAYERS: { key: RecoveryLayer; label: string; color: string }[] = [
   { key: "tracker", label: "Tracker", color: "#7dcea0" },
   { key: "sam", label: "Original SAM", color: "#d2a24c" },
   { key: "recovered", label: "Recovered SAM", color: "#e879f9" },
+  { key: "reacquired", label: "Reacquired SAM", color: "#34d399" },
   { key: "raw", label: "All SAM output", color: "#22d3ee" },
   { key: "canonical", label: "Final canonical", color: "#f5f5f5" },
 ];
@@ -287,12 +291,14 @@ export function layerBoxes(
       });
     });
   }
-  if (layers.recovered) {
+  if (layers.recovered || layers.reacquired) {
     for (const proposal of proposals) {
       proposal.rows.forEach((row, index) => {
+        const layer: RecoveryLayer = row.reacquired ? "reacquired" : "recovered";
+        if (!layers[layer]) return;
         boxes.push({
-          key: `recovered-${proposal.id}-${index}`,
-          layer: "recovered",
+          key: `${layer}-${proposal.id}-${index}`,
+          layer,
           objectId: proposal.object_local_id,
           bbox: row.bbox,
           timestamp: row.timestamp,
@@ -302,6 +308,8 @@ export function layerBoxes(
             `association ${row.association}`,
             `seed ${row.seed_trust}`,
             `direction ${row.direction}`,
+            row.lifecycle ? `track state ${humanize(row.lifecycle)}` : "",
+            row.segment_id ? `segment ${row.segment_id}` : "not in a segment",
             row.partial ? "partial, visible area only" : "",
             row.confidence != null ? `SAM score ${row.confidence.toFixed(2)}, uncalibrated` : "",
             row.context ? "context frame, outside the interval, never applied" : "",
@@ -324,6 +332,7 @@ export function layerBoxes(
         details: [
           `SAM track ${box.raw_track_id}`,
           `status ${box.status}`,
+          box.lifecycle ? `validated as ${box.outcome}, track state ${humanize(box.lifecycle)}` : "not validated",
           box.confidence != null ? `SAM score ${box.confidence.toFixed(2)}, uncalibrated` : "",
         ].filter(Boolean),
       });
@@ -352,6 +361,10 @@ export interface SeedDraft {
   end: number;
   direction: "forward" | "backward" | "both" | "auto";
   origin: string;
+  /** A stored seed chosen by id keeps its own trust level. A person's confirmation is recorded when it is needed. */
+  seedId?: string;
+  confirmSeed?: boolean;
+  reacquires?: ReacquisitionLink;
 }
 
 export type TrackDirection = "forward" | "backward" | "both";
@@ -370,13 +383,16 @@ export function placeSeed(drafts: SeedDraft[], next: Omit<SeedDraft, "id">): See
   return [...kept, draft].sort((a, b) => a.timestamp - b.timestamp);
 }
 
-export function manualTargets(drafts: SeedDraft[]) {
+export function manualTargets(drafts: SeedDraft[]): Record<string, unknown>[] {
   return drafts.map((draft) => ({
     object_local_id: draft.objectId,
     time_start: draft.start,
     time_end: draft.end,
     direction: draft.direction,
-    seed: { timestamp: draft.timestamp, bbox: draft.bbox, points: draft.points },
+    ...(draft.reacquires ? { reacquires: draft.reacquires } : {}),
+    ...(draft.seedId
+      ? { seed_id: draft.seedId, confirm_seed: Boolean(draft.confirmSeed) }
+      : { seed: { timestamp: draft.timestamp, bbox: draft.bbox, points: draft.points } }),
   }));
 }
 
@@ -438,6 +454,151 @@ export interface RawSamBox {
   confidence: number | null;
   has_mask: boolean;
   status: string;
+  outcome?: string;
+  lifecycle?: string;
+  segment_id?: string;
+}
+
+export interface TrackSegment {
+  segment_id: string;
+  physical_instance_id: string;
+  object_local_id: string;
+  experiment_id: string;
+  session_id: string;
+  raw_track_id: string;
+  direction: string;
+  seed: { seed_id: string; trust: string; source: string; timestamp: number };
+  init_event: string;
+  start: number;
+  end: number;
+  last_supported_time: number | null;
+  status: string;
+  identity: { status: string; basis: string[]; detail: string };
+  counts: Record<RecoveryOutcome, number>;
+  frames: number;
+  decision?: string;
+}
+
+export interface TrackFailure {
+  failure_id: string;
+  experiment_id: string;
+  time: number;
+  last_good_time: number | null;
+  last_supported_time: number | null;
+  direction: string;
+  reason: string;
+  detail: string;
+  state: string;
+  state_basis: string;
+}
+
+export interface ReacquisitionEvidence {
+  source: string;
+  trust: string;
+  seed_id: string;
+  timestamp: number;
+  bbox: BBox | null;
+  explanation: string;
+  needs_confirmation: boolean;
+  may_be: string[];
+}
+
+export interface ReacquisitionStrategy {
+  strategy: string;
+  available: boolean;
+  requires_remote: boolean;
+  evidence: ReacquisitionEvidence[];
+  note: string;
+  concept?: string;
+  time_start?: number;
+  time_end?: number;
+}
+
+export interface ReacquisitionLink {
+  failure_id: string;
+  failure_time: number;
+  experiment_id: string;
+  strategy: string;
+}
+
+export interface ReacquisitionPlanItem {
+  failure: TrackFailure;
+  status: "open" | "resolved";
+  uncertain_interval: { start: number; end: number };
+  last_supported_time: number | null;
+  reappearance_frames: number[];
+  strategies: ReacquisitionStrategy[];
+  recommended: string;
+  blocked_reason: string;
+  needs_stronger_evidence: boolean;
+  attempts: { experiment_id: string; status: string; succeeded: boolean }[];
+  explanation: string;
+}
+
+export interface ObjectTrackHistory {
+  object_local_id: string;
+  physical_instance_id: string;
+  label: string;
+  segments: TrackSegment[];
+  failures: TrackFailure[];
+  unresolved: { start: number; end: number; frames: number; no_detection_frames: number; unusable_frames: number }[];
+  plans: ReacquisitionPlanItem[];
+  stats: Record<string, number | null>;
+  evidence_limits: string[];
+}
+
+export interface ReacquisitionData {
+  run_id: string;
+  objects: ObjectTrackHistory[];
+  note: string;
+}
+
+export const SEGMENT_COLORS: Record<string, string> = {
+  tracked: "#e879f9",
+  degraded: "#c4a5d8",
+  lost: "#a855a8",
+  reacquired: "#34d399",
+  reacquisition_candidate: "#7dd3b0",
+  ambiguous: "#d2a24c",
+};
+
+/** How a stated failure looks. Occluded and out of view are hypotheses from geometry. */
+export const GAP_STATE_LABELS: Record<string, string> = {
+  lost: "Lost, cause unknown",
+  occluded: "Possibly hidden",
+  out_of_view: "Possibly out of view",
+};
+
+const REASON_LABELS: Record<string, string> = {
+  large_spatial_jump: "Large jump",
+  absorbed_neighbor: "Grew over another part",
+  expanded_beyond_object: "Grew past the part",
+  anchor_contradiction: "Measurements disagree",
+  seed_mismatch: "Did not start on the seed",
+  scene_cut: "Moved across a hard cut",
+  no_detection: "SAM stopped returning it",
+};
+
+export function failureLabel(reason: string): string {
+  return REASON_LABELS[reason] ?? humanize(reason);
+}
+
+/** A seed drawn or chosen for this failure. The API records it as a separate attempt. */
+export function reacquisitionLink(item: ReacquisitionPlanItem, strategy: string): ReacquisitionLink {
+  return {
+    failure_id: item.failure.failure_id,
+    failure_time: item.failure.time,
+    experiment_id: item.failure.experiment_id,
+    strategy,
+  };
+}
+
+/** The stretch a new seed should cover: from the failure, through the seed, plus a little after it. */
+export function reacquisitionRange(item: ReacquisitionPlanItem, seedTime: number): { start: number; end: number } {
+  return {
+    start: Math.min(item.uncertain_interval.start, seedTime),
+    end: Math.max(item.uncertain_interval.end, seedTime + 1),
+  };
 }
 
 export interface SamTrackDiagnostics {

@@ -203,7 +203,7 @@ def _findings(parsed: dict, funnel: dict, tracks: list[dict], missing: list[dict
     return found
 
 
-def _verdict(payload: dict | None, row: RecoveryRequest | None, parsed: dict, funnel: dict) -> tuple[str, str]:
+def _verdict(spec: dict, payload: dict | None, row: RecoveryRequest | None, parsed: dict, funnel: dict) -> tuple[str, str]:
     if payload is None:
         if row is not None and row.error:
             return "request_failed", f"No response is stored. {row.error}"
@@ -220,9 +220,23 @@ def _verdict(payload: dict | None, row: RecoveryRequest | None, parsed: dict, fu
         return "parse_failure", "SAM returned box tokens and none could be parsed."
     if not funnel["usable"]:
         return "no_usable_boxes", "Boxes were parsed and none could be placed on a frame."
+    if spec.get("prompt_kind") == "concept":
+        return "concept_candidates", "SAM found possible locations. A person has to say which physical part each one is."
     if not funnel["assigned"]:
         return "no_assignment", "SAM returned usable boxes and none belong to a prompted object."
     return "boxes_returned", "SAM returned usable boxes for a prompted object. This does not show they are correct."
+
+
+def _with_validation(boxes: list[dict], rows: list[dict]) -> None:
+    """Say what validation decided, so a wrong detection can be told from a rejected correct one."""
+    decided: dict[tuple, dict] = {}
+    for row in rows:
+        decided[(row.get("raw_track_id"), round(row["timestamp"], 3))] = row
+    for box in boxes:
+        row = decided.get((box["raw_track_id"], round(box["timestamp"], 3))) if box["timestamp"] is not None else None
+        box["outcome"] = row["outcome"] if row else ""
+        box["lifecycle"] = row.get("lifecycle", "") if row else ""
+        box["segment_id"] = row.get("segment_id", "") if row else ""
 
 
 def _diagnose(spec: dict, payload: dict | None, row: RecoveryRequest | None, document, spatial, rows: list[dict]) -> dict:
@@ -236,6 +250,7 @@ def _diagnose(spec: dict, payload: dict | None, row: RecoveryRequest | None, doc
         }
     statuses = {track: link.status for track, link in associations.items()}
     boxes = raw_boxes(records, spec, statuses)
+    _with_validation(boxes, rows)
     by_status = Counter(box["status"] for box in boxes)
     unusable = by_status["frame_out_of_range"] + by_status["invalid_box"] + by_status["over_track_limit"]
     usable = len(boxes) - unusable
@@ -257,7 +272,7 @@ def _diagnose(spec: dict, payload: dict | None, row: RecoveryRequest | None, doc
     seen = {box["frame_index"] for box in boxes if box["timestamp"] is not None and box["bbox"] is not None}
     missing = _missing_spans(spec, seen) if payload is not None else []
     tracks = _tracks(boxes, spec, associations, rows) if payload is not None else []
-    verdict, message = _verdict(payload, row, parsed, funnel)
+    verdict, message = _verdict(spec, payload, row, parsed, funnel)
     failed = Counter(
         check["check"] for item in rows for check in item["checks"] if not check["passed"]
     )

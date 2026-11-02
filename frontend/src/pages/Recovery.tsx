@@ -10,6 +10,8 @@ import { humanize } from "../lib/humanize";
 import {
   boxAt,
   dragBox,
+  failureLabel,
+  GAP_STATE_LABELS,
   LANE_COLORS,
   laneSpans,
   LAYERS,
@@ -17,11 +19,18 @@ import {
   manualTargets,
   nextStep,
   placeSeed,
+  reacquisitionLink,
+  reacquisitionRange,
   runCoverage,
+  SEGMENT_COLORS,
   stepTimes,
   trackRange,
   usage,
+  type ObjectTrackHistory,
   type RawSamBox,
+  type ReacquisitionEvidence,
+  type ReacquisitionLink,
+  type ReacquisitionPlanItem,
   type RecoveryDiagnostics,
   type RecoveryExperiment,
   type RecoveryLayer,
@@ -35,7 +44,7 @@ import { useInspector } from "../stores/ui";
 
 type PointTool = "none" | "positive" | "negative";
 
-const START_LAYERS: Record<RecoveryLayer, boolean> = { vlm: true, tracker: false, sam: false, recovered: true, raw: false, canonical: true };
+const START_LAYERS: Record<RecoveryLayer, boolean> = { vlm: true, tracker: false, sam: false, recovered: true, reacquired: true, raw: false, canonical: true };
 const RUNNING_POLL_MS = 1500;
 const NEAR_SEC = 0.45;
 const INSPECT_LABEL_SIZE = 14;
@@ -113,6 +122,7 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
   const [error, setError] = useState("");
   const [hint, setHint] = useState("");
   const [provisional, setProvisional] = useState(false);
+  const [drawingFor, setDrawingFor] = useState<{ objectId: string; link: ReacquisitionLink; item: ReacquisitionPlanItem } | null>(null);
   const [maxRequests, setMaxRequests] = useState("4");
   const [maxFrames, setMaxFrames] = useState("300");
   const [maxBilled, setMaxBilled] = useState("600");
@@ -137,6 +147,10 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
     queryKey: ["recovery-diagnostics", experimentId, data?.generation, data?.status, data?.requests.length],
     queryFn: () => api.recoveryDiagnostics(experimentId),
     enabled: Boolean(data && (data.generation > 0 || data.requests.length > 0) && data.status !== "running"),
+  });
+  const reacquisition = useQuery({
+    queryKey: ["recovery-reacquisition", runId, experimentId, data?.generation, data?.status],
+    queryFn: () => api.recoveryReacquisition(runId),
   });
   const rawBoxes = useMemo<RawSamBox[]>(() => diagnostics.data?.requests.flatMap((item) => item.boxes) ?? [], [diagnostics.data]);
   const boxes = layerBoxes(bundle, proposals, time, layers, rawBoxes);
@@ -180,8 +194,19 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
   });
 
   function addSeed(target: string, at: number, bbox: BBox | null, origin: string) {
-    const range = trackRange(at, seconds, direction);
-    setDrafts((current) => placeSeed(current, { objectId: target, timestamp: at, bbox, points: [], ...range, direction, origin }));
+    const drawing = drawingFor?.objectId === target ? drawingFor : null;
+    const range = drawing ? reacquisitionRange(drawing.item, at) : trackRange(at, seconds, direction);
+    setDrafts((current) => placeSeed(current, {
+      objectId: target,
+      timestamp: at,
+      bbox,
+      points: [],
+      ...range,
+      direction: drawing ? "both" : direction,
+      origin: drawing ? `${origin}, reacquires the track lost at ${drawing.link.failure_time.toFixed(2)}s` : origin,
+      ...(drawing ? { reacquires: drawing.link } : {}),
+    }));
+    setDrawingFor(null);
     setObjectId(target);
     setHint("");
   }
@@ -233,6 +258,43 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
       direction: "auto",
       origin: `suggested, ${humanize(seed.trust)}`,
     }));
+  }
+
+  function useEvidence(objectIdToSeed: string, item: ReacquisitionPlanItem, strategy: string, evidence: ReacquisitionEvidence) {
+    const range = reacquisitionRange(item, evidence.timestamp);
+    setObjectId(objectIdToSeed);
+    seek(evidence.timestamp);
+    setDrafts((current) => placeSeed(current, {
+      objectId: objectIdToSeed,
+      timestamp: evidence.timestamp,
+      bbox: evidence.bbox,
+      points: [],
+      ...range,
+      direction: "both",
+      origin: `${humanize(evidence.source)}, ${humanize(evidence.trust)}, reacquires the track lost at ${item.failure.time.toFixed(2)}s`,
+      ...(evidence.seed_id ? { seedId: evidence.seed_id, confirmSeed: evidence.needs_confirmation } : {}),
+      reacquires: reacquisitionLink(item, strategy),
+    }));
+  }
+
+  function planConcept(objectIdToFind: string, item: ReacquisitionPlanItem, concept: string) {
+    const key = draftsKey;
+    act.mutate(async () => {
+      const created = await api.createRecovery(runId, {
+        manual_targets: [{
+          object_local_id: objectIdToFind,
+          time_start: item.uncertain_interval.start,
+          time_end: item.uncertain_interval.end,
+          strategy: "concept",
+          concept,
+          reacquires: reacquisitionLink(item, "concept_redetection"),
+        }],
+        limits: { max_requests: Number(maxRequests), max_frames_per_request: Number(maxFrames), max_total_billed_frames: Number(maxBilled), cost_budget_usd: Number(budget) },
+      });
+      const planned = await api.recoveryDryRun(created.id);
+      setPlannedKey(key);
+      return planned;
+    });
   }
 
   function preview() {
@@ -357,6 +419,27 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
           </SeedList>
           <ResultsPanel data={data} proposals={proposals} provisional={provisional} onProvisional={setProvisional} pending={act.isPending} onDecide={decide} onSeek={seek} />
           {diagnostics.data && diagnostics.data.requests.length > 0 && <SamDiagnostics data={diagnostics.data} onSeek={seek} />}
+          {(reacquisition.data?.objects.length ?? 0) > 0 && (
+            <TrackHistory
+              objects={reacquisition.data?.objects ?? []}
+              note={reacquisition.data?.note ?? ""}
+              duration={Math.max(bundle.video?.duration_sec ?? 1, 0.1)}
+              time={time}
+              drawingFor={drawingFor?.objectId ?? ""}
+              busy={act.isPending}
+              onSeek={seek}
+              onUseEvidence={useEvidence}
+              onConcept={planConcept}
+              onCompare={() => setLayers((current) => ({ ...current, recovered: true, reacquired: true, raw: true }))}
+              onDraw={(id, item) => {
+                setObjectId(id);
+                setPointTool("none");
+                setDrawingFor({ objectId: id, link: reacquisitionLink(item, "manual"), item });
+                setHint(`Find a frame where ${humanize(id)} is visible again and drag a box around it.`);
+                if (item.reappearance_frames[0] != null) seek(item.reappearance_frames[0]);
+              }}
+            />
+          )}
           <ProblemList
             targets={targets}
             dismissed={dismissed}
@@ -800,6 +883,188 @@ function RunPanel({
   );
 }
 
+const STAT_LABELS: [string, string][] = [
+  ["raw_frames_returned", "SAM boxes returned"],
+  ["associated", "Associated"],
+  ["supported", "Supported"],
+  ["provisional", "Provisional"],
+  ["conflicting", "Conflicting"],
+  ["rejected", "Rejected"],
+  ["no_detection_frames", "No SAM box"],
+  ["unusable_frames", "Returned, not trusted"],
+  ["track_breaks", "Track breaks"],
+  ["reacquisition_attempts", "Reacquisition attempts"],
+  ["reacquisitions_succeeded", "Succeeded"],
+  ["reacquisitions_failed", "Failed"],
+  ["identity_ambiguities", "Identity questions"],
+  ["api_requests", "API requests"],
+];
+
+function TrackHistory({
+  objects,
+  note,
+  duration,
+  time,
+  drawingFor,
+  busy,
+  onSeek,
+  onUseEvidence,
+  onConcept,
+  onCompare,
+  onDraw,
+}: {
+  objects: ObjectTrackHistory[];
+  note: string;
+  duration: number;
+  time: number;
+  drawingFor: string;
+  busy: boolean;
+  onSeek: (time: number) => void;
+  onUseEvidence: (objectId: string, item: ReacquisitionPlanItem, strategy: string, evidence: ReacquisitionEvidence) => void;
+  onConcept: (objectId: string, item: ReacquisitionPlanItem, concept: string) => void;
+  onCompare: () => void;
+  onDraw: (objectId: string, item: ReacquisitionPlanItem) => void;
+}) {
+  const percent = (value: number) => `${Math.min(Math.max(value / duration, 0), 1) * 100}%`;
+  return (
+    <section className="panel space-y-3 p-4 text-sm" data-testid="track-history">
+      <div>
+        <h2 className="text-base">Track history</h2>
+        <p className="text-xs text-[var(--muted)]">{note}</p>
+      </div>
+      {objects.map((object) => (
+        <div key={object.object_local_id} className="space-y-2 border-t border-[var(--line)] pt-2 text-xs" data-testid={`history-${object.object_local_id}`}>
+          <p className="font-medium">{humanize(object.object_local_id)} · {object.label}</p>
+          <div className="relative h-7 overflow-hidden rounded bg-[#0d1016]" data-testid={`history-lane-${object.object_local_id}`}>
+            {object.unresolved.map((span) => (
+              <div
+                key={`gap-${span.start}`}
+                data-kind="unresolved"
+                className="absolute inset-y-0 bg-[repeating-linear-gradient(135deg,#3a2f1c_0_4px,#0d1016_4px_8px)]"
+                title={`Unresolved · ${formatTime(span.start)}–${formatTime(span.end)} · ${span.no_detection_frames} with no SAM box · ${span.unusable_frames} not trusted`}
+                style={{ left: percent(span.start), width: `max(2px, ${(span.end - span.start) / duration * 100}%)` }}
+              />
+            ))}
+            {object.segments.map((segment) => (
+              <button
+                key={segment.segment_id}
+                data-kind={segment.status}
+                className="absolute rounded-sm"
+                aria-label={`${humanize(segment.status)} segment, ${segment.start.toFixed(2)} to ${segment.end.toFixed(2)} seconds`}
+                title={`${humanize(segment.status)} · ${segment.identity.detail}`}
+                style={{
+                  top: 6,
+                  bottom: 6,
+                  left: percent(segment.start),
+                  width: `max(2px, ${(segment.end - segment.start) / duration * 100}%)`,
+                  background: SEGMENT_COLORS[segment.status] ?? "#888",
+                }}
+                onClick={() => onSeek(segment.start)}
+              />
+            ))}
+            {object.failures.map((failure) => (
+              <button
+                key={failure.failure_id}
+                data-kind="failure"
+                className="absolute inset-y-0 w-[3px] bg-[var(--rose)]"
+                aria-label={`Go to the failure at ${failure.time.toFixed(2)} seconds`}
+                title={`${failureLabel(failure.reason)} at ${formatTime(failure.time)}`}
+                style={{ left: percent(failure.time) }}
+                onClick={() => onSeek(failure.time)}
+              />
+            ))}
+            <div className="pointer-events-none absolute inset-y-0 w-px bg-[var(--teal)]" style={{ left: percent(time) }} />
+          </div>
+          {object.evidence_limits.map((item) => <p key={item} className="text-[var(--muted)]">{item}</p>)}
+          {object.plans.length === 0 && object.segments.length > 0 && <p className="text-[var(--muted)]">No track break was found in these results.</p>}
+          {object.plans.map((item) => {
+            const strategy = item.strategies.find((entry) => entry.strategy === item.recommended);
+            const concept = item.strategies.find((entry) => entry.strategy === "concept_redetection" && entry.available);
+            return (
+              <div key={item.failure.failure_id} className="space-y-1 rounded border border-[var(--line)] p-2" data-testid="reacquisition-plan">
+                <p className="font-medium" style={{ color: item.status === "resolved" ? "#34d399" : "var(--amber)" }}>
+                  {failureLabel(item.failure.reason)} at {item.failure.time.toFixed(2)}s · {item.status === "resolved" ? "reacquired" : "unresolved"}
+                </p>
+                <p>{item.explanation}</p>
+                <p className="text-[var(--muted)]">{item.failure.detail} {GAP_STATE_LABELS[item.failure.state] ?? humanize(item.failure.state)}. {item.failure.state_basis}</p>
+                <div className="flex flex-wrap gap-1">
+                  <button className="btn" onClick={() => onSeek(item.failure.time)}>Go to failure</button>
+                  {item.last_supported_time != null && <button className="btn" onClick={() => onSeek(item.last_supported_time as number)}>Last supported {item.last_supported_time.toFixed(2)}s</button>}
+                  <button className="btn" onClick={onCompare}>Compare all SAM boxes</button>
+                </div>
+                {item.status === "open" && (
+                  <>
+                    {item.reappearance_frames.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="text-[var(--muted)]">Frames to check:</span>
+                        {item.reappearance_frames.map((frame) => (
+                          <button key={frame} className="mono underline" onClick={() => onSeek(frame)}>{frame.toFixed(2)}s</button>
+                        ))}
+                      </div>
+                    )}
+                    {strategy && strategy.evidence.length > 0 && (
+                      <ul className="space-y-1">
+                        <li className="text-[var(--muted)]">{strategy.note}</li>
+                        {strategy.evidence.map((evidence, index) => (
+                          <li key={`${evidence.seed_id}-${evidence.timestamp}-${index}`} className="flex flex-wrap items-center gap-2">
+                            <button className="mono underline" onClick={() => onSeek(evidence.timestamp)}>{evidence.timestamp.toFixed(2)}s</button>
+                            <span className="min-w-0 flex-1">
+                              {humanize(evidence.source)} · {humanize(evidence.trust)}
+                              {evidence.may_be.length > 0 && ` · also overlaps ${evidence.may_be.map(humanize).join(", ")}`}
+                            </span>
+                            <button className="btn" onClick={() => onUseEvidence(object.object_local_id, item, strategy.strategy, evidence)}>
+                              {evidence.needs_confirmation ? "This is the object" : "Use as seed"}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="flex flex-wrap gap-1">
+                      <button className="btn" aria-pressed={drawingFor === object.object_local_id} onClick={() => onDraw(object.object_local_id, item)}>Draw a new seed</button>
+                      {concept && (
+                        <button className="btn" disabled={busy} title={concept.note} onClick={() => onConcept(object.object_local_id, item, concept.concept ?? object.label)}>
+                          Plan a concept search (free to check)
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+          {object.segments.length > 0 && (
+            <details>
+              <summary className="cursor-pointer text-[var(--muted)]">Segments ({object.segments.length})</summary>
+              <ul className="mt-1 space-y-1">
+                {object.segments.map((segment) => (
+                  <li key={segment.segment_id} className="rounded border border-[var(--line)] p-2">
+                    <button className="font-medium" onClick={() => onSeek(segment.start)}>
+                      <span style={{ color: SEGMENT_COLORS[segment.status] }}>{humanize(segment.status)}</span> · {segment.start.toFixed(2)}–{segment.end.toFixed(2)}s · {segment.direction}
+                    </button>
+                    <div>{segment.frames} SAM boxes · {segment.counts.supported} supported · {segment.counts.provisional} provisional · {segment.counts.conflicting} conflicting · {segment.counts.rejected} rejected</div>
+                    <div className="text-[var(--muted)]">
+                      Started from {humanize(segment.init_event)} · SAM track {segment.raw_track_id} in {segment.session_id} · identity {humanize(segment.identity.status)}. {segment.identity.detail}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          <details>
+            <summary className="cursor-pointer text-[var(--muted)]">Statistics</summary>
+            <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1">
+              {STAT_LABELS.map(([key, label]) => (
+                <div key={key} className="flex justify-between gap-2"><dt className="text-[var(--muted)]">{label}</dt><dd className="mono">{object.stats[key] ?? 0}</dd></div>
+              ))}
+              <div className="flex justify-between gap-2"><dt className="text-[var(--muted)]">Recorded cost</dt><dd className="mono">{object.stats.recorded_cost_usd == null ? "unknown" : `$${object.stats.recorded_cost_usd}`}</dd></div>
+            </dl>
+          </details>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 const VERDICT_COLORS: Record<string, string> = {
   boxes_returned: "var(--muted)",
   not_run: "var(--muted)",
@@ -923,7 +1188,8 @@ function ResultsPanel({
                 <span style={{ color: LANE_COLORS.supported }}>{counts.supported} supported</span>
                 {" · "}<span style={{ color: LANE_COLORS.provisional }}>{counts.provisional} provisional</span>
                 {" · "}<span style={{ color: LANE_COLORS.conflicting }}>{counts.conflicting} conflicting</span>
-                {" · "}{counts.rejected} rejected · {counts.unobserved_frames} unobserved
+                {" · "}{counts.rejected} rejected
+                {counts.no_detection_frames == null ? ` · ${counts.unobserved_frames} with no usable box` : ` · ${counts.no_detection_frames} with no SAM box · ${counts.unusable_frames} returned and not trusted`}
               </div>
               {proposal.metrics.remaining_gaps.slice(0, 3).map((gap) => (
                 <button key={gap.start} className="block text-[var(--muted)]" onClick={() => onSeek(gap.start)}>{gap.start.toFixed(2)}–{gap.end.toFixed(2)}s has no box. That is not evidence of absence.</button>

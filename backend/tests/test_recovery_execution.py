@@ -1092,3 +1092,249 @@ def test_diagnostics_report_a_failed_request(client, tmp_path, monkeypatch):
     _live(client, experiment)
     request = client.get(f"/api/recovery/experiments/{experiment['id']}/diagnostics").json()["requests"][0]
     assert request["verdict"] == "request_failed" and "provider said no" in request["message"]
+
+
+# ---- Track loss and reacquisition, end to end ----
+
+
+def _mark(frame, box, width, height):
+    x1, y1 = round(box["x"] * width), round(box["y"] * height)
+    x2, y2 = round((box["x"] + box["w"]) * width) - 1, round((box["y"] + box["h"]) * height) - 1
+    return f"<{frame}f>1<|box;x1={x1};y1={y1};x2={x2};y2={y2};w={width};h={height};c=0.9|><|mask;data=1,1,!A|>"
+
+
+def _drifting(prompt, _direction):
+    """SAM follows the part for 12 frames, then the object goes and the track settles on another region."""
+    import re
+
+    width, height = (int(item) for item in re.search(r"w=(\d+);h=(\d+)", prompt).groups())
+    box = {"x": BOX["x"], "y": BOX["y"], "w": BOX["w"], "h": BOX["h"]}
+    elsewhere = {**box, "x": min(BOX["x"] + 0.5, 0.85)}
+    return "\n".join(_mark(frame, box if frame < 12 else elsewhere, width, height) for frame in range(26))
+
+
+def _near_seed(prompt, _direction):
+    """A new seed finds the part again, for a few frames either side of the seed only."""
+    import re
+
+    width, height = (int(item) for item in re.search(r"w=(\d+);h=(\d+)", prompt).groups())
+    first = int(re.match(r"<(\d+)f>", prompt).group(1))
+    return "\n".join(_mark(frame, BOX, width, height) for frame in range(max(first - 8, 0), first + 9))
+
+
+def _broken_experiment(client, run_id: str, times: list[float]) -> dict:
+    created = client.post(
+        f"/api/runs/{run_id}/recovery/experiments",
+        json={
+            "manual_targets": [
+                {
+                    "object_local_id": "Object_1",
+                    "time_start": times[2],
+                    "time_end": times[2] + 2.5,
+                    "direction": "forward",
+                    "seed": {"timestamp": times[2], "bbox": BOX},
+                }
+            ],
+            "limits": {"max_requests": 4},
+        },
+    )
+    assert created.status_code == 200, created.text
+    return created.json()
+
+
+def _object_history(client, run_id: str, local_id="Object_1") -> dict:
+    response = client.get(f"/api/runs/{run_id}/recovery/reacquisition")
+    assert response.status_code == 200, response.text
+    return next(item for item in response.json()["objects"] if item["object_local_id"] == local_id)
+
+
+def test_loss_is_found_and_a_later_seed_reacquires_the_object_without_promoting_the_drift(client, tmp_path, monkeypatch, no_language_model):
+    from app.db import SessionLocal
+    from app.models.runs import AnalysisRevision
+
+    run_id, revision_id, times = _setup(client, tmp_path)
+    fake = _install(monkeypatch, FakeSam(answer=_drifting))
+    experiment = _broken_experiment(client, run_id, times)
+    data = _live(client, experiment).json()
+    assert data["status"] == "completed", data["error"]
+    assert len(fake.calls) == 1
+    rows = data["proposals"][0]["rows"]
+    assert sum(row["lifecycle"] == "lost" for row in rows) > 0
+    track = data["proposals"][0]["metrics"]["track"]
+    assert track["failures"][0]["reason"] == "large_spatial_jump"
+    assert track["segments"][0]["status"] == "lost"
+    assert data["proposals"][0]["metrics"]["counts"]["unusable_frames"] > 0
+
+    history = _object_history(client, run_id)
+    plan = history["plans"][0]
+    assert plan["status"] == "open" and plan["automatic_start_allowed"] is False
+    assert len(fake.calls) == 1, "Planning sends nothing."
+    assert history["stats"]["track_breaks"] == 1 and history["stats"]["api_requests"] == 1
+    assert plan["recommended"] == "independent_observation", plan["strategies"]
+    assert "Nothing has been sent" in plan["explanation"]
+    used = plan["proposed_target"]
+    assert used["seed_id"] and not used["confirm_seed"]
+    drift_boxes = [row["bbox"] for row in rows if row["lifecycle"] == "lost"]
+    offered = [item["bbox"] for strategy in plan["strategies"] for item in strategy["evidence"]]
+    assert not any(box in drift_boxes for box in offered)
+
+    # The new pass is its own experiment. It needs its own plan and approval.
+    fake.answer = _near_seed
+    created = client.post(f"/api/runs/{run_id}/recovery/experiments", json={"manual_targets": [used], "limits": {"max_requests": 4}}).json()
+    assert len(fake.calls) == 1
+    refused = client.post(f"/api/recovery/experiments/{created['id']}/live", json={"confirm": False, "plan_hash": "x"})
+    assert refused.status_code == 400 and len(fake.calls) == 1
+    second = _live(client, created).json()
+    assert second["status"] == "completed", second["error"]
+    assert len(fake.calls) == 2
+    proposal = second["proposals"][0]
+    assert all(row["reacquired"] for row in proposal["rows"])
+    assert {row["lifecycle"] for row in proposal["rows"]} != {"lost"}
+    assert any(row["outcome"] == "supported" for row in proposal["rows"])
+    assert proposal["metrics"]["track"]["segments"][0]["status"] == "reacquired"
+    assert not any(row["session_id"] == data["plan"]["requests"][0]["session_id"] for row in proposal["rows"])
+
+    history = _object_history(client, run_id)
+    resolved = next(item for item in history["plans"] if item["failure"]["reason"] == "large_spatial_jump")
+    assert resolved["status"] == "resolved" and resolved["attempts"][0]["succeeded"] is True
+    assert "separate segment" in resolved["explanation"]
+    assert {item["physical_instance_id"] for item in history["segments"]} == {"track_1"}
+    assert len({item["segment_id"] for item in history["segments"]}) >= 2
+    assert history["stats"]["reacquisitions_succeeded"] == 1
+    assert history["unresolved"], "The interval between the segments stays unresolved."
+
+    # Accepting one result forks a revision, keeps the old one, and promotes no drifted box.
+    session = SessionLocal()
+    original = json.dumps(session.get(AnalysisRevision, revision_id).document_json, sort_keys=True)
+    session.close()
+    first_proposal = data["proposals"][0]
+    decided = client.post(
+        f"/api/recovery/experiments/{experiment['id']}/proposals/decide",
+        json={"decision": "accepted", "proposal_ids": [first_proposal["id"]]},
+    ).json()
+    applied = decided["proposals"][0]["applied_revision_id"]
+    session = SessionLocal()
+    assert json.dumps(session.get(AnalysisRevision, revision_id).document_json, sort_keys=True) == original
+    new = AnalysisDocument.model_validate(session.get(AnalysisRevision, applied).document_json)
+    session.close()
+    lost_times = {round(row["timestamp"], 3) for row in rows if row["lifecycle"] == "lost"}
+    stored = [row for row in [*new.observations, *new.raw_observations] if row.source_model == "sam-3.1"]
+    drifted = [row for row in stored if round(row.timestamp, 3) in lost_times]
+    assert drifted and all(row.association_status == "conflict" and row.observation_role != "canonical" for row in drifted)
+    assert any("after the track broke" in item.description for item in new.ambiguities)
+
+
+def test_with_no_later_trusted_seed_the_plan_suggests_and_claims_nothing(client, tmp_path, monkeypatch, no_language_model):
+    run_id, _revision, times = _setup(client, tmp_path, with_seeds=False)
+    fake = _install(monkeypatch, FakeSam(answer=_drifting))
+    data = _live(client, _broken_experiment(client, run_id, times)).json()
+    assert data["status"] == "completed", data["error"]
+    plan = _object_history(client, run_id)["plans"][0]
+    assert plan["status"] == "open"
+    assert plan["recommended"] not in {"independent_observation", "human_seed"}
+    assert plan["blocked_reason"]
+    assert plan["proposed_target"]["reacquires"]["failure_id"] == plan["failure"]["failure_id"]
+    if plan["recommended"] == "candidate_detection":
+        assert plan["proposed_target"]["confirm_seed"] is True
+    assert "separate segment" not in plan["explanation"]
+    assert len(fake.calls) == 1
+
+
+def test_a_failed_attempt_is_recorded_and_its_seed_is_not_offered_again(client, tmp_path, monkeypatch, no_language_model):
+    run_id, _revision, times = _setup(client, tmp_path)
+    fake = _install(monkeypatch, FakeSam(answer=_drifting))
+    _live(client, _broken_experiment(client, run_id, times))
+    plan = _object_history(client, run_id)["plans"][0]
+    used = plan["proposed_target"]
+    # The new pass goes wrong straight away. No box lands on its seed.
+    fake.answer = lambda *_args: ""
+    created = client.post(f"/api/runs/{run_id}/recovery/experiments", json={"manual_targets": [used], "limits": {"max_requests": 4}}).json()
+    _live(client, created)
+    calls = len(fake.calls)
+    again = next(item for item in _object_history(client, run_id)["plans"] if item["failure"]["failure_id"] == plan["failure"]["failure_id"])
+    assert again["status"] == "open" and again["needs_stronger_evidence"] is True
+    assert again["attempts"][0]["succeeded"] is False
+    offered = {item["seed_id"] for strategy in again["strategies"] for item in strategy["evidence"]}
+    assert used["seed_id"] not in offered
+    assert again["proposed_target"].get("seed_id") != used["seed_id"]
+    assert len(fake.calls) == calls
+
+
+def test_replay_reprocesses_a_stored_response_with_new_thresholds_and_no_calls(client, tmp_path, monkeypatch, no_language_model):
+    run_id, _revision, times = _setup(client, tmp_path)
+    fake = _install(monkeypatch, FakeSam(answer=_drifting))
+    experiment = _broken_experiment(client, run_id, times)
+    live = _live(client, experiment).json()
+    stored_key = live["plan"]["requests"][0]["key"]
+    from app.services.recovery import load_response
+
+    before = json.dumps(load_response(run_id, stored_key), sort_keys=True)
+    calls = len(fake.calls)
+    first = client.post(f"/api/recovery/experiments/{experiment['id']}/replay").json()
+    second = client.post(f"/api/recovery/experiments/{experiment['id']}/replay").json()
+    now = [item for item in first["proposals"] if item["current"]][0]
+    later = [item for item in second["proposals"] if item["current"]][0]
+    assert now["rows"] == later["rows"] and now["metrics"]["track"] == later["metrics"]["track"]
+    assert second["summary"]["previous_totals"] == first["summary"]["totals"]
+    # With a huge allowance the same response has no break, and the response did not change.
+    relaxed = client.post(
+        f"/api/recovery/experiments/{experiment['id']}/replay", json={"validation": {"jump_sizes": 100.0}}
+    ).json()
+    current = [item for item in relaxed["proposals"] if item["current"]][0]
+    assert "large_spatial_jump" in {item["reason"] for item in now["metrics"]["track"]["failures"]}
+    assert "large_spatial_jump" not in {item["reason"] for item in current["metrics"]["track"]["failures"]}
+    assert relaxed["plan"]["requests"][0]["key"] == stored_key
+    assert len(fake.calls) == calls
+    assert json.dumps(load_response(run_id, stored_key), sort_keys=True) == before
+    bad = client.post(f"/api/recovery/experiments/{experiment['id']}/replay", json={"validation": {"nope": 1}})
+    assert bad.status_code == 400
+
+
+def test_raw_boxes_keep_what_validation_decided(client, tmp_path, monkeypatch, no_language_model):
+    run_id, _revision, times = _setup(client, tmp_path)
+    _install(monkeypatch, FakeSam(answer=_drifting))
+    experiment = _broken_experiment(client, run_id, times)
+    _live(client, experiment)
+    request = client.get(f"/api/recovery/experiments/{experiment['id']}/diagnostics").json()["requests"][0]
+    lost = [box for box in request["boxes"] if box["lifecycle"] == "lost"]
+    assert lost and all(box["outcome"] == "conflicting" and box["segment_id"] == "" for box in lost)
+    assert any(box["segment_id"] for box in request["boxes"])
+
+
+def test_a_concept_pass_is_planned_budgeted_approved_and_binds_nothing(client, tmp_path, monkeypatch, no_language_model):
+    run_id, _revision, times = _setup(client, tmp_path)
+    answer = "<0f>7<|box;x1=1;y1=1;x2=40;y2=40;w=640;h=360;c=0.3|><|mask;data=1,1,!A|>"
+    fake = _install(monkeypatch, FakeSam(answer=lambda *_args: answer))
+    created = client.post(
+        f"/api/runs/{run_id}/recovery/experiments",
+        json={
+            "manual_targets": [
+                {
+                    "object_local_id": "Object_1",
+                    "time_start": times[2],
+                    "time_end": times[2] + 0.5,
+                    "strategy": "concept",
+                    "reacquires": {"failure_id": "f1", "failure_time": times[2], "experiment_id": "e", "strategy": "concept_redetection"},
+                }
+            ],
+        },
+    ).json()
+    plan = client.post(f"/api/recovery/experiments/{created['id']}/dry-run").json()["plan"]
+    assert fake.calls == []
+    spec = plan["requests"][0]
+    assert spec["prompt_kind"] == "concept" and spec["prompt"] == "washer" and spec["bindings"] == {}
+    assert plan["totals"]["billed_frames"] == spec["billed_frames"] >= 50
+    data = _live(client, created).json()
+    assert data["status"] == "completed", data["error"]
+    assert fake.calls[0]["kind"] == "concept" and fake.calls[0]["direction"] is None
+    assert data["proposals"] == []
+    request = client.get(f"/api/recovery/experiments/{created['id']}/diagnostics").json()["requests"][0]
+    assert request["verdict"] == "concept_candidates"
+    assert request["boxes"][0]["status"] == "unassigned" and request["boxes"][0]["object_local_id"] == ""
+    # A blocked limit stops it before any call.
+    limited = client.post(
+        f"/api/runs/{run_id}/recovery/experiments",
+        json={"manual_targets": [{"object_local_id": "Object_1", "time_start": times[2], "time_end": times[2] + 2.0, "strategy": "concept"}], "limits": {"max_frames_per_request": 5}},
+    ).json()
+    blocked = client.post(f"/api/recovery/experiments/{limited['id']}/dry-run").json()["plan"]
+    assert blocked["blocked"] and not blocked["requests"]

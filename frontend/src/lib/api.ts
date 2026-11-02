@@ -1,5 +1,5 @@
 import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, CodexSettings, CodexStatus, CursorCliSettings, CursorCliStatus, Dashboard, ProviderInfo, RunSummary, SamMaskOverlay, VideoInfo } from "./types";
-import type { RecoveryCandidates, RecoveryDiagnostics, RecoveryExperiment } from "./recovery";
+import type { ReacquisitionData, RecoveryCandidates, RecoveryDiagnostics, RecoveryExperiment } from "./recovery";
 import type { VerificationView, WorkflowTemplate } from "./verification";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -151,6 +151,7 @@ export const api = {
     request<RecoveryCandidates>(`/api/runs/${runId}/recovery/dismissals/${targetId}`, { method: "POST" }),
   restoreRecoveryProblem: (runId: string, targetId: string) =>
     request<RecoveryCandidates>(`/api/runs/${runId}/recovery/dismissals/${targetId}`, { method: "DELETE" }),
+  recoveryReacquisition: (runId: string) => request<ReacquisitionData>(`/api/runs/${runId}/recovery/reacquisition`),
   recoveryExperiments: (runId: string) => request<RecoveryExperiment[]>(`/api/runs/${runId}/recovery/experiments`),
   recoveryExperiment: (id: string) => request<RecoveryExperiment>(`/api/recovery/experiments/${id}`),
   recoveryDiagnostics: (id: string) => request<RecoveryDiagnostics>(`/api/recovery/experiments/${id}/diagnostics`),

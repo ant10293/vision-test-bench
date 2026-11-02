@@ -113,3 +113,41 @@ Two related fixes and aids came out of this:
 - `MIN_BILLED_FRAMES` and the tracked-frame count are estimates from Meta's documentation.
 - Re-running the pipeline writes from `working.json`, which does not contain accepted recoveries.
 - The Alembic history already had two heads before this work. Use `alembic upgrade heads`. The app itself creates tables at startup.
+
+## Track loss and reacquisition
+
+Returning a box does not mean SAM is still on the right object. Validation walks outward from each seed through explicit states and keeps two identities apart:
+
+- **Physical instance:** the real object. It keeps its identity while hidden. No box is invented for it.
+- **Visual segment:** one continuous run of localizations from one SAM request. SAM ids exist only inside a request, so a segment never names an object by its id.
+
+Row and segment states are `tracked`, `degraded`, `lost`, `reacquisition_candidate`, `reacquired`, and `ambiguous`. A failure also records `lost`, `occluded`, or `out_of_view`. Those last two are hypotheses from geometry and never findings.
+
+A segment ends on a sustained jump measured in time-normalized motion, growth over a known neighbor, growth with a poor mask, repeated contradiction by measurements, a pass that does not start on its seed, a jump across a hard cut, or SAM no longer returning the object. An anomaly with a return beside the last good box within `outlier_frames` is a single outlier and does not end the segment. A SAM score is reported and never changes an outcome.
+
+Boxes after a loss stay on the proposal, in no segment. Accepting keeps them as visible conflicts that never become canonical. A later segment starts only from an initialization event: a new pass from a trusted seed, or a measurement that agrees. It inherits neither the old failure nor the old support. A segment after a hard cut stays unverified until a measurement agrees.
+
+A segment is linked to the physical object only by a confirmed seed, an independently supported seed, or agreeing measurements. A competing object leaves the link ambiguous. Agreement between passes lifts a row only when they began from separate seeds.
+
+### Reacquisition plans
+
+`GET /api/runs/{run}/recovery/reacquisition` returns segments, failures, unresolved spans, statistics, and a plan for each failure. It contacts no provider. Strategies are tried in this order: an independent observation, a human seed, a stored candidate a person confirms, a concept pass, then a manually drawn seed. A prompted SAM track is never offered as a seed, and a seed from a failed attempt is not offered again. Nothing starts automatically.
+
+Each new pass is its own experiment with its own dry run, limits, and explicit approval. A concept pass binds no object, so its boxes are candidates a person has to identify.
+
+### Reprocessing without spending credits
+
+Open a run on the Recovery page and choose **Replay this run's stored responses (free)**. This repeats parsing, validation, segmentation, and planning from stored responses, and creates a new generation of proposals. Responses and cache keys do not change. To try other thresholds:
+
+```bash
+curl -X POST localhost:8000/api/recovery/experiments/EXPERIMENT_ID/replay \
+  -H 'content-type: application/json' -d '{"validation": {"jump_factor": 8}}'
+```
+
+### One small approved experiment
+
+1. Replay the run, open **Track history**, and go to a frame listed under **Frames to check** where the object is visible again.
+2. Choose **Draw a new seed**, then drag a box around the object.
+3. Keep the frame limit low under **Limits**, then choose **Check 1 seed**. This is free and shows the billed frames.
+4. Read the plan, then choose **Run SAM**. Only this step can be billed. SAM bills at least 50 frames per request.
+5. Review the new segment in **Track history**, then accept or reject it. Accepting creates a new revision.
