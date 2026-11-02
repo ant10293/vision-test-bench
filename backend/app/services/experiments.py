@@ -114,6 +114,7 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "sam_max_requests": int(payload.get("sam_max_requests") or 8),
         "sam_max_frames": int(payload.get("sam_max_frames") or 1800),
         "sam_chunk_frames": int(payload.get("sam_chunk_frames") or 300),
+        "sam_prompt_strategy": _prompt_strategy(payload),
         "max_frames": payload.get("max_frames") or 48,
         "max_retries": payload.get("max_retries") or 2,
         "cost_ceiling_usd": payload.get("cost_ceiling_usd"),
@@ -281,6 +282,15 @@ def _semantic_mode(payload: dict) -> str:
     if mode not in {"combined", "grounded"}:
         raise ValueError(f"Unknown semantic mode {mode}. Use combined or grounded.")
     return mode
+
+
+def _prompt_strategy(payload: dict) -> str:
+    from app.perception.spatial_prompts import PROMPT_STRATEGIES
+
+    strategy = payload.get("sam_prompt_strategy") or "concept"
+    if strategy not in PROMPT_STRATEGIES:
+        raise ValueError(f"Unknown SAM prompt strategy {strategy}. Use {', '.join(PROMPT_STRATEGIES)}.")
+    return strategy
 
 
 def _segmentation_mode(session: Session, payload: dict) -> str:

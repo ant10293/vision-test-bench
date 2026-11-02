@@ -5,7 +5,7 @@ import { Bone, FieldBone } from "../components/Skeleton";
 import { SettingsFieldset } from "../components/SettingsFieldset";
 import { api } from "../lib/api";
 import { humanize } from "../lib/humanize";
-import { PERCEPTION_OPTIONS, PIPELINE_OPTIONS, SEGMENTATION_OPTIONS, SEMANTIC_OPTIONS } from "../lib/runOptions";
+import { PERCEPTION_OPTIONS, PIPELINE_OPTIONS, PROMPT_STRATEGY_OPTIONS, SEGMENTATION_OPTIONS, SEMANTIC_OPTIONS } from "../lib/runOptions";
 import type { Capability } from "../lib/types";
 import { videoReady } from "../lib/uploadProgress";
 
@@ -31,6 +31,7 @@ export function ExperimentPage() {
   const [pass, setPass] = useState("single");
   const [semanticMode, setSemanticMode] = useState("combined");
   const [segmentation, setSegmentation] = useState("boxes_only");
+  const [promptStrategy, setPromptStrategy] = useState("concept");
   const [temperature, setTemperature] = useState("");
   const [reasoning, setReasoning] = useState("");
   const [transcribe, setTranscribe] = useState(false);
@@ -72,6 +73,7 @@ export function ExperimentPage() {
         semantic_mode: semanticMode,
         segmentation_mode: segmentation,
         segmentation_model_id: segmentation === "sam" || segmentation === "sam_video" ? "sam-3.1" : "",
+        sam_prompt_strategy: segmentation === "sam_video" ? promptStrategy : "concept",
         temperature: codexRun || temperature === "" ? null : Number(temperature),
         reasoning_effort: effort || null,
         prompt_key: "scene",
@@ -242,6 +244,20 @@ export function ExperimentPage() {
           <p className="text-xs text-[var(--amber)]">
             SAM 3.1 needs a Meta Model API key. This run will not switch to GrabCut or another model.
           </p>
+        )}
+        {segmentation === "sam_video" && (
+          <Field label="SAM prompting">
+            <select className="field" value={promptStrategy} onChange={(event) => setPromptStrategy(event.target.value)}>
+              {PROMPT_STRATEGY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+            <span className="text-xs text-[var(--muted)]">
+              {promptStrategy === "concept"
+                ? "SAM looks for each object by name. This is the default."
+                : promptStrategy === "trusted_spatial"
+                  ? "SAM follows boxes that a person drew or that two producers agree on. An object with no such box in a chunk stays unobserved, and no name is sent."
+                  : "SAM follows verified boxes where they exist. Objects without one are looked up by name in a separate request."}
+            </span>
+          </Field>
         )}
         {segmentation === "sam_video" && (
           <p className="text-xs text-[var(--muted)]">

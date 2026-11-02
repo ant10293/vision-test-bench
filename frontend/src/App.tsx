@@ -20,6 +20,7 @@ import {
 import { VideoDetailPage, VideosPage } from "./pages/Videos";
 import { ProjectsPage } from "./pages/Projects";
 import { AudioPage } from "./pages/Audio";
+import { RecoveryPage } from "./pages/Recovery";
 
 function TaskRedirect() {
   const { projectId = "" } = useParams();
@@ -50,6 +51,7 @@ export function App() {
               <Route path="states" element={<StatesPage />} />
               <Route path="workflow" element={<WorkflowPage />} />
               <Route path="steps" element={<StepsPage />} />
+              <Route path="recovery" element={<RecoveryPage />} />
               <Route path="pipeline" element={<PipelinePage />} />
               <Route path="audio" element={<AudioPage />} />
               <Route path="evaluate" element={<EvaluatePage />} />

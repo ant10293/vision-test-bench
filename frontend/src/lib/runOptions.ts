@@ -10,6 +10,12 @@ export const SEGMENTATION_OPTIONS = [
   ["sam_video", "SAM 3.1 video tracking with evidence fusion"],
 ] as const;
 
+export const PROMPT_STRATEGY_OPTIONS = [
+  ["concept", "Concept: find each part by its name"],
+  ["trusted_spatial", "Trusted spatial: follow verified boxes only"],
+  ["hybrid", "Hybrid: verified boxes first, names for the rest"],
+] as const;
+
 export const PERCEPTION_OPTIONS = [
   ["A_legacy_motion", "A · Motion baseline"],
   ["B_temporal", "B · Temporal tracking"],

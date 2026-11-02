@@ -1,4 +1,5 @@
 import type { AudioModelStatus, Bundle, ClaudeCodeSettings, ClaudeCodeStatus, CodexSettings, CodexStatus, CursorCliSettings, CursorCliStatus, Dashboard, ProviderInfo, RunSummary, SamMaskOverlay, VideoInfo } from "./types";
+import type { RecoveryCandidates, RecoveryExperiment } from "./recovery";
 import type { VerificationView, WorkflowTemplate } from "./verification";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -145,6 +146,20 @@ export const api = {
     return request<RunSummary[]>(`/api/runs${suffix}`);
   },
   run: (id: string) => request<Bundle>(`/api/runs/${id}`),
+  recoveryCandidates: (runId: string) => request<RecoveryCandidates>(`/api/runs/${runId}/recovery/candidates`),
+  recoveryExperiments: (runId: string) => request<RecoveryExperiment[]>(`/api/runs/${runId}/recovery/experiments`),
+  recoveryExperiment: (id: string) => request<RecoveryExperiment>(`/api/recovery/experiments/${id}`),
+  createRecovery: (runId: string, payload: Record<string, unknown>) =>
+    request<RecoveryExperiment>(`/api/runs/${runId}/recovery/experiments`, { method: "POST", body: JSON.stringify(payload) }),
+  updateRecoverySeeds: (id: string, payload: Record<string, unknown>) =>
+    request<RecoveryExperiment>(`/api/recovery/experiments/${id}/seeds`, { method: "PATCH", body: JSON.stringify(payload) }),
+  recoveryDryRun: (id: string) => request<RecoveryExperiment>(`/api/recovery/experiments/${id}/dry-run`, { method: "POST" }),
+  recoveryReplay: (id: string) => request<RecoveryExperiment>(`/api/recovery/experiments/${id}/replay`, { method: "POST" }),
+  recoveryLive: (id: string, payload: { confirm: true; plan_hash: string; resubmit_keys?: string[] }) =>
+    request<RecoveryExperiment>(`/api/recovery/experiments/${id}/live`, { method: "POST", body: JSON.stringify(payload) }),
+  recoveryCancel: (id: string) => request<RecoveryExperiment>(`/api/recovery/experiments/${id}/cancel`, { method: "POST" }),
+  decideRecovery: (id: string, payload: { decision: "accepted" | "rejected"; proposal_ids: string[]; include_provisional?: boolean }) =>
+    request<RecoveryExperiment>(`/api/recovery/experiments/${id}/proposals/decide`, { method: "POST", body: JSON.stringify(payload) }),
   samMasks: (id: string, time: number) =>
     request<SamMaskOverlay[]>(`/api/runs/${id}/sam-masks?t=${encodeURIComponent(time.toFixed(3))}`),
   createRun: (payload: Record<string, unknown>) =>

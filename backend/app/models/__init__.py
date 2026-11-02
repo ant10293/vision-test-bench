@@ -23,6 +23,7 @@ from app.models.domain import (
     WorkflowStepRow,
 )
 from app.models.media import FrameAsset, Project, VideoAsset
+from app.models.recovery import RecoveryExperiment, RecoveryProposal, RecoveryRequest
 from app.models.runs import (
     AnalysisRevision,
     AnalysisRun,
@@ -55,6 +56,9 @@ from app.models.verification import (
 )
 
 __all__ = [
+    "RecoveryExperiment",
+    "RecoveryProposal",
+    "RecoveryRequest",
     "ActionRow",
     "AmbiguityRow",
     "AnalysisRevision",

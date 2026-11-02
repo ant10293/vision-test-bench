@@ -22,12 +22,13 @@ import { BundleContext, useOptionalBundle } from "../lib/bundleContext";
 import type { Bundle, Observation } from "../lib/types";
 import { useInspector } from "../stores/ui";
 import { AudioPage } from "./Audio";
+import { RecoveryPage } from "./Recovery";
 
 function label(tab: string) {
   return tab.charAt(0).toUpperCase() + tab.slice(1);
 }
 
-const ANALYSIS_TABS = ["", "objects", "states", "workflow", "steps", "pipeline", "audio", "evaluate", "logs"];
+const ANALYSIS_TABS = ["", "objects", "states", "workflow", "steps", "recovery", "pipeline", "audio", "evaluate", "logs"];
 const OBJECT_GRID = "grid gap-3 sm:grid-cols-2 xl:grid-cols-4";
 const OBJECT_PLACEHOLDERS = 4;
 const INSPECT_LAYOUT = "grid min-h-[70vh] min-w-0 gap-3 xl:grid-cols-[280px_minmax(0,1fr)_320px]";
@@ -308,6 +309,8 @@ function AnalysisTab({ tab }: { tab: string }) {
       return <WorkflowPage />;
     case "steps":
       return <StepsPage />;
+    case "recovery":
+      return <RecoveryPage />;
     case "pipeline":
       return <PipelinePage />;
     case "audio":

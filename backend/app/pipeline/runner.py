@@ -36,6 +36,7 @@ from app.pipeline.infer import (
     semantic_calls,
     semantic_mode,
 )
+from app.pipeline.lineage import record_lineage
 from app.pipeline.locate_pass import locate_missing
 from app.pipeline.merge import merge_interpretation, retain_prior_records
 from app.pipeline.perception_stage import load_spatial_document, run_spatial_stage
@@ -522,6 +523,7 @@ async def _ground(session, run, stage, document: AnalysisDocument, frames: list[
 
 
 def _remember(session, run, document: AnalysisDocument, note: str) -> None:
+    record_lineage(run, note, document)
     revision = session.scalar(
         select(AnalysisRevision).where(
             AnalysisRevision.run_id == run.id,

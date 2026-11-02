@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     worker_enabled: bool = True
     ingest_inline: bool = False
     stale_job_seconds: int = 900
+    # Meta bills SAM video per frame. No rate is published in this repository, so
+    # cost stays unknown until this is set. Frame and request limits always apply.
+    sam_price_per_frame_usd: float | None = None
 
     @property
     def resolved_data_dir(self) -> Path:

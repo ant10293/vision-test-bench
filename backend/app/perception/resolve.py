@@ -27,6 +27,8 @@ from app.schemas.enums import AmbiguityKind, EvidenceClass, Provenance
 
 SAM_ID = "sam-3.1"
 TRACKER_SOURCE = "tracker"
+# A box a person drew. It can be canonical without a detector, and a disagreeing measurement still conflicts.
+HUMAN_AUTHORITY = "human"
 # Two supported boxes for one object at one time must overlap this much to agree.
 AGREEMENT_IOU = 0.5
 # Rows this close in time are the same picture.
@@ -217,6 +219,8 @@ def _fill(row: ObservationPrediction, sam_counts: dict[str, int]) -> Observation
 def _eligible(row: ObservationPrediction) -> bool:
     if row.bbox is None:
         return False
+    if row.geometry_authority == HUMAN_AUTHORITY:
+        return True
     if row.source_model == SAM_ID:
         return row.association_support == "associated" and row.detection_support in {"mask", "detected"}
     if row.source_model == TRACKER_SOURCE:
@@ -230,6 +234,8 @@ def _eligible(row: ObservationPrediction) -> bool:
 
 def _rank(row: ObservationPrediction) -> tuple:
     strength = {"mask": 0, "detected": 1, "proposal": 2, "none": 3}.get(row.detection_support, 4)
+    if row.geometry_authority == HUMAN_AUTHORITY:
+        strength = -1
     return (strength, 0 if row.source_model == SAM_ID else 1, row.timestamp)
 
 

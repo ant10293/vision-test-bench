@@ -37,8 +37,6 @@ from app.schemas.enums import (
 from app.services.storage import data_path
 
 SUMMARY_STAGES = {
-    "action_analysis",
-    "state_tracking",
     "workflow",
     "ambiguity",
     "evidence_fusion",
@@ -148,13 +146,16 @@ def plan_prompts(
 
 
 def reference_boxes(
-    document: AnalysisDocument, spatial: AnalysisDocument | None = None
+    document: AnalysisDocument,
+    spatial: AnalysisDocument | None = None,
+    *,
+    include_estimates: bool = True,
 ) -> dict[str, list[tuple[float, tuple[float, float, float, float]]]]:
     """Boxes that stand for each object when a SAM track is matched to it.
 
     Repeated tracker detections of the object's bound instance come first.
-    The model's own estimates are used where no measurement exists. SAM rows
-    and flow holds are never references.
+    The model's own estimates are used where no measurement exists, unless
+    `include_estimates` is off. SAM rows and flow holds are never references.
     """
     from app.perception.resolve import is_estimate
 
@@ -168,6 +169,8 @@ def reference_boxes(
                 continue
             refs.setdefault(owner, []).append((row.timestamp, _tuple(row.bbox)))
             measured.add(owner)
+    if not include_estimates:
+        return refs
     for row in [*document.observations, *document.raw_observations]:
         if row.bbox is None or not is_estimate(row) or row.object_local_id in measured:
             continue
@@ -181,6 +184,7 @@ def associate_tracks(
     *,
     scene_boundaries: list[float] | None = None,
     spatial: AnalysisDocument | None = None,
+    measured_bindings: bool = False,
 ) -> list[TrackAssociation]:
     """Link each SAM track to at most one object by temporal box overlap.
 
@@ -189,12 +193,14 @@ def associate_tracks(
     was asked for; the noun is not evidence of which one. A prompted point
     binds its object unless the track contradicts it. Confidence and the
     nearest leftover center are not used. A close rival leaves the track
-    unassigned.
+    unassigned. With `measured_bindings`, a track prompted from a trusted seed
+    can only be contradicted by a measurement, not by a model's box estimate.
     """
     from app.perception.associate import associate, pair_stats
 
     del scene_boundaries  # gaps are recorded in the summary; they do not force a match
     references = reference_boxes(document, spatial)
+    binding_references = reference_boxes(document, spatial, include_estimates=False) if measured_bindings else references
     grouped: dict[tuple[str, str], list[TrackSample]] = {}
     for sample in samples:
         grouped.setdefault((sample.session_id, sample.raw_track_id), []).append(sample)
@@ -211,7 +217,7 @@ def associate_tracks(
             boxes = [(row.timestamp, _tuple(row.bbox)) for row in rows]
             binding = next((row.bound_object_id for row in rows if row.bound_object_id), "")
             if binding:
-                pair = pair_stats(boxes, references.get(binding, []))
+                pair = pair_stats(boxes, binding_references.get(binding, []))
                 if pair.shared and pair.score < CONFLICT_IOU:
                     associations.append(
                         TrackAssociation(

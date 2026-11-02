@@ -30,11 +30,11 @@ from app.perception.sam_fusion import (
     TrackSample,
     associate_tracks,
     fuse_geometry,
-    plan_prompts,
     render_summary,
     write_sam_summary,
 )
 from app.perception.sam_masks import materialize_record
+from app.perception.spatial_prompts import PROMPT_STRATEGIES, plan_for_strategy
 from app.pipeline.infer import load_working, save_working
 from app.pipeline.sampling_stage import timeline_for
 from app.providers.catalog import lookup
@@ -165,7 +165,15 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
     max_requests = _max_requests(run)
     file_ids: dict[str, str] = {}
     resumed = 0
-    planned = [plan_prompts(document, chunk, width, height, fps) for chunk in chunks]
+    sent_kinds: dict[str, int] = {}
+    strategy = prompt_strategy(run)
+    seeds = _pipeline_seeds(session, run, document, strategy)
+    planned = []
+    prompt_outcomes: list[dict] = []
+    for chunk in chunks:
+        plans, outcomes = plan_for_strategy(document, chunk, width, height, fps, strategy, seeds)
+        planned.append(plans)
+        prompt_outcomes.extend(outcomes)
     # One unit per SAM request and one for saving, which ends when the stage completes.
     stage.progress_total = min(sum(len(plans) for plans in planned), max_requests) + 1
     stage.progress_current = 0
@@ -188,6 +196,7 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
             if not counted:
                 submitted_frames += chunk.frame_count
                 counted = True
+            sent_kinds[plan.kind] = sent_kinds.get(plan.kind, 0) + 1
             saved = _load_response(run.id, plan, chunk) if resuming else None
             if saved is not None:
                 calls += 1
@@ -254,7 +263,11 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
     from app.pipeline.perception_stage import load_spatial_document
 
     associations = associate_tracks(
-        document, samples, scene_boundaries=boundaries, spatial=load_spatial_document(run.id)
+        document,
+        samples,
+        scene_boundaries=boundaries,
+        spatial=load_spatial_document(run.id),
+        measured_bindings=strategy != "concept",
     )
     fused = fuse_geometry(
         document,
@@ -294,14 +307,42 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
         "skipped_sessions": skipped,
         "skipped_chunks": skipped_spans,
         "coverage_incomplete": bool(skipped),
+        "prompt_strategy": strategy,
+        "prompt_kinds_sent": sent_kinds,
+        "prompt_outcomes": prompt_outcomes,
         "transform": transform,
         "capabilities": sam_capabilities(),
         "note": (
-            "Video tracking asked SAM for each part by its noun, on the video file. "
+            f"Video tracking used the {strategy} prompt strategy on the video file. "
             "Object ids are scoped to each request. Chunk boundaries do not continue a raw id. "
             "Live API validation is separate from this recorded call."
         ),
     }
+
+
+def prompt_strategy(run: AnalysisRun) -> str:
+    """A run stored before this setting existed stays on noun prompts."""
+    value = str((run.config_json or {}).get("sam_prompt_strategy") or "concept")
+    return value if value in PROMPT_STRATEGIES else "concept"
+
+
+def _pipeline_seeds(session: Session, run: AnalysisRun, document: AnalysisDocument, strategy: str) -> list:
+    """Seeds known when segmentation begins. Earlier SAM rows are left out, so SAM cannot vouch for itself."""
+    if strategy == "concept":
+        return []
+    from app.perception.seeds import collect_seeds, rank_for_interval
+    from app.pipeline.perception_stage import load_spatial_document
+
+    earlier = document.model_copy(
+        update={
+            "observations": [row for row in document.observations if row.source_model != "sam-3.1"],
+            "raw_observations": [row for row in document.raw_observations if row.source_model != "sam-3.1"],
+        }
+    )
+    seeds = collect_seeds(
+        earlier, load_spatial_document(run.id), boundaries=_scene_boundaries(session, run.id)
+    )
+    return rank_for_interval(seeds, 0.0, float("inf"))
 
 
 def _image_prompt(local_id: str, label: str, box: BBox, width: int, height: int) -> tuple[str, str]:

@@ -36,6 +36,8 @@ Perception architecture:
 - `test_heuristics.py`: each fenced repair. Two canonical nested instances both remain, a model-only size glitch is still repaired, a canonical row is never edited, two touching identical instances stay two, a canonical track causes no locate call, canonical rows skip the re-ground call, a later-stage box does not replace a canonical row, model-only boxes make no assembly claim, and sustained contact stays inferred and does not complete.
 - `test_benchmark.py`: the harness on synthetic cases. These scores check the harness. They are not accuracy.
 
+- `test_spatial_prompts.py`, `test_recovery_selection.py`, `test_recovery_execution.py`: prompt tokens and frame mapping (with real ffmpeg clips, including variable frame rate and rotation), seed trust, recovery targets, validation outcomes, resolver protection, and execution safety. SAM is a fake. These synthetic sequences check behavior and are not accuracy. See `RECOVERY.md`.
+
 `tests/verification_fixtures.py` is the only place those assembly names appear. `app/verification` is scanned so the engine does not name a specific part. No paid provider is called. Reinspection status in these tests is `not_sent`.
 
 Paid provider tests are not in this suite. Do not describe a live integration as tested until a validation or generation call has succeeded with a real key.
