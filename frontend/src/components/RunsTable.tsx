@@ -1,3 +1,4 @@
+import { Star } from "lucide-react";
 import { Link } from "react-router-dom";
 import { formatDuration, formatUsd, formatWhen } from "../lib/api";
 import { humanize, humanizeText } from "../lib/humanize";
@@ -53,7 +54,10 @@ function RunCells({ run }: { run: RunSummary }) {
   const name = humanizeText(run.name);
   return (
     <>
-      <th className="mono" scope="row">{run.id}</th>
+      <th className="mono" scope="row">
+        {run.id}
+        {run.starred && <Star className="ml-1.5 inline-block align-[-2px] text-[var(--amber)]" size={14} fill="currentColor" role="img" aria-label="Starred" />}
+      </th>
       <td>
         <Link className="run-link" to={`/runs/${run.id}`}>
           <span className="block">{type}</span>

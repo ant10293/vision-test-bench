@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Star } from "lucide-react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { AssetPreview } from "../components/AssetPreview";
@@ -330,6 +331,7 @@ function RunActions({ bundle, embedded }: { bundle: Bundle | null; embedded: boo
   if (!bundle) {
     return (
       <div className="flex flex-wrap gap-2" aria-hidden="true">
+        <span className="btn flex items-center"><Star size={16} /></span>
         <span className="btn">Duplicate</span>
         <span className="btn">Cancel</span>
         <span className="btn">Delete</span>
@@ -345,8 +347,23 @@ function RunActions({ bundle, embedded }: { bundle: Bundle | null; embedded: boo
     await client.invalidateQueries({ queryKey: ["dashboard"] });
     navigate(embedded ? "/" : "/runs");
   };
+  const toggleStar = async () => {
+    await api.setRunStarred(bundle.run.id, !bundle.run.starred);
+    await refresh();
+    await client.invalidateQueries({ queryKey: ["runs"] });
+    await client.invalidateQueries({ queryKey: ["dashboard"] });
+  };
   return (
     <div className="flex flex-wrap gap-2">
+      <button
+        className="btn flex items-center"
+        aria-label="Star run"
+        aria-pressed={bundle.run.starred}
+        title={bundle.run.starred ? "Remove star" : "Star run"}
+        onClick={toggleStar}
+      >
+        <Star className={bundle.run.starred ? "text-[var(--amber)]" : undefined} size={16} fill={bundle.run.starred ? "currentColor" : "none"} />
+      </button>
       <button className="btn" onClick={async () => { const copy = await api.duplicateRun(bundle.run.id); navigate(`/runs/${copy.id}/pipeline`); }}>Duplicate</button>
       <button className="btn" onClick={async () => { await api.cancelRun(bundle.run.id); await refresh(); }}>Cancel</button>
       <button className="btn" onClick={remove}>Delete</button>

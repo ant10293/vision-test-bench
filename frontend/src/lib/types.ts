@@ -17,6 +17,7 @@ export interface RunSummary {
   segmentation_mode: string;
   fixture: boolean;
   fixture_label: string;
+  starred: boolean;
   cost_usd: number;
   unpriced_calls: number;
   input_tokens: number;

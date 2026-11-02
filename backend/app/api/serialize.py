@@ -106,6 +106,7 @@ def run_summary(session: Session, run: AnalysisRun) -> dict:
         "segmentation_mode": run.segmentation_mode,
         "fixture": run.fixture,
         "fixture_label": run.fixture_label,
+        "starred": run.starred,
         "cost_usd": run.cost_usd,
         "unpriced_calls": unpriced_calls,
         "input_tokens": run.input_tokens,

@@ -90,6 +90,7 @@ class AnalysisRun(Base):
     coverage_json: Mapped[dict] = mapped_column(JSON, default=dict)
     fixture: Mapped[bool] = mapped_column(Boolean, default=False)
     fixture_label: Mapped[str] = mapped_column(String(200), default="")
+    starred: Mapped[bool] = mapped_column(Boolean, default=False)
     parent_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     error: Mapped[str] = mapped_column(Text, default="")
     cost_usd: Mapped[float] = mapped_column(Float, default=0)

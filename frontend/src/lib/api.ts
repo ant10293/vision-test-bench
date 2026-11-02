@@ -168,6 +168,8 @@ export const api = {
     request<SamMaskOverlay[]>(`/api/runs/${id}/sam-masks?t=${encodeURIComponent(time.toFixed(3))}`),
   createRun: (payload: Record<string, unknown>) =>
     request<RunSummary>("/api/runs", { method: "POST", body: JSON.stringify(payload) }),
+  setRunStarred: (id: string, starred: boolean) =>
+    request<RunSummary>(`/api/runs/${id}/starred`, { method: "PATCH", body: JSON.stringify({ starred }) }),
   duplicateRun: (id: string) => request<RunSummary>(`/api/runs/${id}/duplicate`, { method: "POST", body: "{}" }),
   cancelRun: (id: string) => request<RunSummary>(`/api/runs/${id}/cancel`, { method: "POST" }),
   deleteRun: (id: string) => request(`/api/runs/${id}`, { method: "DELETE" }),

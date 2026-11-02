@@ -30,6 +30,7 @@ COLUMN_UPGRADES = {
         ("ingest_detail", "VARCHAR(200) DEFAULT ''"),
         ("ingest_error", "TEXT DEFAULT ''"),
     ],
+    "analysis_runs": [("starred", "BOOLEAN NOT NULL DEFAULT 0")],
     "model_responses": [("price_known", "BOOLEAN NOT NULL DEFAULT 0")],
     "spatial_track_points": [
         ("track_status", "VARCHAR(32) DEFAULT ''"),

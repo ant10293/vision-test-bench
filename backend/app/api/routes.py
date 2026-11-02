@@ -943,6 +943,17 @@ def get_run(run_id: str, session: Session = Depends(db)) -> dict:
     return bundle(session, _run(session, run_id))
 
 
+@router.patch("/runs/{run_id}/starred")
+def set_starred(run_id: str, payload: dict, session: Session = Depends(db)) -> dict:
+    starred = payload.get("starred")
+    if not isinstance(starred, bool):
+        raise HTTPException(422, "starred must be true or false")
+    run = _run(session, run_id)
+    run.starred = starred
+    session.commit()
+    return run_summary(session, run)
+
+
 @router.post("/runs/{run_id}/duplicate")
 def duplicate(run_id: str, payload: dict | None = None, session: Session = Depends(db)) -> dict:
     run = duplicate_run(session, _run(session, run_id), (payload or {}).get("name"))

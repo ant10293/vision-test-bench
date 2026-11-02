@@ -474,6 +474,12 @@ def test_cancel_returns_a_duration_when_the_start_has_no_timezone(client):
     run_id = run.id
     session.close()
 
+    assert client.get(f"/api/runs/{run_id}").json()["run"]["starred"] is False
+    assert client.patch(f"/api/runs/{run_id}/starred", json={"starred": True}).json()["starred"] is True
+    assert client.get("/api/runs").json()[0]["starred"] is True
+    assert client.patch(f"/api/runs/{run_id}/starred", json={"starred": False}).json()["starred"] is False
+    assert client.patch(f"/api/runs/{run_id}/starred", json={"starred": "yes"}).status_code == 422
+
     canceled = client.post(f"/api/runs/{run_id}/cancel")
     assert canceled.status_code == 200, canceled.text
     body = canceled.json()
