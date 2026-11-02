@@ -1,19 +1,17 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { AssetPreview, PreviewNav } from "./AssetPreview";
 import { api } from "../lib/api";
 import type { BoxDecision, Bundle, Observation, TrackPointSample } from "../lib/types";
 import { coverageAt, decisionsNear, frameObjectStills, overlayObservations, tracksAt } from "../lib/analysis";
 import { formatConfidence } from "../lib/confidence";
 import { humanize, labeledId } from "../lib/humanize";
-import { panStage, stageViewAt, stageZoomByWheel, clampStageView, MAX_STAGE_ZOOM, MIN_STAGE_ZOOM, type StageView } from "../lib/stageZoom";
-import { ZoomStepper } from "./ZoomStepper";
+import { StageZoomControl, useStageZoom } from "./StageZoom";
 import { wrapLines } from "../lib/wrapText";
 import { useInspector } from "../stores/ui";
 
 const LABEL_SIZE = 14;
-const STAGE_ZOOM_STEP = 0.25;
 const LABEL_LINE = LABEL_SIZE * 1.2;
 const LABEL_FONT = `${LABEL_SIZE}px "IBM Plex Sans", sans-serif`;
 const CONFIDENCE_INSET = 4;
@@ -34,32 +32,13 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
   const client = useQueryClient();
   const { time, setTime, playing, setPlaying, speed, overlay, layers, seedMode, loop, selectedObject } = useInspector();
   const [seedError, setSeedError] = useState("");
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [panning, setPanning] = useState(false);
-  const viewRef = useRef<StageView>({ zoom: 1, panX: 0, panY: 0 });
-  const contentRef = useRef({ x: 0, y: 0, w: 1, h: 1, vw: 640, vh: 360 });
-  const dragRef = useRef<{ pointerId: number; x: number; y: number; panX: number; panY: number } | null>(null);
   const [content, setContent] = useState({ x: 0, y: 0, w: 1, h: 1, vw: 640, vh: 360 });
-  contentRef.current = content;
+  const { zoom, pan, commitView, stepZoom, frameClass, frameHandlers, frameTransform } = useStageZoom(boxRef, content);
   const [fontReady, setFontReady] = useState(false);
   const [objectsOpen, setObjectsOpen] = useState(true);
   const [preview, setPreview] = useState<number | null>(null);
   const previewRef = useRef<number | null>(null);
   previewRef.current = preview;
-  const commitView = useCallback((next: StageView) => {
-    viewRef.current = next;
-    setZoom(next.zoom);
-    setPan({ x: next.panX, y: next.panY });
-  }, []);
-
-  function pictureSize(frameWidth: number, frameHeight: number) {
-    const picture = contentRef.current;
-    return {
-      width: picture.w > 1 ? picture.w : frameWidth,
-      height: picture.h > 1 ? picture.h : frameHeight,
-    };
-  }
 
   useEffect(() => {
     const video = videoRef.current;
@@ -158,119 +137,12 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
     };
   }, [src]);
 
-  useEffect(() => {
-    const frame = boxRef.current;
-    if (!frame) return;
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      const rect = frame.getBoundingClientRect();
-      const picture = pictureSize(rect.width, rect.height);
-      commitView(stageZoomByWheel(
-        viewRef.current,
-        event.clientX - rect.left,
-        event.clientY - rect.top,
-        rect.width,
-        rect.height,
-        event.deltaY,
-        event.deltaMode,
-        picture.width,
-        picture.height,
-      ));
-    };
-    const observer = new ResizeObserver(() => {
-      const rect = frame.getBoundingClientRect();
-      const picture = pictureSize(rect.width, rect.height);
-      const next = clampStageView(
-        viewRef.current,
-        rect.width,
-        rect.height,
-        picture.width,
-        picture.height,
-      );
-      const current = viewRef.current;
-      if (next.zoom !== current.zoom || next.panX !== current.panX || next.panY !== current.panY) commitView(next);
-    });
-    frame.addEventListener("wheel", onWheel, { passive: false });
-    observer.observe(frame);
-    return () => {
-      frame.removeEventListener("wheel", onWheel);
-      observer.disconnect();
-    };
-  }, [commitView]);
-
-  useEffect(() => {
-    const frame = boxRef.current;
-    if (!frame || content.w <= 1 || content.h <= 1) return;
-    const rect = frame.getBoundingClientRect();
-    const next = clampStageView(viewRef.current, rect.width, rect.height, content.w, content.h);
-    const current = viewRef.current;
-    if (next.zoom !== current.zoom || next.panX !== current.panX || next.panY !== current.panY) commitView(next);
-  }, [content.w, content.h, commitView]);
-
-  function onPointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (event.button !== 0 || viewRef.current.zoom <= 1) return;
-    dragRef.current = {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-      panX: viewRef.current.panX,
-      panY: viewRef.current.panY,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setPanning(true);
-  }
-
-  function onPointerMove(event: PointerEvent<HTMLDivElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const picture = pictureSize(rect.width, rect.height);
-    commitView(panStage(
-      viewRef.current,
-      drag.panX + event.clientX - drag.x,
-      drag.panY + event.clientY - drag.y,
-      rect.width,
-      rect.height,
-      picture.width,
-      picture.height,
-    ));
-  }
-
-  function endPan(event: PointerEvent<HTMLDivElement>) {
-    if (dragRef.current?.pointerId !== event.pointerId) return;
-    dragRef.current = null;
-    setPanning(false);
-  }
-
-  function stepZoom(direction: number) {
-    const frame = boxRef.current;
-    if (!frame) return;
-    const rect = frame.getBoundingClientRect();
-    const picture = pictureSize(rect.width, rect.height);
-    const nextZoom = Math.min(MAX_STAGE_ZOOM, Math.max(MIN_STAGE_ZOOM, viewRef.current.zoom + direction * STAGE_ZOOM_STEP));
-    commitView(stageViewAt(
-      viewRef.current,
-      rect.width / 2,
-      rect.height / 2,
-      rect.width,
-      rect.height,
-      nextZoom,
-      picture.width,
-      picture.height,
-    ));
-  }
-
-  const frameTransform = { transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center" };
-
   return (
     <div className="stage-slot flex min-h-0 w-full flex-col gap-2">
       <div
         ref={boxRef}
-        className={`stage-frame rounded-lg bg-black${zoom > 1 ? " is-zoomed" : ""}${panning ? " is-panning" : ""}`}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endPan}
-        onPointerCancel={endPan}
+        className={`stage-frame rounded-lg bg-black${frameClass}`}
+        {...frameHandlers}
       >
         <video
           ref={videoRef}
@@ -349,18 +221,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
             )}
           </div>
         )}
-        <div
-          className="stage-zoom"
-          onPointerDown={(event) => event.stopPropagation()}
-          onWheel={(event) => event.stopPropagation()}
-        >
-          <ZoomStepper
-            canZoomOut={zoom > MIN_STAGE_ZOOM}
-            canZoomIn={zoom < MAX_STAGE_ZOOM}
-            onZoomOut={() => stepZoom(-1)}
-            onZoomIn={() => stepZoom(1)}
-          />
-        </div>
+        <StageZoomControl zoom={zoom} onStep={stepZoom} />
         {showTracks && trackHits.length > 0 && (
           <svg
             className="pointer-events-none absolute"

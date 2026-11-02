@@ -266,6 +266,26 @@ describe("recovery page", () => {
     expect(useInspector.getState().time).toBe(1);
   });
 
+  it("zooms the frame and boxes together, and Shift-drag pans instead of drawing", () => {
+    const { container, overlay } = show();
+    const frame = overlay.parentElement as HTMLElement;
+    frame.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100, right: 200, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
+    const video = container.querySelector("video") as HTMLVideoElement;
+    expect(screen.getByRole("button", { name: "Zoom out" })).toHaveProperty("disabled", true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(video.style.transform).toContain("scale(1.5)");
+    expect(overlay.style.width).toBe("1.5px");
+    expect(screen.getByRole("button", { name: "Zoom out" })).toHaveProperty("disabled", false);
+
+    fireEvent.pointerDown(overlay, { clientX: 100, clientY: 50, pointerId: 1, shiftKey: true });
+    fireEvent.pointerMove(frame, { clientX: 120, clientY: 50, pointerId: 1 });
+    fireEvent.pointerUp(frame, { clientX: 120, clientY: 50, pointerId: 1 });
+    expect(video.style.transform).toContain("translate(20px, 0px)");
+    expect(screen.queryByTestId("drawn-seed")).toBeNull();
+  });
+
   it("makes a seed from one click on a box", () => {
     const { overlay } = show();
     press(overlay, 15, 15);

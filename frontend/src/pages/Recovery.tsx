@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { PreviewNav } from "../components/AssetPreview";
 import { Bone, FieldBone } from "../components/Skeleton";
+import { StageZoomControl, useStageZoom } from "../components/StageZoom";
 import { api, formatTime, formatWhen } from "../lib/api";
 import { useOptionalBundle } from "../lib/bundleContext";
 import { humanize } from "../lib/humanize";
@@ -277,7 +278,7 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
             ))}
           </div>
           <p className="text-xs text-[var(--muted)]">
-            Click a box on the frame to use it as a seed, or choose an object and drag to draw one. Add as many as you need, then send them together.
+            Click a box on the frame to use it as a seed, or choose an object and drag to draw one. Add as many as you need, then send them together. Scroll or use − / + to zoom, and Shift-drag to pan.
           </p>
           {hint && <p className="text-xs text-[var(--amber)]" role="status">{hint}</p>}
           <RecoveryStage bundle={bundle} boxes={boxes} drafts={drafts} objectId={objectId} time={time} pointTool={pointTool} onPicture={onPicture} onStep={step} />
@@ -439,6 +440,7 @@ function RecoveryStage({
   // The overlay draws in on-screen pixels, so strokes and labels keep their size on a 4K source.
   const [size, setSize] = useState({ x: 0, y: 0, w: 1, h: 1, vw: 1 });
   const [drag, setDrag] = useState<{ x: number; y: number; ex: number; ey: number } | null>(null);
+  const { zoom, pan, panning, stepZoom, frameClass, frameHandlers, frameTransform } = useStageZoom(frameRef, size);
   useEffect(() => {
     const frame = frameRef.current;
     const video = videoRef.current;
@@ -482,14 +484,26 @@ function RecoveryStage({
   const shown = drafts.filter((item) => Math.abs(item.timestamp - time) <= NEAR_SEC);
   // Inspect's label size on this video, with a floor so it stays readable on a high-resolution source.
   const labelSize = Math.max(INSPECT_LABEL_SIZE * (size.w / size.vw), MIN_LABEL_SIZE);
+  // Sized rather than scaled with the video, so a zoomed frame keeps thin strokes for precise seeds.
+  const drawn = { w: size.w * zoom, h: size.h * zoom };
   return (
-    <div ref={frameRef} className="stage-frame rounded-lg bg-black">
-      <video ref={videoRef} src={bundle.video?.playback_url ?? ""} muted preload="auto" />
+    <div ref={frameRef} className={`stage-frame rounded-lg bg-black${frameClass}`} {...frameHandlers}>
+      <video ref={videoRef} src={bundle.video?.playback_url ?? ""} muted preload="auto" style={frameTransform} />
       <div
         className="absolute"
         data-testid="recovery-overlay"
-        style={{ left: size.x, top: size.y, width: size.w, height: size.h, cursor: "crosshair", touchAction: "none" }}
+        style={{
+          left: size.x + (size.w - drawn.w) / 2 + pan.x,
+          top: size.y + (size.h - drawn.h) / 2 + pan.y,
+          width: drawn.w,
+          height: drawn.h,
+          cursor: panning ? "grabbing" : "crosshair",
+          touchAction: "none",
+        }}
         onPointerDown={(event) => {
+          // Shift-drag falls through to the frame, which pans.
+          if (event.shiftKey) return;
+          event.stopPropagation();
           const at = normalized(event);
           event.currentTarget.setPointerCapture?.(event.pointerId);
           setDrag({ x: at.x, y: at.y, ex: at.x, ey: at.y });
@@ -504,20 +518,20 @@ function RecoveryStage({
           setDrag(null);
         }}
       >
-        <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${size.w} ${size.h}`}>
+        <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${drawn.w} ${drawn.h}`}>
           {boxes.map((box) => (
             <g key={box.key} data-layer={box.layer}>
               <rect
-                x={box.bbox.x * size.w}
-                y={box.bbox.y * size.h}
-                width={box.bbox.w * size.w}
-                height={box.bbox.h * size.h}
+                x={box.bbox.x * drawn.w}
+                y={box.bbox.y * drawn.h}
+                width={box.bbox.w * drawn.w}
+                height={box.bbox.h * drawn.h}
                 fill={box.objectId === objectId ? "#ffffff14" : "none"}
                 stroke={color(box.layer)}
                 strokeWidth={box.objectId === objectId ? 3 : 1.5}
                 strokeDasharray={box.dashed ? "6 4" : undefined}
               />
-              <text x={box.bbox.x * size.w} y={Math.max(13, box.bbox.y * size.h - 4)} fill={color(box.layer)} fontSize={labelSize} fontFamily="IBM Plex Sans, sans-serif">
+              <text x={box.bbox.x * drawn.w} y={Math.max(13, box.bbox.y * drawn.h - 4)} fill={color(box.layer)} fontSize={labelSize} fontFamily="IBM Plex Sans, sans-serif">
                 {humanize(box.objectId)}
               </text>
             </g>
@@ -526,18 +540,19 @@ function RecoveryStage({
             <g key={seed.id}>
               {seed.bbox && (
                 <>
-                  <rect data-testid="drawn-seed" x={seed.bbox.x * size.w} y={seed.bbox.y * size.h} width={seed.bbox.w * size.w} height={seed.bbox.h * size.h} fill="#ffffff22" stroke="#fff" strokeWidth={3} />
-                  <text x={seed.bbox.x * size.w} y={(seed.bbox.y + seed.bbox.h) * size.h + 15} fill="#fff" fontSize={labelSize} fontFamily="IBM Plex Sans, sans-serif">Seed · {humanize(seed.objectId)}</text>
+                  <rect data-testid="drawn-seed" x={seed.bbox.x * drawn.w} y={seed.bbox.y * drawn.h} width={seed.bbox.w * drawn.w} height={seed.bbox.h * drawn.h} fill="#ffffff22" stroke="#fff" strokeWidth={3} />
+                  <text x={seed.bbox.x * drawn.w} y={(seed.bbox.y + seed.bbox.h) * drawn.h + 15} fill="#fff" fontSize={labelSize} fontFamily="IBM Plex Sans, sans-serif">Seed · {humanize(seed.objectId)}</text>
                 </>
               )}
               {seed.points.map((point, index) => (
-                <circle key={index} cx={point.x * size.w} cy={point.y * size.h} r={5} fill={point.negative ? "#e07070" : "#7dcea0"} stroke="#000" />
+                <circle key={index} cx={point.x * drawn.w} cy={point.y * drawn.h} r={5} fill={point.negative ? "#e07070" : "#7dcea0"} stroke="#000" />
               ))}
             </g>
           ))}
-          {preview && <rect x={preview.x * size.w} y={preview.y * size.h} width={preview.w * size.w} height={preview.h * size.h} fill="#ffffff22" stroke="#fff" strokeWidth={2} />}
+          {preview && <rect x={preview.x * drawn.w} y={preview.y * drawn.h} width={preview.w * drawn.w} height={preview.h * drawn.h} fill="#ffffff22" stroke="#fff" strokeWidth={2} />}
         </svg>
       </div>
+      <StageZoomControl zoom={zoom} onStep={stepZoom} />
       <PreviewNav direction="prev" label="Previous frame" onClick={() => onStep(-1)} />
       <PreviewNav direction="next" label="Next frame" onClick={() => onStep(1)} />
     </div>
