@@ -29,10 +29,12 @@ def synthetic_text(spec: dict) -> str:
     }.get(spec["direction"], range(count))
     for frame in frames:
         tokens = []
-        for item in spec["objects"]:
+        seen: set[int] = set()
+        for item in sorted(spec["objects"], key=lambda entry: abs(entry["seed_frame_index"] - frame)):
             box = item["seed"].get("bbox")
-            if not box:
+            if not box or item["sam_object_id"] in seen:
                 continue
+            seen.add(item["sam_object_id"])
             mark = box_mark(box, frame, item["sam_object_id"], width, height)
             tokens.append(
                 f"{mark.object_id}<|box;x1={mark.x1};y1={mark.y1};x2={mark.x2};y2={mark.y2};w={width};h={height};c=0.5|>"

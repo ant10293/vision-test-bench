@@ -1,33 +1,40 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { PreviewNav } from "../components/AssetPreview";
-import { Timeline } from "../components/Timeline";
 import { api, formatTime } from "../lib/api";
 import { useOptionalBundle } from "../lib/bundleContext";
 import { humanize } from "../lib/humanize";
 import {
-  canApproveLive,
+  boxAt,
   dragBox,
+  LANE_COLORS,
+  laneSpans,
   LAYERS,
   layerBoxes,
+  manualTargets,
   nextStep,
+  placeSeed,
   stepTimes,
+  trackRange,
   usage,
   type RecoveryExperiment,
   type RecoveryLayer,
-  type RecoveryPlan,
   type RecoveryProposal,
-  type RecoverySeed,
   type RecoveryTarget,
-  type SeedPoint,
+  type SeedDraft,
+  type TrackDirection,
 } from "../lib/recovery";
 import type { BBox, Bundle } from "../lib/types";
 import { useInspector } from "../stores/ui";
 
-type Tool = "none" | "box" | "positive" | "negative";
+type PointTool = "none" | "positive" | "negative";
 
-const ALL_LAYERS: Record<RecoveryLayer, boolean> = { vlm: true, tracker: false, sam: false, recovered: true, canonical: false };
+const START_LAYERS: Record<RecoveryLayer, boolean> = { vlm: true, tracker: false, sam: false, recovered: true, canonical: true };
 const RUNNING_POLL_MS = 1500;
+const NEAR_SEC = 0.45;
+const INSPECT_LABEL_SIZE = 14;
+const MIN_LABEL_SIZE = 10;
 
 export function RecoveryPage() {
   const bundle = useOptionalBundle();
@@ -40,106 +47,40 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
   const client = useQueryClient();
   const time = useInspector((state) => state.time);
   const seek = useInspector((state) => state.setTime);
-  const [layers, setLayers] = useState(ALL_LAYERS);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [experimentId, setExperimentId] = useState("");
-  const [error, setError] = useState("");
-  const [tool, setTool] = useState<Tool>("none");
   const [objectId, setObjectId] = useState("");
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
-  const [direction, setDirection] = useState("auto");
-  const [drawnBox, setDrawnBox] = useState<BBox | null>(null);
-  const [points, setPoints] = useState<SeedPoint[]>([]);
-  const [seedTime, setSeedTime] = useState<number | null>(null);
-  const [existingSeed, setExistingSeed] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
-  const [approved, setApproved] = useState(false);
+  const [drafts, setDrafts] = useState<SeedDraft[]>([]);
+  const [seconds, setSeconds] = useState(2);
+  const [direction, setDirection] = useState<TrackDirection>("forward");
+  const [pointTool, setPointTool] = useState<PointTool>("none");
+  const [layers, setLayers] = useState(START_LAYERS);
+  const [experimentId, setExperimentId] = useState("");
+  const [plannedKey, setPlannedKey] = useState("");
+  const [error, setError] = useState("");
+  const [hint, setHint] = useState("");
   const [provisional, setProvisional] = useState(false);
-  const [maxRequests, setMaxRequests] = useState("2");
+  const [maxRequests, setMaxRequests] = useState("4");
   const [maxFrames, setMaxFrames] = useState("300");
   const [maxBilled, setMaxBilled] = useState("600");
-  const [padding, setPadding] = useState("1");
   const [budget, setBudget] = useState("1");
   const candidates = useQuery({ queryKey: ["recovery-candidates", runId], queryFn: () => api.recoveryCandidates(runId) });
+  const history = useQuery({ queryKey: ["recovery-experiments", runId], queryFn: () => api.recoveryExperiments(runId) });
   const experiment = useQuery({
     queryKey: ["recovery-experiment", experimentId],
     queryFn: () => api.recoveryExperiment(experimentId),
     enabled: Boolean(experimentId),
     refetchInterval: (query) => (query.state.data?.status === "running" ? RUNNING_POLL_MS : false),
   });
-  const history = useQuery({ queryKey: ["recovery-experiments", runId], queryFn: () => api.recoveryExperiments(runId) });
   const data = experiment.data ?? null;
   const proposals = useMemo(() => (data?.proposals ?? []).filter((item) => item.current), [data]);
-
-  function publish(result: RecoveryExperiment) {
-    client.setQueryData(["recovery-experiment", result.id], result);
-    setExperimentId(result.id);
-    void client.invalidateQueries({ queryKey: ["recovery-experiments", runId] });
-  }
-
-  const act = useMutation({
-    mutationFn: (work: () => Promise<RecoveryExperiment>) => work(),
-    onMutate: () => setError(""),
-    onSuccess: (result) => {
-      publish(result);
-      setApproved(false);
-      void client.invalidateQueries({ queryKey: ["run", runId] });
-      void client.invalidateQueries({ queryKey: ["recovery-candidates", runId] });
-    },
-    onError: (err: Error) => setError(err.message),
-  });
-
-  function limits() {
-    return {
-      max_requests: Number(maxRequests),
-      max_frames_per_request: Number(maxFrames),
-      max_total_billed_frames: Number(maxBilled),
-      padding_sec: Number(padding),
-      cost_budget_usd: Number(budget),
-    };
-  }
-
-  function manualTarget() {
-    const seed = drawnBox || points.length
-      ? { timestamp: seedTime ?? time, bbox: drawnBox, points }
-      : undefined;
-    return {
-      object_local_id: objectId,
-      time_start: Number(start),
-      time_end: Number(end),
-      direction,
-      ...(seed ? { seed } : {}),
-      ...(existingSeed && !seed ? { seed_id: existingSeed, confirm_seed: confirmed } : {}),
-    };
-  }
-
-  const manualReady = Boolean(objectId && start !== "" && end !== "" && Number(end) >= Number(start));
-
-  function createAndPlan() {
-    act.mutate(async () => {
-      const created = await api.createRecovery(runId, {
-        target_ids: [...selected],
-        manual_targets: manualReady ? [manualTarget()] : [],
-        limits: limits(),
-      });
-      return api.recoveryDryRun(created.id);
-    });
-  }
-
-  function onCanvasEvent(box: BBox | null, point: SeedPoint | null) {
-    setSeedTime(time);
-    setExistingSeed("");
-    if (box) setDrawnBox(box);
-    if (point) setPoints((current) => [...current, point]);
-  }
-
-  const objectSeeds = (candidates.data?.seeds ?? []).filter((item) => item.object_local_id === objectId);
+  const targets = candidates.data?.targets ?? [];
+  const objectIds = useMemo(() => new Set(bundle.objects.map((item) => item.local_id)), [bundle.objects]);
+  const draftsKey = JSON.stringify([drafts, maxRequests, maxFrames, maxBilled, budget]);
+  const plan = data?.plan && plannedKey === draftsKey ? data.plan : null;
   const boxes = layerBoxes(bundle, proposals, time, layers);
   const steps = useMemo(() => stepTimes(bundle, proposals), [bundle, proposals]);
 
-  function step(direction: 1 | -1) {
-    const next = nextStep(steps, useInspector.getState().time, direction);
+  function step(delta: 1 | -1) {
+    const next = nextStep(steps, useInspector.getState().time, delta);
     if (next != null) seek(next);
   }
 
@@ -154,113 +95,204 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  function publish(result: RecoveryExperiment) {
+    client.setQueryData(["recovery-experiment", result.id], result);
+    setExperimentId(result.id);
+    void client.invalidateQueries({ queryKey: ["recovery-experiments", runId] });
+  }
+
+  const act = useMutation({
+    mutationFn: (work: () => Promise<RecoveryExperiment>) => work(),
+    onMutate: () => setError(""),
+    onSuccess: publish,
+    onError: (err: Error) => setError(err.message),
+  });
+
+  function addSeed(target: string, at: number, bbox: BBox | null, origin: string) {
+    const range = trackRange(at, seconds, direction);
+    setDrafts((current) => placeSeed(current, { objectId: target, timestamp: at, bbox, points: [], ...range, direction, origin }));
+    setObjectId(target);
+    setHint("");
+  }
+
+  function addPoint(x: number, y: number) {
+    if (!objectId) {
+      setHint("Choose an object above first.");
+      return;
+    }
+    const negative = pointTool === "negative";
+    const existing = drafts.find((item) => item.objectId === objectId && Math.abs(item.timestamp - time) <= 0.05);
+    if (existing) {
+      setDrafts((current) => current.map((item) => item.id === existing.id ? { ...item, points: [...item.points, { x, y, negative }] } : item));
+    } else if (negative) {
+      setHint("Add a box or a positive point first.");
+    } else {
+      const range = trackRange(time, seconds, direction);
+      setDrafts((current) => placeSeed(current, { objectId, timestamp: time, bbox: null, points: [{ x, y }], ...range, direction, origin: "points" }));
+    }
+  }
+
+  function onPicture(box: BBox | null, x: number, y: number) {
+    if (pointTool !== "none") {
+      addPoint(x, y);
+    } else if (box) {
+      if (objectId) addSeed(objectId, time, box, "drawn");
+      else setHint("Choose which object you are drawing, then drag again.");
+    } else {
+      const hit = boxAt(boxes, objectIds, x, y);
+      if (hit) {
+        seek(hit.timestamp);
+        addSeed(hit.objectId, hit.timestamp, hit.bbox, `${LAYERS.find((item) => item.key === hit.layer)?.label ?? "stored"} box`);
+      }
+    }
+  }
+
+  function useSuggested(target: RecoveryTarget) {
+    const seed = target.seeds?.[0];
+    setObjectId(target.object_local_id);
+    seek(seed?.timestamp ?? target.time_start);
+    if (!seed?.bbox) return;
+    setDrafts((current) => placeSeed(current, {
+      objectId: target.object_local_id,
+      timestamp: seed.timestamp,
+      bbox: seed.bbox,
+      points: [],
+      start: target.time_start,
+      end: target.time_end,
+      direction: "auto",
+      origin: `suggested, ${humanize(seed.trust)}`,
+    }));
+  }
+
+  function preview() {
+    const key = draftsKey;
+    act.mutate(async () => {
+      const created = await api.createRecovery(runId, {
+        manual_targets: manualTargets(drafts),
+        limits: {
+          max_requests: Number(maxRequests),
+          max_frames_per_request: Number(maxFrames),
+          max_total_billed_frames: Number(maxBilled),
+          cost_budget_usd: Number(budget),
+          padding_sec: 0,
+        },
+      });
+      const planned = await api.recoveryDryRun(created.id);
+      setPlannedKey(key);
+      return planned;
+    });
+  }
+
+  function decide(decision: "accepted" | "rejected") {
+    const pending = proposals.filter((item) => item.decision === "pending").map((item) => item.id);
+    act.mutate(async () => {
+      const result = await api.decideRecovery(experimentId, { decision, proposal_ids: pending, include_provisional: provisional });
+      if (decision === "accepted") {
+        setDrafts([]);
+        await client.invalidateQueries({ queryKey: ["run", runId] });
+        await client.invalidateQueries({ queryKey: ["recovery-candidates", runId] });
+      }
+      return result;
+    });
+  }
+
   return (
-    <div className="space-y-4" data-testid="recovery-page">
-      <section className="panel space-y-1 p-4 text-sm">
-        <h2 className="text-base">Targeted object recovery</h2>
-        <p className="text-xs text-[var(--muted)]">
-          This works on the saved analysis and never calls the language model or reruns a stage. A dry run and a replay make no provider calls. A live run sends only SAM requests you approve. Nothing changes in the analysis until you accept a proposal, and accepting creates a new revision.
-        </p>
-      </section>
-      <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="min-w-0 space-y-3">
-          <RecoveryStage bundle={bundle} boxes={boxes} tool={tool} time={time} onStep={step} drawnBox={drawnBox} points={points} onDraw={onCanvasEvent} />
-          <Timeline bundle={bundle} />
-          <LayerToggles layers={layers} onChange={setLayers} />
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="mono text-[var(--muted)]">{time.toFixed(3)}s</span>
-            <span className="text-xs text-[var(--muted)]">Arrows step between frames</span>
-            {(["box", "positive", "negative"] as const).map((item) => (
-              <button key={item} className="btn" aria-pressed={tool === item} onClick={() => setTool(tool === item ? "none" : item)}>
-                {item === "box" ? "Draw seed box" : item === "positive" ? "Add positive point" : "Add negative point"}
+    <div className="space-y-3" data-testid="recovery-page">
+      <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_400px]">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Object to seed">
+            {bundle.objects.map((object) => (
+              <button
+                key={object.local_id}
+                className="btn"
+                aria-pressed={objectId === object.local_id}
+                title={object.label}
+                style={objectId === object.local_id ? { borderColor: object.color, color: object.color } : undefined}
+                onClick={() => setObjectId(objectId === object.local_id ? "" : object.local_id)}
+              >
+                {humanize(object.local_id)}
               </button>
             ))}
-            <button className="btn" disabled={!drawnBox && !points.length} onClick={() => { setDrawnBox(null); setPoints([]); setSeedTime(null); }}>Clear seed</button>
           </div>
-          <BoxInspector boxes={boxes} />
-          <ResultsPanel data={data} provisional={provisional} onProvisional={setProvisional} onSeek={seek} onDecide={(id, decision) => act.mutate(() => api.decideRecovery(experimentId, { decision, proposal_ids: [id], include_provisional: provisional }))} />
+          <p className="text-xs text-[var(--muted)]">
+            Click a box on the frame to use it as a seed, or choose an object and drag to draw one. Add as many as you need, then send them together.
+          </p>
+          {hint && <p className="text-xs text-[var(--amber)]" role="status">{hint}</p>}
+          <RecoveryStage bundle={bundle} boxes={boxes} drafts={drafts} objectId={objectId} time={time} pointTool={pointTool} onPicture={onPicture} onStep={step} />
+          <div className="flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Box layers">
+            <span className="mono text-[var(--muted)]">{time.toFixed(2)}s</span>
+            {LAYERS.map((layer) => (
+              <button
+                key={layer.key}
+                className="btn"
+                aria-pressed={layers[layer.key]}
+                style={layers[layer.key] ? { borderColor: layer.color, color: layer.color } : undefined}
+                onClick={() => setLayers({ ...layers, [layer.key]: !layers[layer.key] })}
+              >
+                {layer.label}
+              </button>
+            ))}
+            <button className="btn" aria-pressed={pointTool === "positive"} onClick={() => setPointTool(pointTool === "positive" ? "none" : "positive")}>+ point</button>
+            <button className="btn" aria-pressed={pointTool === "negative"} onClick={() => setPointTool(pointTool === "negative" ? "none" : "negative")}>− point</button>
+          </div>
+          <ObjectLanes bundle={bundle} targets={targets} proposals={proposals} drafts={drafts} time={time} objectId={objectId} onSeek={seek} onObject={setObjectId} />
+          <details className="panel p-3 text-xs">
+            <summary className="cursor-pointer text-sm">What is at this frame</summary>
+            <div className="mt-2 h-40 space-y-1 overflow-auto" data-testid="box-inspector">
+              {boxes.length === 0 ? (
+                <p className="text-[var(--muted)]">No selected layer has a box near this frame. A missing box is unobserved, not absence.</p>
+              ) : (
+                <ul className="space-y-1">
+                  {boxes.map((box) => (
+                    <li key={box.key}>
+                      <span className="font-medium">{LAYERS.find((item) => item.key === box.layer)?.label}</span> · {humanize(box.objectId)} · {formatTime(box.timestamp)} · {box.details.join(" · ")}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </details>
         </div>
         <div className="min-w-0 space-y-3">
-          <CandidatePanel
-            targets={candidates.data?.targets ?? []}
-            pending={candidates.isPending}
-            selected={selected}
-            onToggle={(id) => setSelected((current) => {
-              const next = new Set(current);
-              if (next.has(id)) next.delete(id); else next.add(id);
-              return next;
-            })}
+          <SeedList
+            drafts={drafts}
+            seconds={seconds}
+            direction={direction}
+            onSeconds={setSeconds}
+            onDirection={setDirection}
             onSeek={seek}
+            onChange={setDrafts}
           />
-          <section className="panel space-y-2 p-4 text-sm">
-            <h3 className="text-sm">Manual target</h3>
-            <label className="field-label"><span>Object</span>
-              <select className="field" value={objectId} onChange={(event) => { setObjectId(event.target.value); setExistingSeed(""); }}>
-                <option value="">Choose an object</option>
-                {candidates.data?.objects.map((item) => <option key={item.local_id} value={item.local_id}>{humanize(item.local_id)} · {item.label}</option>)}
-              </select>
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <label className="field-label"><span>Start (s)</span>
-                <input className="field stretch" value={start} onChange={(event) => setStart(event.target.value)} />
-              </label>
-              <label className="field-label"><span>End (s)</span>
-                <input className="field stretch" value={end} onChange={(event) => setEnd(event.target.value)} />
-              </label>
-            </div>
-            <div className="flex gap-2">
-              <button className="btn" onClick={() => setStart(time.toFixed(3))}>Start at playhead</button>
-              <button className="btn" onClick={() => setEnd(time.toFixed(3))}>End at playhead</button>
-            </div>
-            <label className="field-label"><span>Propagation</span>
-              <select className="field" value={direction} onChange={(event) => setDirection(event.target.value)}>
-                <option value="auto">Automatic, from the seed's position</option>
-                <option value="forward">Forward</option>
-                <option value="backward">Backward</option>
-                <option value="both">Both</option>
-              </select>
-            </label>
-            {objectId && <SeedPicker seeds={objectSeeds} value={existingSeed} onChange={(id) => { setExistingSeed(id); setDrawnBox(null); setPoints([]); setConfirmed(false); }} onSeek={seek} confirmed={confirmed} onConfirmed={setConfirmed} />}
-            {(drawnBox || points.length > 0) && (
-              <p className="text-xs text-[var(--muted)]">Seed drawn on the frame at {(seedTime ?? time).toFixed(3)}s{drawnBox ? " with a box" : ""}{points.length ? ` and ${points.length} ${points.length === 1 ? "point" : "points"}` : ""}. Your drawn seed overrides automatic selection.</p>
-            )}
-          </section>
-          <section className="panel space-y-2 p-4 text-sm">
-            <h3 className="text-sm">Limits</h3>
-            <div className="grid grid-cols-2 gap-2">
+          <RunPanel
+            drafts={drafts}
+            data={data}
+            plan={plan}
+            pending={act.isPending}
+            error={error}
+            onPreview={preview}
+            onLive={(hash, keys) => act.mutate(() => api.recoveryLive(experimentId, { confirm: true, plan_hash: hash, ...(keys ? { resubmit_keys: keys } : {}) }))}
+            onReplay={() => act.mutate(() => api.recoveryReplay(experimentId))}
+            onCancel={() => act.mutate(() => api.recoveryCancel(experimentId))}
+          />
+          <ResultsPanel data={data} proposals={proposals} provisional={provisional} onProvisional={setProvisional} pending={act.isPending} onDecide={decide} onSeek={seek} />
+          <ProblemList targets={targets} pending={candidates.isPending} onSeek={seek} onObject={setObjectId} onSuggested={useSuggested} />
+          <details className="panel p-3 text-sm">
+            <summary className="cursor-pointer">Limits and earlier runs</summary>
+            <div className="mt-2 grid grid-cols-2 gap-2">
               <Limit label="Provider requests" value={maxRequests} onChange={setMaxRequests} />
               <Limit label="Frames per request" value={maxFrames} onChange={setMaxFrames} />
               <Limit label="Total billed frames" value={maxBilled} onChange={setMaxBilled} />
-              <Limit label="Padding (s)" value={padding} onChange={setPadding} />
               <Limit label="Cost budget (USD)" value={budget} onChange={setBudget} />
             </div>
-            <button className="btn primary" disabled={act.isPending || (!selected.size && !manualReady)} onClick={createAndPlan}>
-              Create and dry run
-            </button>
-            <p className="text-xs text-[var(--muted)]">A dry run makes no remote calls. It shows the plan and the estimate.</p>
             {(history.data?.length ?? 0) > 0 && (
-              <label className="field-label"><span>Earlier experiments</span>
-                <select className="field" value={experimentId} onChange={(event) => setExperimentId(event.target.value)}>
-                  <option value="">Choose an experiment</option>
-                  {history.data?.map((item) => <option key={item.id} value={item.id}>{item.id.slice(0, 8)} · {humanize(item.status)} · {item.targets.length} targets</option>)}
+              <label className="field-label mt-2"><span>Earlier runs</span>
+                <select className="field" value={experimentId} onChange={(event) => { setExperimentId(event.target.value); setPlannedKey(""); }}>
+                  <option value="">Choose a run</option>
+                  {history.data?.map((item) => <option key={item.id} value={item.id}>{item.id.slice(0, 8)} · {humanize(item.status)} · {item.targets.length} seeds</option>)}
                 </select>
               </label>
             )}
-          </section>
-          {error && <p className="text-sm text-[var(--rose)]" role="alert">{error}</p>}
-          {data && (
-            <PlanPanel
-              data={data}
-              approved={approved}
-              onApproved={setApproved}
-              pending={act.isPending}
-              onDryRun={() => act.mutate(() => api.recoveryDryRun(data.id))}
-              onReplay={() => act.mutate(() => api.recoveryReplay(data.id))}
-              onLive={(hash) => act.mutate(() => api.recoveryLive(data.id, { confirm: true, plan_hash: hash }))}
-              onResubmit={(hash, keys) => act.mutate(() => api.recoveryLive(data.id, { confirm: true, plan_hash: hash, resubmit_keys: keys }))}
-              onCancel={() => act.mutate(() => api.recoveryCancel(data.id))}
-            />
-          )}
+          </details>
         </div>
       </div>
     </div>
@@ -278,26 +310,26 @@ function Limit({ label, value, onChange }: { label: string; value: string; onCha
 function RecoveryStage({
   bundle,
   boxes,
-  tool,
+  drafts,
+  objectId,
   time,
+  pointTool,
+  onPicture,
   onStep,
-  drawnBox,
-  points,
-  onDraw,
 }: {
   bundle: Bundle;
   boxes: ReturnType<typeof layerBoxes>;
-  tool: Tool;
+  drafts: SeedDraft[];
+  objectId: string;
   time: number;
-  onStep: (direction: 1 | -1) => void;
-  drawnBox: BBox | null;
-  points: SeedPoint[];
-  onDraw: (box: BBox | null, point: SeedPoint | null) => void;
+  pointTool: PointTool;
+  onPicture: (box: BBox | null, x: number, y: number) => void;
+  onStep: (delta: 1 | -1) => void;
 }) {
   const frameRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   // The overlay draws in on-screen pixels, so strokes and labels keep their size on a 4K source.
-  const [size, setSize] = useState({ x: 0, y: 0, w: 1, h: 1 });
+  const [size, setSize] = useState({ x: 0, y: 0, w: 1, h: 1, vw: 1 });
   const [drag, setDrag] = useState<{ x: number; y: number; ex: number; ey: number } | null>(null);
   useEffect(() => {
     const frame = frameRef.current;
@@ -309,7 +341,7 @@ function RecoveryStage({
       const scale = Math.min(rect.width / video.videoWidth, rect.height / video.videoHeight);
       const w = video.videoWidth * scale;
       const h = video.videoHeight * scale;
-      setSize({ x: (rect.width - w) / 2, y: (rect.height - h) / 2, w, h });
+      setSize({ x: (rect.width - w) / 2, y: (rect.height - h) / 2, w, h, vw: video.videoWidth });
     };
     apply();
     const observer = new ResizeObserver(apply);
@@ -338,100 +370,216 @@ function RecoveryStage({
   }
 
   const preview = drag ? dragBox(drag.x, drag.y, drag.ex, drag.ey) : null;
-  const shown = preview ?? drawnBox;
   const color = (layer: RecoveryLayer) => LAYERS.find((item) => item.key === layer)?.color ?? "#fff";
+  const shown = drafts.filter((item) => Math.abs(item.timestamp - time) <= NEAR_SEC);
+  // Inspect's label size on this video, with a floor so it stays readable on a high-resolution source.
+  const labelSize = Math.max(INSPECT_LABEL_SIZE * (size.w / size.vw), MIN_LABEL_SIZE);
   return (
-    <div>
-      <div ref={frameRef} className="stage-frame rounded-lg bg-black">
-        <video ref={videoRef} src={bundle.video?.playback_url ?? ""} muted preload="auto" />
-        <div
-          className="absolute"
-          data-testid="recovery-overlay"
-          style={{ left: size.x, top: size.y, width: size.w, height: size.h, pointerEvents: tool === "none" ? "none" : "auto", cursor: tool === "none" ? "default" : "crosshair", touchAction: "none" }}
-          onPointerDown={(event) => {
-            const at = normalized(event);
-            if (tool === "box") {
-              event.currentTarget.setPointerCapture(event.pointerId);
-              setDrag({ x: at.x, y: at.y, ex: at.x, ey: at.y });
-            } else if (tool === "positive" || tool === "negative") {
-              onDraw(null, { x: at.x, y: at.y, negative: tool === "negative" });
-            }
-          }}
-          onPointerMove={(event) => {
-            if (!drag) return;
-            const at = normalized(event);
-            setDrag({ ...drag, ex: at.x, ey: at.y });
-          }}
-          onPointerUp={() => {
-            if (preview) onDraw(preview, null);
-            setDrag(null);
-          }}
-        >
-          <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${size.w} ${size.h}`}>
-            {boxes.map((box) => (
-              <g key={box.key} data-layer={box.layer}>
-                <rect
-                  x={box.bbox.x * size.w}
-                  y={box.bbox.y * size.h}
-                  width={box.bbox.w * size.w}
-                  height={box.bbox.h * size.h}
-                  fill="none"
-                  stroke={color(box.layer)}
-                  strokeWidth={2}
-                  strokeDasharray={box.dashed ? "6 4" : undefined}
-                />
-                <text x={box.bbox.x * size.w} y={Math.max(13, box.bbox.y * size.h - 4)} fill={color(box.layer)} fontSize={13} fontFamily="IBM Plex Sans, sans-serif">
-                  {humanize(box.objectId)}
-                </text>
-              </g>
-            ))}
-            {shown && (
-              <rect data-testid="drawn-seed" x={shown.x * size.w} y={shown.y * size.h} width={shown.w * size.w} height={shown.h * size.h} fill="#ffffff22" stroke="#fff" strokeWidth={2} />
-            )}
-            {points.map((point, index) => (
-              <circle key={index} cx={point.x * size.w} cy={point.y * size.h} r={5} fill={point.negative ? "#e07070" : "#7dcea0"} stroke="#000" />
-            ))}
-          </svg>
-        </div>
-        <PreviewNav direction="prev" label="Previous frame" onClick={() => onStep(-1)} />
-        <PreviewNav direction="next" label="Next frame" onClick={() => onStep(1)} />
+    <div ref={frameRef} className="stage-frame rounded-lg bg-black">
+      <video ref={videoRef} src={bundle.video?.playback_url ?? ""} muted preload="auto" />
+      <div
+        className="absolute"
+        data-testid="recovery-overlay"
+        style={{ left: size.x, top: size.y, width: size.w, height: size.h, cursor: "crosshair", touchAction: "none" }}
+        onPointerDown={(event) => {
+          const at = normalized(event);
+          event.currentTarget.setPointerCapture?.(event.pointerId);
+          setDrag({ x: at.x, y: at.y, ex: at.x, ey: at.y });
+        }}
+        onPointerMove={(event) => {
+          if (!drag) return;
+          const at = normalized(event);
+          setDrag({ ...drag, ex: at.x, ey: at.y });
+        }}
+        onPointerUp={() => {
+          if (drag) onPicture(pointTool === "none" ? preview : null, drag.x, drag.y);
+          setDrag(null);
+        }}
+      >
+        <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${size.w} ${size.h}`}>
+          {boxes.map((box) => (
+            <g key={box.key} data-layer={box.layer}>
+              <rect
+                x={box.bbox.x * size.w}
+                y={box.bbox.y * size.h}
+                width={box.bbox.w * size.w}
+                height={box.bbox.h * size.h}
+                fill={box.objectId === objectId ? "#ffffff14" : "none"}
+                stroke={color(box.layer)}
+                strokeWidth={box.objectId === objectId ? 3 : 1.5}
+                strokeDasharray={box.dashed ? "6 4" : undefined}
+              />
+              <text x={box.bbox.x * size.w} y={Math.max(13, box.bbox.y * size.h - 4)} fill={color(box.layer)} fontSize={labelSize} fontFamily="IBM Plex Sans, sans-serif">
+                {humanize(box.objectId)}
+              </text>
+            </g>
+          ))}
+          {shown.map((seed) => (
+            <g key={seed.id}>
+              {seed.bbox && (
+                <>
+                  <rect data-testid="drawn-seed" x={seed.bbox.x * size.w} y={seed.bbox.y * size.h} width={seed.bbox.w * size.w} height={seed.bbox.h * size.h} fill="#ffffff22" stroke="#fff" strokeWidth={3} />
+                  <text x={seed.bbox.x * size.w} y={(seed.bbox.y + seed.bbox.h) * size.h + 15} fill="#fff" fontSize={labelSize} fontFamily="IBM Plex Sans, sans-serif">Seed · {humanize(seed.objectId)}</text>
+                </>
+              )}
+              {seed.points.map((point, index) => (
+                <circle key={index} cx={point.x * size.w} cy={point.y * size.h} r={5} fill={point.negative ? "#e07070" : "#7dcea0"} stroke="#000" />
+              ))}
+            </g>
+          ))}
+          {preview && <rect x={preview.x * size.w} y={preview.y * size.h} width={preview.w * size.w} height={preview.h * size.h} fill="#ffffff22" stroke="#fff" strokeWidth={2} />}
+        </svg>
       </div>
-      <span className="sr-only">Playhead at {time.toFixed(3)} seconds</span>
+      <PreviewNav direction="prev" label="Previous frame" onClick={() => onStep(-1)} />
+      <PreviewNav direction="next" label="Next frame" onClick={() => onStep(1)} />
     </div>
   );
 }
 
-function LayerToggles({ layers, onChange }: { layers: Record<RecoveryLayer, boolean>; onChange: (layers: Record<RecoveryLayer, boolean>) => void }) {
+function ObjectLanes({
+  bundle,
+  targets,
+  proposals,
+  drafts,
+  time,
+  objectId,
+  onSeek,
+  onObject,
+}: {
+  bundle: Bundle;
+  targets: RecoveryTarget[];
+  proposals: RecoveryProposal[];
+  drafts: SeedDraft[];
+  time: number;
+  objectId: string;
+  onSeek: (time: number) => void;
+  onObject: (id: string) => void;
+}) {
+  const duration = Math.max(bundle.video?.duration_sec ?? 1, 0.1);
+  const percent = (value: number) => `${Math.min(Math.max(value / duration, 0), 1) * 100}%`;
   return (
-    <div className="flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Box layers">
-      {LAYERS.map((layer) => (
-        <button
-          key={layer.key}
-          className="btn"
-          aria-pressed={layers[layer.key]}
-          style={layers[layer.key] ? { borderColor: layer.color, color: layer.color } : undefined}
-          onClick={() => onChange({ ...layers, [layer.key]: !layers[layer.key] })}
-        >
-          {layers[layer.key] ? "● " : "○ "}{layer.label}
-        </button>
+    <div className="panel space-y-1 p-3" data-testid="object-lanes">
+      <div className="grid grid-cols-[110px_1fr] items-center gap-2">
+        <span aria-hidden="true" />
+        <input
+          aria-label="Seek"
+          className="seek"
+          type="range"
+          min={0}
+          max={duration}
+          step={0.01}
+          value={Math.min(time, duration)}
+          onChange={(event) => onSeek(Number(event.target.value))}
+        />
+      </div>
+      {bundle.objects.map((object) => (
+        <div key={object.local_id} className="grid grid-cols-[110px_1fr] items-center gap-2">
+          <button
+            className={`truncate text-left text-xs ${objectId === object.local_id ? "font-medium" : "text-[var(--muted)]"}`}
+            style={objectId === object.local_id ? { color: object.color } : undefined}
+            title={object.label}
+            onClick={() => onObject(object.local_id)}
+          >
+            {humanize(object.local_id)}
+          </button>
+          <div
+            className="relative h-5 cursor-pointer overflow-hidden rounded bg-[#0d1016]"
+            data-testid={`lane-${object.local_id}`}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              onObject(object.local_id);
+              onSeek(((event.clientX - rect.left) / rect.width) * duration);
+            }}
+          >
+            {laneSpans(bundle, object.local_id, targets, proposals).map((span, index) => {
+              const problem = span.kind === "problem";
+              return (
+                <div
+                  key={index}
+                  data-kind={span.kind}
+                  className="absolute rounded-sm"
+                  title={`${humanize(span.kind)} · ${formatTime(span.start)}–${formatTime(span.end)}`}
+                  style={{
+                    left: percent(span.start),
+                    width: `max(2px, ${(span.end - span.start) / duration * 100}%)`,
+                    top: problem ? 0 : span.kind === "stored" ? 7 : 3,
+                    bottom: problem ? 0 : span.kind === "stored" ? 7 : 3,
+                    background: problem ? "#b7791f55" : LANE_COLORS[span.kind],
+                  }}
+                />
+              );
+            })}
+            {drafts.filter((item) => item.objectId === object.local_id).map((item) => (
+              <div key={item.id} data-kind="seed" className="pointer-events-none absolute inset-y-0 w-[3px] bg-white" style={{ left: percent(item.timestamp) }} />
+            ))}
+            <div className="pointer-events-none absolute inset-y-0 w-px bg-[var(--teal)]" style={{ left: percent(time) }} />
+          </div>
+        </div>
       ))}
-      <span className="text-xs text-[var(--muted)]">Dashed boxes are estimates, conflicts, or unconfirmed rows, not direct observations.</span>
+      <div className="flex flex-wrap gap-3 pt-1 text-[11px] text-[var(--muted)]">
+        <Legend color="#465066" label="Stored boxes" />
+        <Legend color="#b7791f" label="Problem" />
+        <Legend color="#ffffff" label="Your seed" />
+        <Legend color={LANE_COLORS.supported} label="Supported" />
+        <Legend color={LANE_COLORS.provisional} label="Provisional" />
+        <Legend color={LANE_COLORS.conflicting} label="Conflicting" />
+      </div>
     </div>
   );
 }
 
-/** Fixed height: this list changes with the playhead, and a page that resized here would move the scroll position. */
-function BoxInspector({ boxes }: { boxes: ReturnType<typeof layerBoxes> }) {
+function Legend({ color, label }: { color: string; label: string }) {
+  return <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: color }} />{label}</span>;
+}
+
+function SeedList({
+  drafts,
+  seconds,
+  direction,
+  onSeconds,
+  onDirection,
+  onSeek,
+  onChange,
+}: {
+  drafts: SeedDraft[];
+  seconds: number;
+  direction: TrackDirection;
+  onSeconds: (value: number) => void;
+  onDirection: (value: TrackDirection) => void;
+  onSeek: (time: number) => void;
+  onChange: (drafts: SeedDraft[]) => void;
+}) {
   return (
-    <section className="panel h-40 space-y-1 overflow-auto p-3 text-xs" data-testid="box-inspector">
-      <h3 className="text-sm">Boxes near the playhead</h3>
-      {boxes.length === 0 ? (
-        <p className="text-[var(--muted)]">No selected layer has a box near the playhead. A missing box is unobserved, not absence.</p>
+    <section className="panel space-y-2 p-4 text-sm" data-testid="seed-list">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-base">Seeds ({drafts.length})</h2>
+        {drafts.length > 0 && <button className="btn" onClick={() => onChange([])}>Clear all</button>}
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+        <span>New seeds track</span>
+        <select aria-label="Track direction" className="field w-auto" value={direction} onChange={(event) => onDirection(event.target.value as TrackDirection)}>
+          <option value="forward">forward</option>
+          <option value="backward">backward</option>
+          <option value="both">both ways</option>
+        </select>
+        <span>for</span>
+        <select aria-label="Track seconds" className="field w-auto" value={seconds} onChange={(event) => onSeconds(Number(event.target.value))}>
+          {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}s</option>)}
+        </select>
+      </div>
+      {drafts.length === 0 ? (
+        <p className="text-xs text-[var(--muted)]">No seeds yet. Click a correct box on the frame, or choose an object and drag around it.</p>
       ) : (
         <ul className="space-y-1">
-          {boxes.map((box) => (
-            <li key={box.key}>
-              <span className="font-medium">{LAYERS.find((item) => item.key === box.layer)?.label}</span> · {humanize(box.objectId)} · {formatTime(box.timestamp)} · {box.details.join(" · ")}
+          {drafts.map((draft) => (
+            <li key={draft.id} className="flex items-center gap-2 rounded border border-[var(--line)] p-2 text-xs">
+              <button className="min-w-0 flex-1 text-left" onClick={() => onSeek(draft.timestamp)}>
+                <span className="font-medium">{humanize(draft.objectId)}</span> · {draft.timestamp.toFixed(2)}s
+                <span className="block text-[var(--muted)]">
+                  {draft.origin} · tracks {draft.start.toFixed(2)}–{draft.end.toFixed(2)}s{draft.direction === "auto" ? "" : `, ${draft.direction}`}{draft.points.length ? ` · ${draft.points.length} points` : ""}
+                </span>
+              </button>
+              <button className="btn shrink-0 !p-0" style={{ width: 28, height: 28, minWidth: 28, minHeight: 28, display: "inline-flex", alignItems: "center", justifyContent: "center" }} aria-label={`Remove seed for ${humanize(draft.objectId)} at ${draft.timestamp.toFixed(2)}s`} onClick={() => onChange(drafts.filter((item) => item.id !== draft.id))}><X size={14} strokeWidth={1.75} /></button>
             </li>
           ))}
         </ul>
@@ -440,255 +588,179 @@ function BoxInspector({ boxes }: { boxes: ReturnType<typeof layerBoxes> }) {
   );
 }
 
-function CandidatePanel({
-  targets,
-  pending,
-  selected,
-  onToggle,
-  onSeek,
-}: {
-  targets: RecoveryTarget[];
-  pending: boolean;
-  selected: Set<string>;
-  onToggle: (id: string) => void;
-  onSeek: (time: number) => void;
-}) {
-  return (
-    <section className="panel space-y-2 p-4 text-sm" data-testid="recovery-candidates">
-      <h3 className="text-sm">Problem intervals</h3>
-      {pending && <p className="text-xs text-[var(--muted)]">Looking through the saved analysis…</p>}
-      {!pending && targets.length === 0 && (
-        <p className="text-xs text-[var(--muted)]">No interval was flagged. You can still add a manual target. This does not mean every box is correct.</p>
-      )}
-      <ul className="max-h-96 space-y-2 overflow-auto">
-        {targets.map((target) => (
-          <li key={target.target_id} className="rounded border border-[var(--line)] p-2">
-            <label className="flex items-start gap-2">
-              <input type="checkbox" disabled={!target.recoverable} checked={selected.has(target.target_id)} onChange={() => onToggle(target.target_id)} />
-              <span className="min-w-0">
-                <span className="font-medium">{humanize(target.object_local_id)}</span> · {target.label}
-                <span className="block text-xs text-[var(--muted)]">
-                  {target.reasons.map(humanize).join(", ")} · {humanize(target.state)} · {humanize(target.difficulty ?? "")} · {target.seeds?.length ?? 0} usable seeds
-                </span>
-                {target.support && <span className="block text-xs text-[var(--muted)]">{target.support.observations_in_interval} stored boxes in the interval, {target.support.measured_in_interval} measured</span>}
-                {target.details.slice(0, 2).map((detail) => <span key={detail} className="block text-xs">{detail}</span>)}
-                {target.blocker && <span className="block text-xs text-[var(--amber)]">{target.blocker}</span>}
-              </span>
-            </label>
-            <button className="btn mt-1" onClick={() => onSeek(target.time_start)}>Jump to {formatTime(target.time_start)}–{formatTime(target.time_end)}</button>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function SeedPicker({
-  seeds,
-  value,
-  onChange,
-  onSeek,
-  confirmed,
-  onConfirmed,
-}: {
-  seeds: RecoverySeed[];
-  value: string;
-  onChange: (id: string) => void;
-  onSeek: (time: number) => void;
-  confirmed: boolean;
-  onConfirmed: (value: boolean) => void;
-}) {
-  const chosen = seeds.find((item) => item.seed_id === value);
-  if (!seeds.length) return <p className="text-xs text-[var(--muted)]">No stored box can seed this object. Draw one on the frame.</p>;
-  return (
-    <div className="space-y-1">
-      <label className="field-label"><span>Existing box</span>
-        <select className="field" value={value} onChange={(event) => { onChange(event.target.value); const seed = seeds.find((item) => item.seed_id === event.target.value); if (seed) onSeek(seed.timestamp); }}>
-          <option value="">Automatic, or draw one</option>
-          {seeds.slice(0, 80).map((seed) => <option key={seed.seed_id} value={seed.seed_id}>{formatTime(seed.timestamp)} · {humanize(seed.trust)} · {seed.source}</option>)}
-        </select>
-      </label>
-      {chosen && (
-        <div className="space-y-1 text-xs">
-          <p>{chosen.explanation}</p>
-          {chosen.checks.filter((item) => !item.passed).map((item) => <p key={item.check} className="text-[var(--amber)]">{humanize(item.check)}: {item.detail}</p>)}
-          {chosen.trust === "candidate" && (
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={confirmed} onChange={(event) => onConfirmed(event.target.checked)} />
-              I looked at this box and confirm it marks this object.
-            </label>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PlanPanel({
+function RunPanel({
+  drafts,
   data,
-  approved,
-  onApproved,
+  plan,
   pending,
-  onDryRun,
-  onReplay,
+  error,
+  onPreview,
   onLive,
-  onResubmit,
+  onReplay,
   onCancel,
 }: {
-  data: RecoveryExperiment;
-  approved: boolean;
-  onApproved: (value: boolean) => void;
+  drafts: SeedDraft[];
+  data: RecoveryExperiment | null;
+  plan: RecoveryExperiment["plan"];
   pending: boolean;
-  onDryRun: () => void;
+  error: string;
+  onPreview: () => void;
+  onLive: (hash: string, keys?: string[]) => void;
   onReplay: () => void;
-  onLive: (hash: string) => void;
-  onResubmit: (hash: string, keys: string[]) => void;
   onCancel: () => void;
 }) {
-  const plan: RecoveryPlan | null = data.plan;
-  const running = data.status === "running";
-  const uncertain = data.requests.filter((item) => item.submission === "submitted" && item.status !== "running").map((item) => item.cache_key);
+  const running = data?.status === "running";
+  const uncertain = (data?.requests ?? []).filter((item) => item.submission === "submitted" && item.status !== "running").map((item) => item.cache_key);
+  const remote = plan?.totals.remote_requests ?? 0;
+  const cached = plan?.totals.cached_requests ?? 0;
+  const canRun = Boolean(plan && remote > 0 && plan.violations.length === 0);
   return (
     <section className="panel space-y-2 p-4 text-sm" data-testid="recovery-plan">
-      <h3 className="text-sm">Experiment {data.id.slice(0, 8)} · {humanize(data.status)}{data.mode ? ` · ${humanize(data.mode)}` : ""}</h3>
-      {data.error && (
-        <p className="text-xs text-[var(--amber)]" role="status">
-          {data.error} {data.remote_submitted ? "A remote call was submitted for this experiment." : "No remote call was submitted."}
-        </p>
-      )}
-      {plan ? (
+      {running ? (
         <>
-          <p className="text-xs">{usage(plan.totals)}.</p>
-          <p className="text-xs text-[var(--muted)]">{plan.totals.cost_note}</p>
-          {plan.totals.cached_requests > 0 && <p className="text-xs text-[var(--muted)]">{plan.totals.cached_requests} planned {plan.totals.cached_requests === 1 ? "request has" : "requests have"} a stored response and will not be sent.</p>}
-          {plan.notes.map((note) => <p key={note} className="text-xs text-[var(--muted)]">{note}</p>)}
-          <ul className="space-y-2">
-            {plan.requests.map((spec) => (
-              <li key={spec.key} className="rounded border border-[var(--line)] p-2 text-xs">
-                <div>{humanize(spec.direction)} · {formatTime(spec.source_start)}–{formatTime(spec.source_end)} · {spec.frame_times.length} frames · about {spec.billed_frames} billed{spec.cached ? " · stored response" : ""}</div>
-                {spec.objects.map((item) => (
-                  <div key={`${item.target_id}-${item.seed.seed_id}`}>
-                    SAM id {item.sam_object_id} = {humanize(item.object_local_id)}, clip frame {item.seed_frame_index} (source {item.seed.timestamp.toFixed(3)}s), {humanize(item.seed.trust)}. {item.seed.explanation}
-                  </div>
-                ))}
-                <code className="mono mt-1 block break-all text-[var(--muted)]">{spec.prompt}</code>
-              </li>
-            ))}
-          </ul>
+          <p>SAM is running. Cutting the clip and uploading can take a minute.</p>
+          <button className="btn" disabled={data?.cancel_requested} onClick={onCancel}>{data?.cancel_requested ? "Canceling…" : "Cancel"}</button>
+        </>
+      ) : plan ? (
+        <>
+          <p className="text-xs">{usage(plan.totals)}{cached ? `, ${cached} already stored` : ""}.</p>
+          {plan.totals.estimated_cost_usd == null && <p className="text-xs text-[var(--muted)]">No per-frame rate is set, so the cost is unknown. Frame limits still apply.</p>}
           {plan.blocked.map((item) => (
-            <p key={`${item.target_id}-${item.reason}`} className="text-xs text-[var(--amber)]">{humanize(item.object_local_id)} {formatTime(item.time_start)}–{formatTime(item.time_end)} cannot run. {item.reason}</p>
+            <p key={`${item.target_id}-${item.reason}`} className="text-xs text-[var(--amber)]">{humanize(item.object_local_id)}: {item.reason}</p>
           ))}
           {plan.violations.map((item) => <p key={item} className="text-xs text-[var(--rose)]">{item}</p>)}
+          <div className="flex flex-wrap gap-2">
+            {canRun && <button className="btn primary" disabled={pending} onClick={() => onLive(plan.plan_hash)}>Run SAM: {remote} {remote === 1 ? "request" : "requests"}, about {plan.totals.billed_frames} frames</button>}
+            {cached > 0 && <button className="btn" disabled={pending} onClick={onReplay}>Use stored responses (free)</button>}
+            {canRun && uncertain.length > 0 && <button className="btn" disabled={pending} onClick={() => onLive(plan.plan_hash, uncertain)}>Also resend {uncertain.length} that may have been billed</button>}
+          </div>
+          <p className="text-xs text-[var(--muted)]">Run SAM may be billed by Meta. It sends only these SAM requests.</p>
+          <details className="text-xs">
+            <summary className="cursor-pointer text-[var(--muted)]">Request details</summary>
+            <ul className="mt-1 space-y-1">
+              {plan.requests.map((spec) => (
+                <li key={spec.key} className="rounded border border-[var(--line)] p-2">
+                  {humanize(spec.direction)} · {spec.source_start.toFixed(2)}–{spec.source_end.toFixed(2)}s · {spec.frame_times.length} frames · {spec.objects.length} seeds
+                  <code className="mono mt-1 block break-all text-[var(--muted)]">{spec.prompt}</code>
+                </li>
+              ))}
+            </ul>
+          </details>
         </>
-      ) : <p className="text-xs text-[var(--muted)]">No plan yet.</p>}
-      <div className="flex flex-wrap gap-2">
-        <button className="btn" disabled={pending || running} onClick={onDryRun}>Dry run</button>
-        <button className="btn" disabled={pending || running} onClick={onReplay}>Replay stored responses</button>
-        {running && <button className="btn" disabled={data.cancel_requested} onClick={onCancel}>{data.cancel_requested ? "Canceling…" : "Cancel"}</button>}
-      </div>
-      {plan && canApproveLive(plan) && !running && (
-        <div className="space-y-1 rounded border border-[var(--line)] p-2">
-          <label className="flex items-start gap-2 text-xs">
-            <input type="checkbox" checked={approved} onChange={(event) => onApproved(event.target.checked)} />
-            I approve {usage(plan.totals)}. These are SAM requests only and may be billed by Meta.
-          </label>
-          <button className="btn primary" disabled={!approved || pending} onClick={() => onLive(plan.plan_hash)}>Run live SAM recovery</button>
-          {uncertain.length > 0 && (
-            <button className="btn" disabled={!approved || pending} onClick={() => onResubmit(plan.plan_hash, uncertain)}>
-              Also resend {uncertain.length} {uncertain.length === 1 ? "request" : "requests"} that may have been billed
-            </button>
-          )}
-        </div>
+      ) : (
+        <button className="btn primary" disabled={pending || drafts.length === 0} onClick={onPreview}>
+          {pending ? "Checking…" : `Check ${drafts.length || ""} ${drafts.length === 1 ? "seed" : "seeds"} (free)`}
+        </button>
       )}
-      {data.requests.length > 0 && (
-        <ul className="space-y-1 text-xs text-[var(--muted)]">
-          {data.requests.map((item) => (
-            <li key={item.cache_key}>{item.cache_key.slice(0, 8)} · {humanize(item.status)} · {humanize(item.submission)}{item.source ? ` · ${item.source}` : ""}{item.latency_ms ? ` · ${item.latency_ms} ms` : ""}{item.error ? ` · ${item.error}` : ""}</li>
-          ))}
-        </ul>
+      {!running && !plan && Boolean(data?.plan?.requests.length) && (
+        <button className="btn" disabled={pending} onClick={onReplay}>Replay this run's stored responses (free)</button>
       )}
+      {data?.error && (
+        <p className="text-xs text-[var(--amber)]" role="status">
+          {data.error} {data.remote_submitted ? "A remote call was submitted for this run." : "No remote call was submitted."}
+        </p>
+      )}
+      {error && <p className="text-xs text-[var(--rose)]" role="alert">{error}</p>}
     </section>
   );
 }
 
 function ResultsPanel({
   data,
+  proposals,
   provisional,
   onProvisional,
-  onSeek,
+  pending,
   onDecide,
+  onSeek,
 }: {
   data: RecoveryExperiment | null;
+  proposals: RecoveryProposal[];
   provisional: boolean;
   onProvisional: (value: boolean) => void;
+  pending: boolean;
+  onDecide: (decision: "accepted" | "rejected") => void;
   onSeek: (time: number) => void;
-  onDecide: (id: string, decision: "accepted" | "rejected") => void;
 }) {
-  const current = (data?.proposals ?? []).filter((item) => item.current);
-  if (!data || !current.length) return null;
+  if (!data || !proposals.length) return null;
+  const open = proposals.filter((item) => item.decision === "pending");
   return (
-    <section className="panel space-y-3 p-4 text-sm" data-testid="recovery-results">
-      <h3 className="text-sm">Results awaiting review</h3>
-      {data.recorded_cost_usd != null && <p className="text-xs text-[var(--muted)]">Recorded estimate ${data.recorded_cost_usd.toFixed(4)}. Meta's invoice decides the real charge.</p>}
-      <label className="flex items-center gap-2 text-xs">
-        <input type="checkbox" checked={provisional} onChange={(event) => onProvisional(event.target.checked)} />
-        Also add provisional boxes when accepting. They stay non-canonical.
-      </label>
-      {current.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} onSeek={onSeek} onDecide={onDecide} />)}
+    <section className="panel space-y-2 p-4 text-sm" data-testid="recovery-results">
+      <h2 className="text-base">Results</h2>
+      {proposals.some((item) => item.metrics.synthetic_response) && (
+        <p className="text-xs text-[var(--amber)]">Built from a synthetic offline response. It only exercises the plumbing and says nothing about SAM's accuracy.</p>
+      )}
+      <ul className="space-y-1 text-xs">
+        {proposals.map((proposal) => {
+          const counts = proposal.metrics.counts;
+          return (
+            <li key={proposal.id} className="rounded border border-[var(--line)] p-2">
+              <button className="font-medium" onClick={() => onSeek(proposal.time_start)}>{humanize(proposal.object_local_id)} · {proposal.time_start.toFixed(2)}–{proposal.time_end.toFixed(2)}s</button>
+              {proposal.decision !== "pending" && ` · ${humanize(proposal.decision)}`}
+              <div>
+                <span style={{ color: LANE_COLORS.supported }}>{counts.supported} supported</span>
+                {" · "}<span style={{ color: LANE_COLORS.provisional }}>{counts.provisional} provisional</span>
+                {" · "}<span style={{ color: LANE_COLORS.conflicting }}>{counts.conflicting} conflicting</span>
+                {" · "}{counts.rejected} rejected · {counts.unobserved_frames} unobserved
+              </div>
+              {proposal.metrics.remaining_gaps.slice(0, 3).map((gap) => (
+                <button key={gap.start} className="block text-[var(--muted)]" onClick={() => onSeek(gap.start)}>{gap.start.toFixed(2)}–{gap.end.toFixed(2)}s has no box. That is not evidence of absence.</button>
+              ))}
+            </li>
+          );
+        })}
+      </ul>
+      {open.length > 0 && (
+        <>
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={provisional} onChange={(event) => onProvisional(event.target.checked)} />
+            Include provisional boxes. They stay non-canonical.
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn primary" disabled={pending} onClick={() => onDecide("accepted")}>Accept as a new revision</button>
+            <button className="btn" disabled={pending} onClick={() => onDecide("rejected")}>Reject all</button>
+          </div>
+        </>
+      )}
+      <p className="text-xs text-[var(--muted)]">{proposals[0].metrics.accuracy_note}</p>
     </section>
   );
 }
 
-function ProposalCard({
-  proposal,
+function ProblemList({
+  targets,
+  pending,
   onSeek,
-  onDecide,
+  onObject,
+  onSuggested,
 }: {
-  proposal: RecoveryProposal;
+  targets: RecoveryTarget[];
+  pending: boolean;
   onSeek: (time: number) => void;
-  onDecide: (id: string, decision: "accepted" | "rejected") => void;
+  onObject: (id: string) => void;
+  onSuggested: (target: RecoveryTarget) => void;
 }) {
-  const metrics = proposal.metrics;
   return (
-    <div className="space-y-1 rounded border border-[var(--line)] p-2 text-xs">
-      <div className="font-medium">
-        <button onClick={() => onSeek(proposal.time_start)}>{humanize(proposal.object_local_id)} · {formatTime(proposal.time_start)}–{formatTime(proposal.time_end)}</button> · {humanize(proposal.decision)}
-      </div>
-      {metrics.synthetic_response && <p className="text-[var(--amber)]">Built from a synthetic offline response. It only exercises the plumbing and says nothing about SAM's accuracy.</p>}
-      <table className="w-full text-left">
-        <thead className="text-[var(--muted)]">
-          <tr><th className="font-normal">Previously missing</th><th className="font-normal">New supported</th><th className="font-normal">Supported</th><th className="font-normal">Provisional</th><th className="font-normal">Conflicting</th><th className="font-normal">Rejected</th><th className="font-normal">Unobserved</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>{metrics.previously_missing_frames}</td>
-            <td>{metrics.new_supported_frames}</td>
-            <td>{metrics.counts.supported}</td>
-            <td>{metrics.counts.provisional}</td>
-            <td>{metrics.counts.conflicting}</td>
-            <td>{metrics.counts.rejected}</td>
-            <td>{metrics.counts.unobserved_frames}</td>
-          </tr>
-        </tbody>
-      </table>
-      {metrics.remaining_gaps.slice(0, 6).map((gap) => (
-        <p key={gap.start}><button onClick={() => onSeek(gap.start)}>{formatTime(gap.start)}–{formatTime(gap.end)}</button> remains unobserved ({gap.frames} frames). This is not evidence of absence.</p>
-      ))}
-      {metrics.identity.map((item, index) => (
-        <p key={index} className="text-[var(--muted)]">Identity: SAM id {item.sam_object_id}, {humanize(item.association)}, seed {humanize(item.seed_trust)}. {item.note}</p>
-      ))}
-      <p className="text-[var(--muted)]">
-        {metrics.usage.requests} {metrics.usage.requests === 1 ? "request" : "requests"} · about {metrics.usage.billed_frames} billed frames · {metrics.usage.latency_ms} ms · {metrics.usage.input_tokens + metrics.usage.output_tokens} tokens
-      </p>
-      <p className="text-[var(--muted)]">
-        {metrics.human_box_overlap ? `Mean overlap with human boxes ${metrics.human_box_overlap.mean_iou.toFixed(2)} on ${metrics.human_box_overlap.frames} frames. ` : ""}{metrics.accuracy_note}
-      </p>
-      {proposal.decision === "pending" ? (
-        <div className="flex gap-2">
-          <button className="btn primary" onClick={() => onDecide(proposal.id, "accepted")}>Accept as new revision</button>
-          <button className="btn" onClick={() => onDecide(proposal.id, "rejected")}>Reject</button>
-        </div>
-      ) : proposal.applied_revision_id ? <p className="text-[var(--muted)]">Applied to a new revision. The earlier revision is unchanged.</p> : null}
-    </div>
+    <details className="panel p-3 text-sm" data-testid="recovery-candidates">
+      <summary className="cursor-pointer">Suspected problems ({pending ? "…" : targets.length})</summary>
+      <ul className="mt-2 max-h-72 space-y-1 overflow-auto">
+        {targets.map((target) => (
+          <li key={target.target_id} className="flex items-center gap-2 text-xs">
+            <button
+              className="min-w-0 flex-1 text-left"
+              onClick={() => {
+                onObject(target.object_local_id);
+                onSeek(target.time_start);
+              }}
+            >
+              <span className="font-medium">{humanize(target.object_local_id)}</span> · {target.time_start.toFixed(2)}–{target.time_end.toFixed(2)}s
+              <span className="block text-[var(--muted)]">{target.reasons.map(humanize).join(", ")}</span>
+            </button>
+            {target.recoverable && (target.seeds?.length ?? 0) > 0 && <button className="btn" onClick={() => onSuggested(target)}>Use suggested seed</button>}
+          </li>
+        ))}
+      </ul>
+      {!pending && targets.length === 0 && <p className="mt-2 text-xs text-[var(--muted)]">Nothing was flagged. That does not mean every box is correct.</p>}
+    </details>
   );
 }

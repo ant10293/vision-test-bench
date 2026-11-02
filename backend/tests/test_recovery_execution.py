@@ -359,6 +359,39 @@ def test_a_manual_seed_box_and_points_override_the_automatic_seed(client, tmp_pa
     assert "-<|point;" in spec["prompt"]
 
 
+def test_several_seeds_go_out_in_one_request_when_their_clips_overlap(client, tmp_path):
+    run_id, _revision, times = _setup(client, tmp_path)
+    box = {"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1}
+
+    def target(local_id, start, end):
+        return {
+            "object_local_id": local_id,
+            "time_start": start,
+            "time_end": end,
+            "direction": "forward",
+            "seed": {"timestamp": start, "bbox": box},
+        }
+
+    created = client.post(
+        f"/api/runs/{run_id}/recovery/experiments",
+        json={
+            "manual_targets": [
+                target("Object_1", times[2], times[2] + 1.0),
+                target("Object_2", times[2], times[2] + 1.0),
+                target("Object_1", times[2] + 0.5, times[2] + 1.5),
+            ],
+            "limits": {"padding_sec": 0},
+        },
+    ).json()
+    plan = client.post(f"/api/recovery/experiments/{created['id']}/dry-run").json()["plan"]
+    assert plan["blocked"] == []
+    assert plan["totals"]["requests"] == 1
+    spec = plan["requests"][0]
+    assert len(spec["objects"]) == 3
+    assert spec["bindings"] == {"1": "Object_1", "2": "Object_2"}
+    assert spec["prompt"].count("1<|box;") == 2
+
+
 def test_frame_limits_refuse_before_any_call(client, tmp_path, monkeypatch):
     run_id, _revision, _times = _setup(client, tmp_path)
     fake = _install(monkeypatch, FakeSam())

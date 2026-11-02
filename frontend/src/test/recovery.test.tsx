@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BundleContext } from "../lib/bundleContext";
-import { canApproveLive, dragBox, layerBoxes, nextStep, stepTimes, usage, type RecoveryPlan, type RecoveryProposal } from "../lib/recovery";
+import { boxAt, canApproveLive, dragBox, layerBoxes, manualTargets, nextStep, placeSeed, spansOf, stepTimes, trackRange, usage, type RecoveryPlan, type RecoveryProposal } from "../lib/recovery";
 import { api } from "../lib/api";
 import { RecoveryPage } from "../pages/Recovery";
 import { useInspector } from "../stores/ui";
@@ -112,12 +112,60 @@ describe("seed drawing and approval", () => {
   });
 });
 
+describe("seed drafts", () => {
+  const draft = (objectId: string, timestamp: number) => ({
+    objectId,
+    timestamp,
+    bbox: box,
+    points: [],
+    ...trackRange(timestamp, 2, "forward"),
+    direction: "forward" as const,
+    origin: "drawn",
+  });
+
+  it("keeps many seeds in time order and replaces one on the same frame", () => {
+    let drafts = placeSeed([], draft("Object_1", 5));
+    drafts = placeSeed(drafts, draft("Object_2", 5));
+    drafts = placeSeed(drafts, draft("Object_1", 1));
+    expect(drafts.map((item) => [item.objectId, item.timestamp])).toEqual([["Object_1", 1], ["Object_1", 5], ["Object_2", 5]]);
+    expect(placeSeed(drafts, { ...draft("Object_1", 5), origin: "redrawn" })).toHaveLength(3);
+  });
+
+  it("sets the tracked stretch from the direction", () => {
+    expect(trackRange(5, 2, "forward")).toEqual({ start: 5, end: 7 });
+    expect(trackRange(5, 2, "backward")).toEqual({ start: 3, end: 5 });
+    expect(trackRange(1, 2, "both")).toEqual({ start: 0, end: 3 });
+  });
+
+  it("sends every seed as its own target", () => {
+    const targets = manualTargets([{ ...draft("Object_1", 5), id: "a" }, { ...draft("Object_2", 6), id: "b" }]);
+    expect(targets.map((item) => item.object_local_id)).toEqual(["Object_1", "Object_2"]);
+    expect(targets[0].seed).toMatchObject({ timestamp: 5, bbox: box });
+  });
+
+  it("picks the smallest known object's box under a click", () => {
+    const shape = (objectId: string, w: number) => ({ key: objectId, layer: "vlm" as const, objectId, bbox: { x: 0, y: 0, w, h: w }, timestamp: 1, dashed: true, details: [] });
+    const boxes = [shape("Object_1", 0.5), shape("Object_2", 0.2), shape("track_9", 0.1)];
+    expect(boxAt(boxes, new Set(["Object_1", "Object_2"]), 0.1, 0.1)?.objectId).toBe("Object_2");
+    expect(boxAt(boxes, new Set(["Object_1", "Object_2"]), 0.9, 0.9)).toBeNull();
+  });
+
+  it("joins times into lane spans and leaves holes visible", () => {
+    expect(spansOf([0, 1, 2, 8, 9], "stored")).toEqual([{ start: 0, end: 2, kind: "stored" }, { start: 8, end: 9, kind: "stored" }]);
+  });
+});
+
 describe("recovery page", () => {
   beforeEach(() => {
     vi.stubGlobal("ResizeObserver", class {
       observe() {}
       disconnect() {}
     });
+    // jsdom has no PointerEvent, and without one the event carries no coordinates.
+    vi.stubGlobal("PointerEvent", class extends MouseEvent {});
+    useInspector.getState().setTime(1);
+    vi.spyOn(api, "recoveryCandidates").mockResolvedValue({ run_id: "run-1", revision_id: "r", targets: [target], seeds: [], seed_counts: {}, objects: [], price_per_frame_usd: null } as never);
+    vi.spyOn(api, "recoveryExperiments").mockResolvedValue([]);
   });
   afterEach(() => {
     cleanup();
@@ -125,16 +173,13 @@ describe("recovery page", () => {
     vi.unstubAllGlobals();
   });
 
-  function show() {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    return render(
-      <QueryClientProvider client={client}>
-        <BundleContext.Provider value={bundle}>
-          <RecoveryPage />
-        </BundleContext.Provider>
-      </QueryClientProvider>,
-    );
-  }
+  const pageBundle = {
+    ...bundle,
+    objects: [
+      { local_id: "Object_1", label: "washer", color: "#ff0000" },
+      { local_id: "Object_2", label: "nut", color: "#00ff00" },
+    ],
+  } as unknown as Bundle;
 
   const target = {
     target_id: "t1",
@@ -146,10 +191,10 @@ describe("recovery page", () => {
     source: "automatic",
     state: "unresolved",
     reasons: ["tracking_gap"],
-    details: ["No reliable box in this stretch."],
+    details: [],
     seeds: [],
     difficulty: "easy",
-    recoverable: true,
+    recoverable: false,
     blocker: "",
   };
 
@@ -174,13 +219,31 @@ describe("recovery page", () => {
       blocked: [],
       notes: [],
       violations: [],
-      totals: { requests: 1, remote_requests: 1, cached_requests: 0, frames: 30, billed_frames: 50, estimated_cost_usd: null, cost_note: "Cost unknown." },
+      totals: { requests: 1, remote_requests: 1, cached_requests: 0, frames: 30, billed_frames: 50, estimated_cost_usd: null, cost_note: "" },
     },
   };
 
-  it("shows a still frame with no playback controls and steps with the arrows", async () => {
-    vi.spyOn(api, "recoveryCandidates").mockResolvedValue({ run_id: "run-1", revision_id: "r", targets: [], seeds: [], seed_counts: {}, objects: [], price_per_frame_usd: null } as never);
-    vi.spyOn(api, "recoveryExperiments").mockResolvedValue([]);
+  function show() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={client}>
+        <BundleContext.Provider value={pageBundle}>
+          <RecoveryPage />
+        </BundleContext.Provider>
+      </QueryClientProvider>,
+    );
+    const overlay = screen.getByTestId("recovery-overlay");
+    overlay.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
+    return { ...view, overlay };
+  }
+
+  function press(overlay: HTMLElement, x1: number, y1: number, x2 = x1, y2 = y1) {
+    fireEvent.pointerDown(overlay, { clientX: x1, clientY: y1, pointerId: 1 });
+    fireEvent.pointerMove(overlay, { clientX: x2, clientY: y2, pointerId: 1 });
+    fireEvent.pointerUp(overlay, { clientX: x2, clientY: y2, pointerId: 1 });
+  }
+
+  it("shows a still frame and steps with the arrows", () => {
     useInspector.getState().setTime(0);
     const { container } = show();
     expect(container.querySelector("video")?.hasAttribute("controls")).toBe(false);
@@ -188,63 +251,73 @@ describe("recovery page", () => {
     expect(useInspector.getState().time).toBe(0.5);
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(useInspector.getState().time).toBe(1);
-    fireEvent.click(screen.getByRole("button", { name: "Previous frame" }));
-    expect(useInspector.getState().time).toBe(0.5);
-    await screen.findByText(/No interval was flagged/);
   });
 
-  it("keeps the box list in one fixed-height panel whether or not it has boxes", async () => {
-    vi.spyOn(api, "recoveryCandidates").mockResolvedValue({ run_id: "run-1", revision_id: "r", targets: [], seeds: [], seed_counts: {}, objects: [], price_per_frame_usd: null } as never);
-    vi.spyOn(api, "recoveryExperiments").mockResolvedValue([]);
-    useInspector.getState().setTime(1);
-    show();
-    const panel = screen.getByTestId("box-inspector");
-    expect(panel).toHaveClass("h-40", "overflow-auto");
-    expect(panel.querySelector("li")).not.toBeNull();
-    act(() => useInspector.getState().setTime(8));
-    expect(screen.getByTestId("box-inspector")).toBe(panel);
-    expect(panel.querySelector("li")).toBeNull();
-    await screen.findByText(/No interval was flagged/);
+  it("makes a seed from one click on a box", () => {
+    const { overlay } = show();
+    press(overlay, 15, 15);
+    expect(within(screen.getByTestId("seed-list")).getByText("Object 1")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Seeds (1)" })).toBeInTheDocument();
   });
 
-  it("needs a dry run and an explicit approval before a live run", async () => {
-    vi.spyOn(api, "recoveryCandidates").mockResolvedValue({ run_id: "run-1", revision_id: "r", targets: [target], seeds: [], seed_counts: {}, objects: [], price_per_frame_usd: null } as never);
-    vi.spyOn(api, "recoveryExperiments").mockResolvedValue([]);
-    vi.spyOn(api, "recoveryExperiment").mockResolvedValue(planned as never);
+  it("asks which object before drawing, then keeps seeds from many objects and frames", () => {
+    const { overlay } = show();
+    press(overlay, 50, 50, 70, 70);
+    expect(screen.getByRole("status")).toHaveTextContent("Choose which object");
+    fireEvent.click(within(screen.getByRole("group", { name: "Object to seed" })).getByRole("button", { name: "Object 1" }));
+    press(overlay, 50, 50, 70, 70);
+    fireEvent.click(within(screen.getByRole("group", { name: "Object to seed" })).getByRole("button", { name: "Object 2" }));
+    press(overlay, 60, 60, 80, 80);
+    act(() => useInspector.getState().setTime(3));
+    press(overlay, 60, 60, 80, 80);
+    expect(screen.getByRole("heading", { name: "Seeds (3)" })).toBeInTheDocument();
+  });
+
+  it("sends all seeds together, and a live run needs the checked plan", async () => {
     const create = vi.spyOn(api, "createRecovery").mockResolvedValue(planned as never);
     const dry = vi.spyOn(api, "recoveryDryRun").mockResolvedValue(planned as never);
+    vi.spyOn(api, "recoveryExperiment").mockResolvedValue(planned as never);
     const live = vi.spyOn(api, "recoveryLive").mockResolvedValue(planned as never);
-    show();
-    fireEvent.click(await screen.findByRole("checkbox", { name: /Object 1/i }));
-    fireEvent.click(screen.getByRole("button", { name: "Create and dry run" }));
+    const { overlay } = show();
+    press(overlay, 15, 15);
+    fireEvent.click(within(screen.getByRole("group", { name: "Object to seed" })).getByRole("button", { name: "Object 2" }));
+    press(overlay, 60, 60, 80, 80);
+    expect(screen.queryByRole("button", { name: /^Run SAM/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Check 2 seeds/ }));
     await waitFor(() => expect(dry).toHaveBeenCalledWith("experiment-1"));
-    expect(create.mock.calls[0][1]).toMatchObject({ target_ids: ["t1"] });
-    const run = await screen.findByRole("button", { name: "Run live SAM recovery" });
-    expect(run).toBeDisabled();
+    const payload = create.mock.calls[0][1] as { manual_targets: unknown[] };
+    expect(payload.manual_targets).toHaveLength(2);
     expect(live).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("checkbox", { name: /I approve/ }));
-    fireEvent.click(run);
+    fireEvent.click(await screen.findByRole("button", { name: /^Run SAM: 1 request, about 50 frames/ }));
     await waitFor(() => expect(live).toHaveBeenCalledWith("experiment-1", { confirm: true, plan_hash: "hash-1" }));
   });
 
-  it("shows why a request failed and whether anything was submitted", async () => {
-    vi.spyOn(api, "recoveryCandidates").mockResolvedValue({ run_id: "run-1", revision_id: "r", targets: [target], seeds: [], seed_counts: {}, objects: [], price_per_frame_usd: null } as never);
-    vi.spyOn(api, "recoveryExperiments").mockResolvedValue([]);
+  it("changing a seed after checking requires checking again", async () => {
+    vi.spyOn(api, "createRecovery").mockResolvedValue(planned as never);
+    vi.spyOn(api, "recoveryDryRun").mockResolvedValue(planned as never);
+    vi.spyOn(api, "recoveryExperiment").mockResolvedValue(planned as never);
+    const { overlay } = show();
+    press(overlay, 15, 15);
+    fireEvent.click(screen.getByRole("button", { name: /Check 1 seed/ }));
+    await screen.findByRole("button", { name: /^Run SAM/ });
+    fireEvent.click(screen.getByRole("button", { name: /Remove seed/ }));
+    expect(screen.queryByRole("button", { name: /^Run SAM/ })).toBeNull();
+  });
+
+  it("says whether a failure submitted anything", async () => {
     const failed = { ...planned, status: "failed", error: "Upload failed.", remote_submitted: false };
     vi.spyOn(api, "createRecovery").mockResolvedValue(failed as never);
     vi.spyOn(api, "recoveryDryRun").mockResolvedValue(failed as never);
     vi.spyOn(api, "recoveryExperiment").mockResolvedValue(failed as never);
-    show();
-    fireEvent.click(await screen.findByRole("checkbox", { name: /Object 1/i }));
-    fireEvent.click(screen.getByRole("button", { name: "Create and dry run" }));
+    const { overlay } = show();
+    press(overlay, 15, 15);
+    fireEvent.click(screen.getByRole("button", { name: /Check 1 seed/ }));
     expect(await screen.findByText(/No remote call was submitted/)).toBeInTheDocument();
   });
 
-  it("marks a result built on a synthetic response", async () => {
-    vi.spyOn(api, "recoveryCandidates").mockResolvedValue({ run_id: "run-1", revision_id: "r", targets: [target], seeds: [], seed_counts: {}, objects: [], price_per_frame_usd: null } as never);
-    vi.spyOn(api, "recoveryExperiments").mockResolvedValue([]);
+  it("accepts every pending result at once and marks a synthetic response", async () => {
     const metrics = {
-      counts: { supported: 1, provisional: 0, conflicting: 0, rejected: 0, unobserved_frames: 2 },
+      counts: { supported: 1, provisional: 2, conflicting: 0, rejected: 0, unobserved_frames: 2 },
       previously_missing_frames: 1,
       new_supported_frames: 1,
       original_rows_in_interval: 0,
@@ -255,19 +328,28 @@ describe("recovery page", () => {
       human_box_overlap: null,
       accuracy_note: "No human-labeled box covers this interval, so accuracy was not measured.",
     };
-    const done = {
-      ...planned,
-      status: "completed",
-      proposals: [{ id: "p", generation: 1, current: true, target_id: "t1", object_local_id: "Object_1", time_start: 2, time_end: 4, decision: "pending", rows: [], metrics, applied_revision_id: null }],
-    };
+    const proposal = (id: string) => ({ id, generation: 1, current: true, target_id: id, object_local_id: "Object_1", time_start: 2, time_end: 4, decision: "pending", rows: [], metrics, applied_revision_id: null });
+    const done = { ...planned, status: "completed", proposals: [proposal("p1"), proposal("p2")] };
     vi.spyOn(api, "createRecovery").mockResolvedValue(done as never);
     vi.spyOn(api, "recoveryDryRun").mockResolvedValue(done as never);
     vi.spyOn(api, "recoveryExperiment").mockResolvedValue(done as never);
-    show();
-    fireEvent.click(await screen.findByRole("checkbox", { name: /Object 1/i }));
-    fireEvent.click(screen.getByRole("button", { name: "Create and dry run" }));
+    const decide = vi.spyOn(api, "decideRecovery").mockResolvedValue(done as never);
+    const { overlay } = show();
+    press(overlay, 15, 15);
+    fireEvent.click(screen.getByRole("button", { name: /Check 1 seed/ }));
     expect(await screen.findByText(/synthetic offline response/)).toBeInTheDocument();
     expect(screen.getByText(/accuracy was not measured/)).toBeInTheDocument();
-    expect(screen.getByText(/not evidence of absence/)).toBeInTheDocument();
+    expect(screen.getAllByText(/not evidence of absence/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Accept as a new revision" }));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith("experiment-1", { decision: "accepted", proposal_ids: ["p1", "p2"], include_provisional: false }));
+  });
+
+  it("draws problems and seeds on the object's lane", async () => {
+    const { overlay } = show();
+    press(overlay, 15, 15);
+    const lane = screen.getByTestId("lane-Object_1");
+    await waitFor(() => expect(lane.querySelector('[data-kind="problem"]')).not.toBeNull());
+    expect(lane.querySelector('[data-kind="seed"]')).not.toBeNull();
+    expect(screen.getByTestId("lane-Object_2").querySelector('[data-kind="problem"]')).toBeNull();
   });
 });

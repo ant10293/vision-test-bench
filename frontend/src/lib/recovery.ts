@@ -169,6 +169,15 @@ export const LAYERS: { key: RecoveryLayer; label: string; color: string }[] = [
   { key: "canonical", label: "Final canonical", color: "#f5f5f5" },
 ];
 
+export const LANE_COLORS: Record<string, string> = {
+  stored: "#465066",
+  problem: "#b7791f",
+  supported: "#e879f9",
+  provisional: "#c4a5d8",
+  conflicting: "#e07070",
+  rejected: "#888888",
+};
+
 export const OUTCOME_COLORS: Record<RecoveryOutcome, string> = {
   supported: "#e879f9",
   provisional: "#c4a5d8",
@@ -294,6 +303,92 @@ export function layerBoxes(
     }
   }
   return nearest(boxes, time);
+}
+
+/** One box or set of points queued for the next SAM request, and the stretch it should track. */
+export interface SeedDraft {
+  id: string;
+  objectId: string;
+  timestamp: number;
+  bbox: BBox | null;
+  points: SeedPoint[];
+  start: number;
+  end: number;
+  direction: "forward" | "backward" | "both" | "auto";
+  origin: string;
+}
+
+export type TrackDirection = "forward" | "backward" | "both";
+
+export function trackRange(time: number, seconds: number, direction: TrackDirection): { start: number; end: number } {
+  return {
+    start: direction === "forward" ? time : Math.max(time - seconds, 0),
+    end: direction === "backward" ? time : time + seconds,
+  };
+}
+
+/** A new seed for an object replaces its seed on the same frame. Each frame can hold one per object. */
+export function placeSeed(drafts: SeedDraft[], next: Omit<SeedDraft, "id">): SeedDraft[] {
+  const kept = drafts.filter((item) => !(item.objectId === next.objectId && Math.abs(item.timestamp - next.timestamp) <= 0.05));
+  const draft = { ...next, id: `${next.objectId}@${next.timestamp.toFixed(3)}` };
+  return [...kept, draft].sort((a, b) => a.timestamp - b.timestamp);
+}
+
+export function manualTargets(drafts: SeedDraft[]) {
+  return drafts.map((draft) => ({
+    object_local_id: draft.objectId,
+    time_start: draft.start,
+    time_end: draft.end,
+    direction: draft.direction,
+    seed: { timestamp: draft.timestamp, bbox: draft.bbox, points: draft.points },
+  }));
+}
+
+/** The smallest box of a known object under a click, so a small part inside a larger box can be picked. */
+export function boxAt(boxes: LayerBox[], objectIds: Set<string>, x: number, y: number): LayerBox | null {
+  const hits = boxes.filter((box) =>
+    objectIds.has(box.objectId) && x >= box.bbox.x && x <= box.bbox.x + box.bbox.w && y >= box.bbox.y && y <= box.bbox.y + box.bbox.h,
+  );
+  return hits.sort((a, b) => a.bbox.w * a.bbox.h - b.bbox.w * b.bbox.h)[0] ?? null;
+}
+
+export interface LaneSpan {
+  start: number;
+  end: number;
+  kind: string;
+}
+
+/** Times joined into spans. Times further apart than `gap` stay separate, so holes remain visible. */
+export function spansOf(times: number[], kind: string, gap = 1.5): LaneSpan[] {
+  const spans: LaneSpan[] = [];
+  for (const time of [...times].sort((a, b) => a - b)) {
+    const last = spans[spans.length - 1];
+    if (last && time - last.end <= gap) last.end = time;
+    else spans.push({ start: time, end: time, kind });
+  }
+  return spans;
+}
+
+/** Everything one object's timeline lane draws. */
+export function laneSpans(
+  bundle: Pick<Bundle, "observations">,
+  objectId: string,
+  targets: RecoveryTarget[],
+  proposals: RecoveryProposal[],
+): LaneSpan[] {
+  const stored = bundle.observations.filter((row) => row.object_local_id === objectId && row.bbox).map((row) => row.timestamp);
+  const results: LaneSpan[] = [];
+  for (const proposal of proposals.filter((item) => item.object_local_id === objectId)) {
+    for (const outcome of ["supported", "provisional", "conflicting", "rejected"] as const) {
+      const times = proposal.rows.filter((row) => !row.context && row.outcome === outcome).map((row) => row.timestamp);
+      results.push(...spansOf(times, outcome, 0.2));
+    }
+  }
+  return [
+    ...spansOf(stored, "stored"),
+    ...targets.filter((item) => item.object_local_id === objectId).map((item) => ({ start: item.time_start, end: item.time_end, kind: "problem" })),
+    ...results,
+  ];
 }
 
 /** The moments worth stopping on: sampled frames, stored boxes, and recovered boxes inside their interval. */

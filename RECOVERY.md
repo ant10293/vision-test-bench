@@ -27,6 +27,16 @@ Recovery repairs missing or unreliable boxes in a finished analysis with SAM 3.1
 
 A SAM score never raises or lowers an outcome.
 
+## Using the tab
+
+1. Step to a frame with the slider, the arrows, or an object's lane. Amber on a lane marks a suspected problem.
+2. Click a correct box to make it a seed, or choose an object and drag to draw one. Add as many as you need, across objects and frames. Clicking a box counts as a person confirming it.
+3. Set how far new seeds track. **Check seeds** is free and shows the request size.
+4. **Run SAM** sends the checked plan. Seeds whose clips overlap and that share a direction go out in one request when that bills no more than separate ones.
+5. Results appear on the lanes and the frame. **Accept as a new revision** applies every pending result at once.
+
+Changing a seed or limit requires checking again. Limits and earlier runs are in the collapsed panel.
+
 ## Frame and coordinate mapping
 
 - `MediaMap.frame_times[k]` is the source presentation time of frame `k` in the submitted file. Times come from the file's presentation timestamps, never `timestamp * fps`. A video whose times are only estimated is refused.

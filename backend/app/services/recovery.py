@@ -400,7 +400,12 @@ def _groupable(group: dict, entry: dict, limits: dict) -> bool:
         return False
     objects = {item["seed"].object_local_id for item in group["entries"]}
     same_seed = any(item["seed"].seed_id == entry["seed"].seed_id for item in group["entries"])
-    if entry["seed"].object_local_id in objects and not same_seed:
+    # One object may be prompted on several frames, but only once on each frame.
+    if not same_seed and any(
+        item["seed"].object_local_id == entry["seed"].object_local_id
+        and abs(item["seed"].timestamp - entry["seed"].timestamp) <= 0.05
+        for item in group["entries"]
+    ):
         return False
     if len(objects | {entry["seed"].object_local_id}) > 16:
         return False
@@ -1417,6 +1422,7 @@ def merge_proposal(
         track_ref = f"{row['session_id']}:{row['raw_track_id']}"
         if (local_id, round(row["timestamp"], 3), track_ref) in existing:
             continue
+        existing.add((local_id, round(row["timestamp"], 3), track_ref))
         if outcome == CONFLICTING:
             conflict_times.append(row["timestamp"])
         added.append(_observation(row, local_id, track_ref, outcome, experiment_id))
