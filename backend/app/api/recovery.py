@@ -62,6 +62,14 @@ def reacquisition(run_id: str, session: Session = Depends(get_session)) -> dict:
     return _guard(lambda: recovery_reacquisition.reacquisition(session, run))
 
 
+@router.post("/runs/{run_id}/recovery/reacquisition/plan")
+def plan_reacquisition(run_id: str, payload: dict, session: Session = Depends(get_session)) -> dict:
+    """Makes a dry-run experiment from a reviewed step. Nothing is sent, and sending needs the plan's own approval."""
+    run = _run(session, run_id)
+    row = _guard(lambda: recovery_reacquisition.plan_attempt(session, run, payload))
+    return recovery.results(session, row)
+
+
 @router.get("/runs/{run_id}/recovery/experiments")
 def experiments(run_id: str, session: Session = Depends(get_session)) -> list[dict]:
     _run(session, run_id)

@@ -21,6 +21,7 @@ SEGMENTATION_KEYS = {
     "sam_max_frames",
     "sam_chunk_frames",
     "sam_prompt_strategy",
+    "sam_multi_seed",
 }
 
 

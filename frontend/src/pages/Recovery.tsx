@@ -26,7 +26,11 @@ import {
   stepTimes,
   trackRange,
   usage,
+  CANDIDATE_COLORS,
+  PROMPT_ROLE_LABELS,
+  WORKFLOW_LABELS,
   type ObjectTrackHistory,
+  type ReappearanceCandidate,
   type RawSamBox,
   type ReacquisitionEvidence,
   type ReacquisitionLink,
@@ -280,18 +284,28 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
   function planConcept(objectIdToFind: string, item: ReacquisitionPlanItem, concept: string) {
     const key = draftsKey;
     act.mutate(async () => {
-      const created = await api.createRecovery(runId, {
-        manual_targets: [{
-          object_local_id: objectIdToFind,
-          time_start: item.uncertain_interval.start,
-          time_end: item.uncertain_interval.end,
-          strategy: "concept",
-          concept,
-          reacquires: reacquisitionLink(item, "concept_redetection"),
-        }],
+      const planned = await api.planReacquisition(runId, {
+        object_local_id: objectIdToFind,
+        failure_id: item.failure.failure_id,
+        action: "concept",
+        concept,
         limits: { max_requests: Number(maxRequests), max_frames_per_request: Number(maxFrames), max_total_billed_frames: Number(maxBilled), cost_budget_usd: Number(budget) },
       });
-      const planned = await api.recoveryDryRun(created.id);
+      setPlannedKey(key);
+      return planned;
+    });
+  }
+
+  function planCandidate(objectIdToFind: string, item: ReacquisitionPlanItem, candidate: ReappearanceCandidate) {
+    const key = draftsKey;
+    act.mutate(async () => {
+      const planned = await api.planReacquisition(runId, {
+        object_local_id: objectIdToFind,
+        failure_id: item.failure.failure_id,
+        candidate_id: candidate.candidate_id,
+        confirm: candidate.needs_confirmation,
+        limits: { max_requests: Number(maxRequests), max_frames_per_request: Number(maxFrames), max_total_billed_frames: Number(maxBilled), cost_budget_usd: Number(budget) },
+      });
       setPlannedKey(key);
       return planned;
     });
@@ -430,6 +444,7 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
               onSeek={seek}
               onUseEvidence={useEvidence}
               onConcept={planConcept}
+              onCandidate={planCandidate}
               onCompare={() => setLayers((current) => ({ ...current, recovered: true, reacquired: true, raw: true }))}
               onDraw={(id, item) => {
                 setObjectId(id);
@@ -859,6 +874,15 @@ function RunPanel({
               {plan.requests.map((spec) => (
                 <li key={spec.key} className="rounded border border-[var(--line)] p-2">
                   {humanize(spec.direction)} · {spec.source_start.toFixed(2)}–{spec.source_end.toFixed(2)}s · {spec.frame_times.length} frames · {spec.objects.length} seeds
+                  {spec.objects.length > 0 && (
+                    <ul className="mt-1" data-testid="request-prompts">
+                      {spec.objects.map((entry) => (
+                        <li key={`${entry.target_id}-${entry.seed.seed_id}`}>
+                          {PROMPT_ROLE_LABELS[entry.prompt_role ?? ""] ?? "Seed"} · {humanize(entry.object_local_id)} · SAM id {entry.sam_object_id} · clip frame {entry.seed_frame_index} · {entry.seed.timestamp.toFixed(2)}s
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   <code className="mono mt-1 block break-all text-[var(--muted)]">{spec.prompt}</code>
                 </li>
               ))}
@@ -900,6 +924,44 @@ const STAT_LABELS: [string, string][] = [
   ["api_requests", "API requests"],
 ];
 
+function RecoveryBreakdown({ item, onSeek }: { item: ReacquisitionPlanItem; onSeek: (time: number) => void }) {
+  const { diagnosis, search, workflow } = item;
+  const seekable = (label: string, value: number | null) => (
+    <div className="flex justify-between gap-2">
+      <dt className="text-[var(--muted)]">{label}</dt>
+      <dd className="mono">{value == null ? "none" : <button className="underline" onClick={() => onSeek(value)}>{value.toFixed(2)}s</button>}</dd>
+    </div>
+  );
+  return (
+    <div className="space-y-1" data-testid="recovery-breakdown">
+      <ol className="flex flex-wrap gap-x-3 gap-y-1" data-testid="reacquisition-workflow">
+        {workflow.map((stage) => (
+          <li key={stage.stage} title={stage.detail} data-status={stage.status}>
+            <span className="font-medium">{WORKFLOW_LABELS[stage.stage] ?? humanize(stage.stage)}</span> <span className="text-[var(--muted)]">{humanize(stage.status)}</span>
+          </li>
+        ))}
+      </ol>
+      {diagnosis.categories.map((category) => <p key={category.code} data-testid="failure-category">{category.detail}</p>)}
+      <details>
+        <summary className="cursor-pointer text-[var(--muted)]">Where the boxes went</summary>
+        <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1">
+          {seekable("Last raw SAM box", diagnosis.last_raw_time)}
+          {seekable("Last supported box", diagnosis.last_supported_time)}
+          {seekable("First frame with no box", diagnosis.first_no_detection_time)}
+          <div className="flex justify-between gap-2"><dt className="text-[var(--muted)]">Boxes after the failure</dt><dd className="mono">{diagnosis.raw_boxes_after_failure}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-[var(--muted)]">Rejected by validation</dt><dd className="mono">{diagnosis.rejected_by_validation}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-[var(--muted)]">Later SAM ids</dt><dd className="mono">{diagnosis.later_track_ids.join(", ") || "none"}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-[var(--muted)]">Found, not identified</dt><dd className="mono">{diagnosis.detected_not_identified}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-[var(--muted)]">Frames searched</dt><dd className="mono">{search.frames_examined}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-[var(--muted)]">New request planned</dt><dd>{diagnosis.request_planned ? "yes" : "no"}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-[var(--muted)]">New request run</dt><dd>{diagnosis.request_executed ? "yes" : "no"}</dd></div>
+        </dl>
+        {search.candidates.length === 0 && <p className="mt-1">Nothing stored shows this object between {search.window.start.toFixed(2)}s and {search.window.end.toFixed(2)}s.</p>}
+      </details>
+    </div>
+  );
+}
+
 function TrackHistory({
   objects,
   note,
@@ -910,6 +972,7 @@ function TrackHistory({
   onSeek,
   onUseEvidence,
   onConcept,
+  onCandidate,
   onCompare,
   onDraw,
 }: {
@@ -922,6 +985,7 @@ function TrackHistory({
   onSeek: (time: number) => void;
   onUseEvidence: (objectId: string, item: ReacquisitionPlanItem, strategy: string, evidence: ReacquisitionEvidence) => void;
   onConcept: (objectId: string, item: ReacquisitionPlanItem, concept: string) => void;
+  onCandidate: (objectId: string, item: ReacquisitionPlanItem, candidate: ReappearanceCandidate) => void;
   onCompare: () => void;
   onDraw: (objectId: string, item: ReacquisitionPlanItem) => void;
 }) {
@@ -973,8 +1037,24 @@ function TrackHistory({
                 onClick={() => onSeek(failure.time)}
               />
             ))}
+            {object.plans.flatMap((item) => item.search?.candidates ?? []).map((candidate) => (
+              <button
+                key={candidate.candidate_id}
+                data-kind={candidate.outcome}
+                className="absolute bottom-0 h-2 w-2 -translate-x-1/2 rotate-45"
+                aria-label={`${humanize(candidate.outcome)} at ${candidate.timestamp.toFixed(2)} seconds`}
+                title={`${humanize(candidate.outcome)} · ${candidate.reason}`}
+                style={{ left: percent(candidate.timestamp), background: CANDIDATE_COLORS[candidate.outcome] }}
+                onClick={() => onSeek(candidate.timestamp)}
+              />
+            ))}
             <div className="pointer-events-none absolute inset-y-0 w-px bg-[var(--teal)]" style={{ left: percent(time) }} />
           </div>
+          {object.coverage && object.coverage.analyzed_through < object.coverage.video_end - 0.05 && (
+            <p className="text-[var(--muted)]" data-testid="coverage-note">
+              SAM was asked about this object through {object.coverage.analyzed_through.toFixed(2)}s. The video runs to {object.coverage.video_end.toFixed(2)}s, so a missing box after that is not a SAM result.
+            </p>
+          )}
           {object.evidence_limits.map((item) => <p key={item} className="text-[var(--muted)]">{item}</p>)}
           {object.plans.length === 0 && object.segments.length > 0 && <p className="text-[var(--muted)]">No track break was found in these results.</p>}
           {object.plans.map((item) => {
@@ -987,6 +1067,7 @@ function TrackHistory({
                 </p>
                 <p>{item.explanation}</p>
                 <p className="text-[var(--muted)]">{item.failure.detail} {GAP_STATE_LABELS[item.failure.state] ?? humanize(item.failure.state)}. {item.failure.state_basis}</p>
+                {item.diagnosis && <RecoveryBreakdown item={item} onSeek={onSeek} />}
                 <div className="flex flex-wrap gap-1">
                   <button className="btn" onClick={() => onSeek(item.failure.time)}>Go to failure</button>
                   {item.last_supported_time != null && <button className="btn" onClick={() => onSeek(item.last_supported_time as number)}>Last supported {item.last_supported_time.toFixed(2)}s</button>}
@@ -994,6 +1075,33 @@ function TrackHistory({
                 </div>
                 {item.status === "open" && (
                   <>
+                    {item.search?.candidates.length > 0 && (
+                      <ul className="space-y-1" data-testid="reappearance-candidates">
+                        <li className="text-[var(--muted)]">Possible reappearances. Identity is checked separately from detection.</li>
+                        {item.search.candidates.map((candidate) => (
+                          <li key={candidate.candidate_id} className="rounded border border-[var(--line)] p-1" data-testid="reappearance-candidate">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button className="mono underline" onClick={() => onSeek(candidate.timestamp)}>{candidate.timestamp.toFixed(2)}s</button>
+                              <span className="font-medium" style={{ color: CANDIDATE_COLORS[candidate.outcome] }}>{humanize(candidate.outcome)}</span>
+                              <span className="min-w-0 flex-1 text-[var(--muted)]">
+                                {humanize(candidate.source)}{candidate.raw_track_id ? ` · SAM track ${candidate.raw_track_id}` : ""}
+                              </span>
+                              {candidate.outcome !== "rejected_candidate" && (
+                                <button className="btn" disabled={busy} onClick={() => onCandidate(object.object_local_id, item, candidate)}>
+                                  {candidate.needs_confirmation ? "This is the object: plan new track (free)" : "Plan new track (free)"}
+                                </button>
+                              )}
+                            </div>
+                            <p>{candidate.reason}</p>
+                            <details>
+                              <summary className="cursor-pointer text-[var(--muted)]">Checks</summary>
+                              <ul>{candidate.checks.map((check) => <li key={check.check}>{check.passed === null ? "–" : check.passed ? "✓" : "✕"} {humanize(check.check)}: {check.detail}</li>)}</ul>
+                            </details>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {item.search?.window.note && <p className="text-[var(--amber)]">{item.search.window.note}</p>}
                     {item.reappearance_frames.length > 0 && (
                       <div className="flex flex-wrap items-center gap-1">
                         <span className="text-[var(--muted)]">Frames to check:</span>

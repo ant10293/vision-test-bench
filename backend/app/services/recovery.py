@@ -11,6 +11,7 @@ revision through the existing correction path.
 from __future__ import annotations
 
 import asyncio
+import bisect
 import dataclasses
 import hashlib
 import json
@@ -59,6 +60,7 @@ from app.perception.seeds import (
     seeds_around,
 )
 from app.perception.spatial_prompts import (
+    SAME_FRAME_SEC,
     MediaMap,
     SeedMappingError,
     billed_frames,
@@ -257,7 +259,10 @@ def create_experiment(session: Session, run: AnalysisRun, payload: dict) -> Reco
         targets.append(_manual_target(item, known))
     if not targets:
         raise RecoveryError("Choose at least one recovery candidate or add a manual target.")
-    limits = _limits(payload.get("limits"))
+    return new_experiment(session, run, targets, _limits(payload.get("limits")))
+
+
+def new_experiment(session: Session, run: AnalysisRun, targets: list[dict], limits: dict) -> RecoveryExperiment:
     experiment = RecoveryExperiment(
         run_id=run.id,
         source_revision_id=run.active_revision_id,
@@ -321,6 +326,7 @@ def _manual_target(item: dict, known: dict) -> dict:
             "failure_time": float(reacquires.get("failure_time") or start),
             "experiment_id": str(reacquires.get("experiment_id") or ""),
             "strategy": str(reacquires.get("strategy") or "manual"),
+            "record": reacquires.get("record") or {},
         }
         target["reasons"] = ["reacquisition"]
     if item.get("strategy") == "concept":
@@ -344,6 +350,10 @@ def _apply_seed_choice(target: dict, item: dict) -> dict:
         seed["object_local_id"] = target["object_local_id"]
         _check_manual_seed(seed)
         updated["seed"] = seed
+        updated.pop("seed_id", None)
+    elif item.get("seed_ids"):
+        updated["seed_ids"] = [str(value) for value in item["seed_ids"]]
+        updated.pop("seed", None)
         updated.pop("seed_id", None)
     elif item.get("seed_id"):
         updated["seed_id"] = str(item["seed_id"])
@@ -391,9 +401,15 @@ def _chosen_passes(target: dict, seeds: list[Seed], limits: dict) -> tuple[list[
     """The seed and direction for each tracking pass, or the reason there are none."""
     start, end = float(target["time_start"]), float(target["time_end"])
     requested = target.get("direction") or "auto"
+    if target.get("verified_seed"):
+        # Checked when the plan was made. It keeps its own trust, so its evidence stays readable.
+        seed = seed_from_dict(target["verified_seed"])
+        return [(seed, _direction(requested, seed, start, end))], ""
     if target.get("seed"):
         seed = manual_seed(target["seed"], target.get("instance_id"))
         return [(seed, _direction(requested, seed, start, end))], ""
+    if target.get("seed_ids"):
+        return _multi_frame_passes(target, seeds, requested, start, end)
     if target.get("seed_id"):
         seed = next((item for item in seeds if item.seed_id == target["seed_id"]), None)
         if seed is None or seed.object_local_id != target["object_local_id"]:
@@ -415,6 +431,21 @@ def _chosen_passes(target: dict, seeds: list[Seed], limits: dict) -> tuple[list[
         return [(around["before"], "forward"), (around["after"], "backward")], ""
     seed = around["best"]
     return [(seed, _direction(requested, seed, start, end))], ""
+
+
+def _multi_frame_passes(target: dict, seeds: list[Seed], requested: str, start: float, end: float) -> tuple[list[tuple[Seed, str]], str]:
+    """Several trusted prompts for one object, sent in one request and tracked from the earliest."""
+    known = {item.seed_id: item for item in seeds if item.object_local_id == target["object_local_id"]}
+    chosen = [known.get(item) for item in target["seed_ids"]]
+    if any(item is None for item in chosen):
+        return [], "A selected seed no longer exists for this object."
+    if any(not item.automatic for item in chosen):
+        return [], "Every prompt in a multi-frame request has to be a trusted seed."
+    chosen.sort(key=lambda item: item.timestamp)
+    direction = _direction(requested, chosen[0], start, end)
+    if direction == "backward":
+        return [], "Backward tracking starts at the earliest prompt. Send the later seed in its own request."
+    return [(seed, direction) for seed in chosen], ""
 
 
 def _direction(requested: str, seed: Seed, start: float, end: float) -> str:
@@ -467,6 +498,11 @@ def _pass_entry(target: dict, seed: Seed, direction: str, times: list[float], li
 def _groupable(group: dict, entry: dict, limits: dict) -> bool:
     if not limits["group_targets"] or group["direction"] != entry["direction"]:
         return False
+    # Backward tracking starts at the earliest prompt, so seeds on different frames need separate requests.
+    if entry["direction"] == "backward" and any(
+        abs(item["seed"].timestamp - entry["seed"].timestamp) > SAME_FRAME_SEC for item in group["entries"]
+    ):
+        return False
     objects = {item["seed"].object_local_id for item in group["entries"]}
     same_seed = any(item["seed"].seed_id == entry["seed"].seed_id for item in group["entries"])
     # One object may be prompted on several frames, but only once on each frame.
@@ -487,6 +523,13 @@ def _groupable(group: dict, entry: dict, limits: dict) -> bool:
         entry["frames"], [entry], entry["direction"]
     )
     return _billed(union, [*group["entries"], entry], group["direction"]) <= separate or same_seed
+
+
+def _check_contiguous(frames: list[float], source: list[float]) -> None:
+    """The clip is one unbroken run of source frames, so the plan must be too."""
+    start = bisect.bisect_left(source, frames[0] - 1e-6)
+    if source[start : start + len(frames)] != frames:
+        raise SeedMappingError("The grouped frames skip source frames, so they would not match the clip. Send these targets separately.")
 
 
 def _billed(frames: list[float], entries: list[dict], direction: str) -> int:
@@ -542,6 +585,7 @@ def build_plan(session: Session, experiment: RecoveryExperiment) -> dict:
     prefix = experiment.id.replace("-", "")[:8]
     for index, group in enumerate(groups):
         try:
+            _check_contiguous(group["frames"], timeline.pts)
             requests.append(_request_spec(run, video, group, f"rec{prefix}r{index}", width, height))
         except (SeedMappingError, ValueError) as exc:
             blocked.extend(_blocked(item["target"], str(exc)) for item in group["entries"])
@@ -603,6 +647,17 @@ def _blocked(target: dict, reason: str) -> dict:
     }
 
 
+def _prompt_role(target: dict, seed: Seed, seen: set[str]) -> str:
+    """How the Recovery page labels this prompt. Records what was sent and changes nothing about it."""
+    first = seed.object_local_id not in seen
+    seen.add(seed.object_local_id)
+    if target.get("reacquires"):
+        return "manual_seed" if seed.manual else "reappearance_seed"
+    if seed.manual:
+        return "manual_seed"
+    return "initial_seed" if first else "additional_prompt"
+
+
 def _request_spec(run, video, group: dict, session_id: str, width: int, height: int) -> dict:
     frames = group["frames"]
     media = MediaMap(width, height, frames)
@@ -611,7 +666,8 @@ def _request_spec(run, video, group: dict, session_id: str, width: int, height: 
     objects: list[dict] = []
     tolerance = max((item["tolerance"] or 0.0 for item in group["entries"]), default=0.0) or None
     used: set[str] = set()
-    for entry in group["entries"]:
+    seen_objects: set[str] = set()
+    for entry in sorted(group["entries"], key=lambda item: item["seed"].timestamp):
         seed = entry["seed"]
         object_id = ids.setdefault(seed.object_local_id, len(ids) + 1)
         if seed.seed_id not in used:
@@ -624,6 +680,7 @@ def _request_spec(run, video, group: dict, session_id: str, width: int, height: 
                 "sam_object_id": object_id,
                 "seed": seed.as_dict(),
                 "seed_frame_index": media.frame_for(seed.timestamp, tolerance),
+                "prompt_role": _prompt_role(entry["target"], seed, seen_objects),
                 "time_start": entry["target"]["time_start"],
                 "time_end": entry["target"]["time_end"],
             }
@@ -1246,6 +1303,7 @@ def evaluate(session: Session, experiment: RecoveryExperiment, responses: dict[s
     usage: dict[str, dict] = {}
     identity: dict[str, list[dict]] = {}
     dropped: dict[str, int] = {}
+    counted_usage: set[tuple[str, str]] = set()
     synthetic = False
     for spec in specs:
         payload = responses[spec["key"]]
@@ -1263,7 +1321,8 @@ def evaluate(session: Session, experiment: RecoveryExperiment, responses: dict[s
         for entry in spec["objects"]:
             local_id = entry["object_local_id"]
             target_id = entry["target_id"]
-            rows = by_object.get(local_id, [])
+            window = _prompt_window(entry, spec)
+            rows = [item for item in by_object.get(local_id, []) if window[0] - 1e-6 <= item.timestamp < window[1]]
             raw = str(entry["sam_object_id"])
             association = status_by_track[raw].status if raw in status_by_track else "unassigned"
             neighbors = [
@@ -1301,7 +1360,7 @@ def evaluate(session: Session, experiment: RecoveryExperiment, responses: dict[s
                     "raw_track_id": raw,
                     "request_id": payload.get("request_id", ""),
                     "direction": spec["direction"],
-                    "frame_times": spec["frame_times"],
+                    "frame_times": [time for time in spec["frame_times"] if window[0] - 1e-6 <= time < window[1]],
                 }
             )
             for row in validated:
@@ -1321,11 +1380,13 @@ def evaluate(session: Session, experiment: RecoveryExperiment, responses: dict[s
             bucket = usage.setdefault(
                 target_id, {"requests": 0, "billed_frames": 0, "latency_ms": 0, "input_tokens": 0, "output_tokens": 0}
             )
-            bucket["requests"] += 1
-            bucket["billed_frames"] += spec["billed_frames"]
-            bucket["latency_ms"] += int(payload.get("latency_ms") or 0)
-            bucket["input_tokens"] += int(payload.get("input_tokens") or 0)
-            bucket["output_tokens"] += int(payload.get("output_tokens") or 0)
+            if (target_id, spec["key"]) not in counted_usage:
+                counted_usage.add((target_id, spec["key"]))
+                bucket["requests"] += 1
+                bucket["billed_frames"] += spec["billed_frames"]
+                bucket["latency_ms"] += int(payload.get("latency_ms") or 0)
+                bucket["input_tokens"] += int(payload.get("input_tokens") or 0)
+                bucket["output_tokens"] += int(payload.get("output_tokens") or 0)
             identity.setdefault(target_id, []).append(
                 {
                     "session_id": spec["session_id"],
@@ -1373,6 +1434,26 @@ def evaluate(session: Session, experiment: RecoveryExperiment, responses: dict[s
         "synthetic": synthetic,
         "accuracy_note": "Agreement between producers is not accuracy. Accuracy needs human-labeled boxes.",
     }
+
+
+def _prompt_window(entry: dict, spec: dict) -> tuple[float, float]:
+    """The times one prompt of a multi-frame object answers for.
+
+    SAM is told where the object is at each prompt, so agreement there proves nothing. Each prompt
+    starts its own stretch, which lets a loss before a later prompt still be seen.
+    """
+    times = sorted(
+        {
+            float(item["seed"]["timestamp"])
+            for item in spec["objects"]
+            if item["object_local_id"] == entry["object_local_id"] and item["target_id"] == entry["target_id"]
+        }
+    )
+    time = float(entry["seed"]["timestamp"])
+    if len(times) < 2:
+        return float("-inf"), float("inf")
+    index = times.index(time)
+    return (float("-inf") if index == 0 else time), (float("inf") if index == len(times) - 1 else times[index + 1])
 
 
 def _spec_samples(spec: dict, payload: dict) -> list:

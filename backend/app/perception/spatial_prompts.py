@@ -162,15 +162,33 @@ def build_spatial_plan(
     """One request for (SAM object id, seed) pairs. Distinct instances keep distinct ids."""
     marks: list[SpatialMark] = []
     bindings: dict[int, str] = {}
+    placed: dict[tuple[int, int], list[SpatialMark]] = {}
+    ids: dict[str, int] = {}
     for object_id, seed in seeded:
         owner = bindings.setdefault(object_id, seed.object_local_id)
         if owner != seed.object_local_id:
             raise SeedMappingError(f"SAM object {object_id} cannot stand for both {owner} and {seed.object_local_id}.")
-        marks.extend(seed_marks(seed, media, object_id, tolerance))
+        if ids.setdefault(seed.object_local_id, object_id) != object_id:
+            raise SeedMappingError(f"{seed.object_local_id} cannot use two SAM ids in one request.")
+        own = seed_marks(seed, media, object_id, tolerance)
+        frame_key = (own[0].frame_index, object_id)
+        if frame_key in placed:
+            if placed[frame_key] == own:
+                continue
+            raise SeedMappingError(f"{seed.object_local_id} has two different prompts on frame {frame_key[0]}.")
+        placed[frame_key] = own
+        marks.extend(own)
     if len(bindings) > MAX_PROMPTED_OBJECTS:
         raise SeedMappingError(f"{len(bindings)} objects exceed the limit of {MAX_PROMPTED_OBJECTS} in one request.")
-    if direction == "backward" and min(mark.frame_index for mark in marks) == 0:
+    frames = {mark.frame_index for mark in marks}
+    if direction == "backward" and min(frames) == 0:
         raise SeedMappingError("Backward tracking needs a prompt after the first submitted frame.")
+    # Tracking runs from the earliest prompt frame, so a later prompt could not start a backward pass.
+    if direction == "backward" and len(frames) > 1:
+        raise SeedMappingError(
+            "Backward tracking starts at the earliest prompt, so a later prompt would not reach the frames before it. "
+            "Send the later seed in its own request."
+        )
     marks.sort(key=lambda mark: (mark.frame_index, mark.object_id))
     return SamRequestPlan(
         kind="spatial",
@@ -183,6 +201,64 @@ def build_spatial_plan(
     )
 
 
+@dataclass
+class MultiSeedPolicy:
+    max_prompts_per_object: int = 3
+    max_prompts_per_request: int = 8
+    # Prompts closer than this show nearly the same picture.
+    min_gap_sec: float = 1.0
+    # A wider gap between usable seeds may hold an occlusion, so both sides are worth prompting.
+    coverage_gap_sec: float = 3.0
+    # An area change past this ratio, or this much aspect change, is a new view of the part.
+    appearance_change: float = 1.5
+
+
+def _appearance_changed(seed, others: list, policy: MultiSeedPolicy) -> bool:
+    if not seed.bbox:
+        return False
+    for other in others:
+        if not other.bbox:
+            continue
+        area = (seed.bbox["w"] * seed.bbox["h"]) / max(other.bbox["w"] * other.bbox["h"], 1e-9)
+        aspect = (seed.bbox["w"] / max(seed.bbox["h"], 1e-9)) / max(other.bbox["w"] / max(other.bbox["h"], 1e-9), 1e-9)
+        if max(area, 1 / max(area, 1e-9), aspect, 1 / max(aspect, 1e-9)) >= policy.appearance_change:
+            return True
+    return False
+
+
+def select_prompt_seeds(seeds: list, policy: MultiSeedPolicy | None = None) -> list:
+    """Trusted seeds of one object that each add coverage or a new view, in time order.
+
+    Only trusted seeds qualify, and a prompted SAM track cannot vouch for itself. A person's
+    seed comes first, then seeds on the far side of the widest uncovered time. Confidence is unused.
+    """
+    policy = policy or MultiSeedPolicy()
+    usable = sorted(
+        (seed for seed in seeds if seed.automatic and (seed.source != "sam_spatial" or seed.manual)),
+        key=lambda seed: (seed.trust != "human_verified", seed.timestamp, seed.seed_id),
+    )
+    if not usable:
+        return []
+    chosen = [usable[0]]
+    while len(chosen) < policy.max_prompts_per_object:
+        best = None
+        best_score = -1.0
+        for seed in usable:
+            gap = min(abs(seed.timestamp - item.timestamp) for item in chosen)
+            if gap < policy.min_gap_sec:
+                continue
+            changed = _appearance_changed(seed, chosen, policy)
+            if gap < policy.coverage_gap_sec and not changed:
+                continue
+            score = gap + (policy.coverage_gap_sec if changed else 0.0)
+            if score > best_score:
+                best, best_score = seed, score
+        if best is None:
+            break
+        chosen.append(best)
+    return sorted(chosen, key=lambda seed: seed.timestamp)
+
+
 def plan_for_strategy(
     document: AnalysisDocument,
     chunk: VideoChunk,
@@ -191,12 +267,16 @@ def plan_for_strategy(
     fps: float,
     strategy: str,
     seeds: list,
+    *,
+    multi_seed: bool = False,
+    multi_policy: MultiSeedPolicy | None = None,
 ) -> tuple[list[SamRequestPlan], list[dict]]:
     """Requests for one chunk under one prompting strategy, with a record of each object's outcome.
 
     `concept` is the existing behavior. `trusted_spatial` follows only seeds that
     land on this chunk. `hybrid` asks by noun for the objects left over. Concept
     and spatial prompts stay in separate requests, and an object gets one or the other.
+    `multi_seed` lets one object be prompted on several frames under one SAM id.
     """
     if strategy == "concept":
         return plan_prompts(document, chunk, width, height, fps), []
@@ -206,23 +286,35 @@ def plan_for_strategy(
         frame_times=list(chunk.frame_times),
         time_basis="presentation" if chunk.frame_times else "container",
     )
+    multi_policy = multi_policy or MultiSeedPolicy()
     outcomes: list[dict] = []
-    chosen: dict[str, object] = {}
-    placed: dict[str, list] = {}
+    placeable: dict[str, list] = {}
     for seed in seeds:
-        if seed.object_local_id in chosen or not seed.automatic:
+        if not seed.automatic or not chunk.time_start - 1e-6 <= seed.timestamp < chunk.time_end + 1e-6:
             continue
-        if not chunk.time_start - 1e-6 <= seed.timestamp < chunk.time_end + 1e-6:
+        if not multi_seed and seed.object_local_id in placeable:
             continue
         try:
-            placed[seed.object_local_id] = seed_marks(seed, media, 1)
+            seed_marks(seed, media, 1)
         except SeedMappingError as exc:
             outcomes.append(_outcome(seed.object_local_id, chunk, "seed_rejected", str(exc)))
             continue
-        chosen[seed.object_local_id] = seed
+        placeable.setdefault(seed.object_local_id, []).append(seed)
     plans: list[SamRequestPlan] = []
-    if chosen:
-        pairs = list(enumerate(list(chosen.values())[:MAX_PROMPTED_OBJECTS], start=1))
+    if placeable:
+        pairs: list[tuple[int, object]] = []
+        remaining = multi_policy.max_prompts_per_request if multi_seed else MAX_PROMPTED_OBJECTS
+        for object_id, local_id in enumerate(list(placeable)[:MAX_PROMPTED_OBJECTS], start=1):
+            selected = select_prompt_seeds(placeable[local_id], multi_policy) if multi_seed else placeable[local_id]
+            # The first prompt of every object goes in before any object gets a second.
+            pairs.extend((object_id, seed) for seed in selected[:1])
+        remaining -= len(pairs)
+        for object_id, local_id in enumerate(list(placeable)[:MAX_PROMPTED_OBJECTS], start=1):
+            if not multi_seed or remaining <= 0:
+                break
+            extra = select_prompt_seeds(placeable[local_id], multi_policy)[1:][:remaining]
+            pairs.extend((object_id, seed) for seed in extra)
+            remaining -= len(extra)
         plans.append(build_spatial_plan(pairs, media, "both", f"{chunk.session_id}p0"))
         for _object_id, seed in pairs:
             outcomes.append(_outcome(seed.object_local_id, chunk, "spatial", seed.explanation, trust=seed.trust))

@@ -151,3 +151,20 @@ curl -X POST localhost:8000/api/recovery/experiments/EXPERIMENT_ID/replay \
 3. Keep the frame limit low under **Limits**, then choose **Check 1 seed**. This is free and shows the billed frames.
 4. Read the plan, then choose **Run SAM**. Only this step can be billed. SAM bills at least 50 frames per request.
 5. Review the new segment in **Track history**, then accept or reject it. Accepting creates a new revision.
+
+## Finding a lost object again
+
+Tracking and detection are separate problems. After a loss, the Track history panel runs this order. Each step uses stored data until a person approves a request:
+
+1. Search everything stored past the loss: observations, concept passes, unprompted SAM tracks, and tracks the pipeline could not assign. This is free.
+2. Judge each candidate as `verified_reappearance`, `probable_reappearance`, `ambiguous_candidate`, or `rejected_candidate`. An empty search reports `no_detection`.
+3. If nothing was found, plan one bounded concept search. It has a noun phrase, never a location token, and it needs its own approval.
+4. From a verified or confirmed box, plan a new spatial request with a new SAM id. It is a separate segment of the same physical object, and no box is made up for the gap. Its results go through the usual validation, proposal, and acceptance.
+
+**What verifies a candidate:** a person, a separate producer's measurement on the same frame, or a part that is the only one with its label and the only detection on that frame, with a matching appearance from DINOv2 weights already on this machine and no hard cut since the loss. Everything else stops for a person. A nearby box, a stable box, a SAM score, or a color histogram never verifies. A different appearance alone does not reject a box, because a turned part can look different.
+
+**Limits:** one concept search and two reinitialization attempts per loss, a 5 second search window, and a 6 second clip. Going past those needs an explicit new approval (`approve_new_attempt` or `expand_search`).
+
+**Multi-frame prompts:** a target with `seed_ids`, or a pipeline run with `sam_multi_seed`, can prompt one object on several frames under one SAM id. Only trusted seeds count, and a seed must span a gap of 3 seconds or show a new view. Tracking starts from the earliest prompt, so a later prompt cannot start a backward pass. That needs its own request. Sending two prompts does not guarantee that SAM bridges a disappearance, so it is an option alongside starting a new track.
+
+The pipeline can use multi-frame prompts, but it does not search again after a loss by itself. That search belongs to Targeted Recovery, so a paid call always has its own approval.

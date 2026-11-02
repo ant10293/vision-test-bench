@@ -171,7 +171,9 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
     planned = []
     prompt_outcomes: list[dict] = []
     for chunk in chunks:
-        plans, outcomes = plan_for_strategy(document, chunk, width, height, fps, strategy, seeds)
+        plans, outcomes = plan_for_strategy(
+            document, chunk, width, height, fps, strategy, seeds, multi_seed=bool((run.config_json or {}).get("sam_multi_seed"))
+        )
         planned.append(plans)
         prompt_outcomes.extend(outcomes)
     # One unit per SAM request and one for saving, which ends when the stage completes.
@@ -308,6 +310,7 @@ async def run_video_segmentation(session: Session, run: AnalysisRun, video: Vide
         "skipped_chunks": skipped_spans,
         "coverage_incomplete": bool(skipped),
         "prompt_strategy": strategy,
+        "multi_seed": bool((run.config_json or {}).get("sam_multi_seed")),
         "prompt_kinds_sent": sent_kinds,
         "prompt_outcomes": prompt_outcomes,
         "transform": transform,

@@ -67,7 +67,7 @@ export interface PlannedRequest {
   estimated_cost_usd: number | null;
   width: number;
   height: number;
-  objects: { target_id: string; object_local_id: string; sam_object_id: number; seed: RecoverySeed; seed_frame_index: number }[];
+  objects: { target_id: string; object_local_id: string; sam_object_id: number; seed: RecoverySeed; seed_frame_index: number; prompt_role?: string }[];
 }
 
 export interface RecoveryPlan {
@@ -521,7 +521,71 @@ export interface ReacquisitionLink {
   strategy: string;
 }
 
+export interface ReappearanceCandidate {
+  candidate_id: string;
+  source: string;
+  timestamp: number;
+  bbox: BBox;
+  raw_track_id: string;
+  track_frames: number;
+  outcome: "verified_reappearance" | "probable_reappearance" | "ambiguous_candidate" | "rejected_candidate";
+  reason: string;
+  needs_confirmation: boolean;
+  appearance?: { encoder: string; score: number } | null;
+  checks: { check: string; passed: boolean | null; detail: string }[];
+}
+
+export interface ReappearanceSearch {
+  window: { start: number; end: number; limited: boolean; note: string };
+  frames_examined: number;
+  evidence_inspected: { stored_observations: number; stored_sam_requests: unknown[]; stored_sam_boxes: number; pipeline_sam_points: number };
+  candidates: ReappearanceCandidate[];
+  result: string;
+}
+
+export interface FailureDiagnosis {
+  categories: { code: string; detail: string }[];
+  last_raw_time: number | null;
+  last_supported_time: number | null;
+  first_no_detection_time: number | null;
+  raw_boxes_after_failure: number;
+  later_track_ids: string[];
+  rejected_by_validation: number;
+  detected_not_identified: number;
+  analyzed_through: number;
+  video_end: number;
+  clip_ended_early: boolean;
+  request_planned: boolean;
+  request_executed: boolean;
+}
+
+export const CANDIDATE_COLORS: Record<string, string> = {
+  verified_reappearance: "#34d399",
+  probable_reappearance: "#fbbf24",
+  ambiguous_candidate: "#fb923c",
+  rejected_candidate: "#6b7280",
+};
+
+export const WORKFLOW_LABELS: Record<string, string> = {
+  track_lost: "Track lost",
+  cached_search: "Stored evidence searched",
+  identity: "Identity",
+  concept_detection: "Concept search",
+  reinitialization: "New spatial track",
+  acceptance: "Your decision",
+};
+
+export const PROMPT_ROLE_LABELS: Record<string, string> = {
+  initial_seed: "Initial seed",
+  additional_prompt: "Additional same-object prompt",
+  reappearance_seed: "Reappearance seed",
+  manual_seed: "Manually confirmed seed",
+};
+
 export interface ReacquisitionPlanItem {
+  search: ReappearanceSearch;
+  diagnosis: FailureDiagnosis;
+  workflow: { stage: string; status: string; detail: string }[];
   failure: TrackFailure;
   status: "open" | "resolved";
   uncertain_interval: { start: number; end: number };
@@ -545,6 +609,7 @@ export interface ObjectTrackHistory {
   plans: ReacquisitionPlanItem[];
   stats: Record<string, number | null>;
   evidence_limits: string[];
+  coverage?: { analyzed_through: number; video_end: number };
 }
 
 export interface ReacquisitionData {

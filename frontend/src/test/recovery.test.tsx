@@ -508,8 +508,7 @@ describe("recovery page", () => {
 
   it("links a drawn seed to the failure and only plans a concept search", async () => {
     vi.spyOn(api, "recoveryReacquisition").mockResolvedValue(historyWith(planItem()) as never);
-    const created = vi.spyOn(api, "createRecovery").mockResolvedValue(planned as never);
-    const dry = vi.spyOn(api, "recoveryDryRun").mockResolvedValue(planned as never);
+    const plannedStep = vi.spyOn(api, "planReacquisition").mockResolvedValue(planned as never);
     vi.spyOn(api, "recoveryExperiment").mockResolvedValue(planned as never);
     const live = vi.spyOn(api, "recoveryLive");
     const { overlay } = show();
@@ -518,9 +517,76 @@ describe("recovery page", () => {
     press(overlay, 40, 40, 60, 60);
     expect(screen.getByTestId("seed-list")).toHaveTextContent("reacquires the track lost at 3.00s");
     fireEvent.click(screen.getByRole("button", { name: /Plan a concept search/ }));
-    await waitFor(() => expect(dry).toHaveBeenCalled());
-    expect((created.mock.calls[0][1] as { manual_targets: Record<string, unknown>[] }).manual_targets[0]).toMatchObject({ strategy: "concept", concept: "washer" });
+    await waitFor(() => expect(plannedStep).toHaveBeenCalled());
+    expect(plannedStep.mock.calls[0][1]).toMatchObject({ failure_id: "f1", action: "concept", concept: "washer" });
     expect(live).not.toHaveBeenCalled();
+  });
+
+  const search = (candidates: unknown[]) => ({
+    window: { start: 3, end: 8, limited: false, note: "" }, frames_examined: 12,
+    evidence_inspected: { stored_observations: 1, stored_sam_requests: [], stored_sam_boxes: 4, pipeline_sam_points: 0 },
+    candidates, result: "ambiguous_candidate",
+  });
+  const diagnosis = {
+    categories: [{ code: "B_new_track_id", detail: "Later detections exist under another id: SAM track 7." }],
+    last_raw_time: 2.9, last_supported_time: 2.5, first_no_detection_time: 3, raw_boxes_after_failure: 0, later_track_ids: ["7"], rejected_by_validation: 0,
+    detected_not_identified: 1, analyzed_through: 4, video_end: 4, clip_ended_early: false, request_planned: false, request_executed: false,
+  };
+  const workflow = [
+    { stage: "track_lost", status: "done", detail: "" },
+    { stage: "identity", status: "waiting_for_person", detail: "" },
+    { stage: "reinitialization", status: "blocked", detail: "" },
+  ];
+  const candidate = (extra: Record<string, unknown>) => ({
+    candidate_id: "c1", source: "cached_concept", timestamp: 3.6, bbox: box, raw_track_id: "7", track_frames: 9, outcome: "ambiguous_candidate",
+    reason: "More than one part could be this detection.", needs_confirmation: true, checks: [{ check: "look_alikes", passed: false, detail: "Object_2 shares this label." }], ...extra,
+  });
+
+  it("shows why a track stopped and seeks from its breakdown", async () => {
+    vi.spyOn(api, "recoveryReacquisition").mockResolvedValue(historyWith(planItem({ search: search([]), diagnosis, workflow })) as never);
+    show();
+    const panel = await screen.findByTestId("recovery-breakdown");
+    expect(within(panel).getByTestId("failure-category")).toHaveTextContent("SAM track 7");
+    expect(within(panel).getByTestId("reacquisition-workflow")).toHaveTextContent("Waiting for person");
+    fireEvent.click(within(panel).getByRole("button", { name: "2.50s" }));
+    expect(useInspector.getState().time).toBe(2.5);
+    expect(within(panel).getByText(/Nothing stored shows this object/)).toBeInTheDocument();
+  });
+
+  it("marks candidates on the lane and sends a confirmation only when a person chooses one", async () => {
+    vi.spyOn(api, "recoveryReacquisition").mockResolvedValue(historyWith(planItem({ search: search([candidate({})]), diagnosis, workflow })) as never);
+    const plannedStep = vi.spyOn(api, "planReacquisition").mockResolvedValue(planned as never);
+    vi.spyOn(api, "recoveryExperiment").mockResolvedValue(planned as never);
+    const live = vi.spyOn(api, "recoveryLive");
+    show();
+    const row = await screen.findByTestId("reappearance-candidate");
+    expect(within(row).getByText("Ambiguous candidate")).toBeInTheDocument();
+    expect(plannedStep).not.toHaveBeenCalled();
+    expect(screen.getByTestId("history-lane-Object_1").querySelector('[data-kind="ambiguous_candidate"]')).not.toBeNull();
+    fireEvent.click(within(row).getByRole("button", { name: /This is the object: plan new track/ }));
+    await waitFor(() => expect(plannedStep).toHaveBeenCalled());
+    expect(plannedStep.mock.calls[0][1]).toMatchObject({ failure_id: "f1", candidate_id: "c1", confirm: true });
+    expect(live).not.toHaveBeenCalled();
+  });
+
+  it("offers a verified candidate without a confirmation, and no way to use a rejected one", async () => {
+    const list = [candidate({ outcome: "verified_reappearance", needs_confirmation: false }), candidate({ candidate_id: "c2", outcome: "rejected_candidate", needs_confirmation: false })];
+    vi.spyOn(api, "recoveryReacquisition").mockResolvedValue(historyWith(planItem({ search: search(list), diagnosis, workflow })) as never);
+    const plannedStep = vi.spyOn(api, "planReacquisition").mockResolvedValue(planned as never);
+    vi.spyOn(api, "recoveryExperiment").mockResolvedValue(planned as never);
+    show();
+    const rows = await screen.findAllByTestId("reappearance-candidate");
+    expect(within(rows[1]).queryByRole("button", { name: /plan new track/i })).toBeNull();
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Plan new track (free)" }));
+    await waitFor(() => expect(plannedStep.mock.calls[0][1]).toMatchObject({ candidate_id: "c1", confirm: false }));
+  });
+
+  it("says when SAM was never asked about the rest of the video", async () => {
+    const history = historyWith(planItem({ search: search([]), diagnosis, workflow }));
+    (history.objects[0] as Record<string, unknown>).coverage = { analyzed_through: 19, video_end: 21.9 };
+    vi.spyOn(api, "recoveryReacquisition").mockResolvedValue(history as never);
+    show();
+    expect(await screen.findByTestId("coverage-note")).toHaveTextContent("through 19.00s");
   });
 
   it("offers no reacquisition controls once a failure is resolved, and keeps the gap", async () => {

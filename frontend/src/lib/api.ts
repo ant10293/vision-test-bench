@@ -152,6 +152,8 @@ export const api = {
   restoreRecoveryProblem: (runId: string, targetId: string) =>
     request<RecoveryCandidates>(`/api/runs/${runId}/recovery/dismissals/${targetId}`, { method: "DELETE" }),
   recoveryReacquisition: (runId: string) => request<ReacquisitionData>(`/api/runs/${runId}/recovery/reacquisition`),
+  planReacquisition: (runId: string, payload: Record<string, unknown>) =>
+    request<RecoveryExperiment>(`/api/runs/${runId}/recovery/reacquisition/plan`, { method: "POST", body: JSON.stringify(payload) }),
   recoveryExperiments: (runId: string) => request<RecoveryExperiment[]>(`/api/runs/${runId}/recovery/experiments`),
   recoveryExperiment: (id: string) => request<RecoveryExperiment>(`/api/recovery/experiments/${id}`),
   recoveryDiagnostics: (id: string) => request<RecoveryDiagnostics>(`/api/recovery/experiments/${id}/diagnostics`),

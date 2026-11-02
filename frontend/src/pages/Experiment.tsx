@@ -32,6 +32,7 @@ export function ExperimentPage() {
   const [semanticMode, setSemanticMode] = useState("combined");
   const [segmentation, setSegmentation] = useState("boxes_only");
   const [promptStrategy, setPromptStrategy] = useState("concept");
+  const [multiSeed, setMultiSeed] = useState(false);
   const [temperature, setTemperature] = useState("");
   const [reasoning, setReasoning] = useState("");
   const [transcribe, setTranscribe] = useState(false);
@@ -74,6 +75,7 @@ export function ExperimentPage() {
         segmentation_mode: segmentation,
         segmentation_model_id: segmentation === "sam" || segmentation === "sam_video" ? "sam-3.1" : "",
         sam_prompt_strategy: segmentation === "sam_video" ? promptStrategy : "concept",
+        sam_multi_seed: segmentation === "sam_video" && promptStrategy !== "concept" && multiSeed,
         temperature: codexRun || temperature === "" ? null : Number(temperature),
         reasoning_effort: effort || null,
         prompt_key: "scene",
@@ -257,6 +259,12 @@ export function ExperimentPage() {
                   ? "SAM follows boxes that a person drew or that two producers agree on. An object with no such box in a chunk stays unobserved, and no name is sent."
                   : "SAM follows verified boxes where they exist. Objects without one are looked up by name in a separate request."}
             </span>
+            {promptStrategy !== "concept" && (
+              <label className="mt-1 flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={multiSeed} onChange={(event) => setMultiSeed(event.target.checked)} />
+                Prompt one object on several frames when trusted boxes add a new view or span a gap
+              </label>
+            )}
           </Field>
         )}
         {segmentation === "sam_video" && (

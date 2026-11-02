@@ -115,6 +115,7 @@ def create_run(session: Session, payload: dict, enqueue: bool = True) -> Analysi
         "sam_max_frames": int(payload.get("sam_max_frames") or 1800),
         "sam_chunk_frames": int(payload.get("sam_chunk_frames") or 300),
         "sam_prompt_strategy": _prompt_strategy(payload),
+        "sam_multi_seed": bool(payload.get("sam_multi_seed")),
         "max_frames": payload.get("max_frames") or 48,
         "max_retries": payload.get("max_retries") or 2,
         "cost_ceiling_usd": payload.get("cost_ceiling_usd"),
