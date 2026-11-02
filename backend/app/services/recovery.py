@@ -1057,7 +1057,7 @@ async def _send_one(session, experiment, run, spec, row, adapter, source, limits
         run,
         call,
         ProviderResponse(
-            text="",
+            text=result.text,
             raw={
                 "id": result.request_id,
                 "model": MODEL_ID,

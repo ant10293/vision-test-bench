@@ -504,6 +504,8 @@ def test_live_then_replay_gives_the_same_rows_with_no_new_calls(client, tmp_path
     after = _counts()
     assert after["revisions"] == before["revisions"] and after["stages"] == before["stages"] and after["jobs"] == before["jobs"]
     assert after["requests"] == before["requests"] + 2
+    logged = [row for row in client.get(f"/api/runs/{run_id}/requests").json() if row["stage"] == "targeted_recovery"]
+    assert len(logged) == 2 and all(row["response_text"].startswith("<") for row in logged)
     client.get(f"/api/runs/{run_id}").json()
     from app.db import SessionLocal
     from app.models.runs import AnalysisRun
