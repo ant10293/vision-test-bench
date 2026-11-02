@@ -10,7 +10,7 @@ from app.db import get_session
 from app.models.recovery import RecoveryExperiment
 from app.models.runs import AnalysisRun
 from app.pipeline.lineage import load_lineage
-from app.services import recovery
+from app.services import recovery, recovery_diagnostics
 
 router = APIRouter(prefix="/api")
 
@@ -77,6 +77,11 @@ def create(run_id: str, payload: dict, session: Session = Depends(get_session)) 
 @router.get("/recovery/experiments/{experiment_id}")
 def read(experiment_id: str, session: Session = Depends(get_session)) -> dict:
     return recovery.results(session, _experiment(session, experiment_id))
+
+
+@router.get("/recovery/experiments/{experiment_id}/diagnostics")
+def diagnostics(experiment_id: str, session: Session = Depends(get_session)) -> dict:
+    return _guard(lambda: recovery_diagnostics.diagnostics(session, _experiment(session, experiment_id)))
 
 
 @router.patch("/recovery/experiments/{experiment_id}/seeds")

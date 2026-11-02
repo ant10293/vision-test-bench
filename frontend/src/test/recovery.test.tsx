@@ -35,7 +35,7 @@ const proposal = {
   ],
 } as unknown as RecoveryProposal;
 
-const none = { vlm: false, tracker: false, sam: false, recovered: false, canonical: false };
+const none = { vlm: false, tracker: false, sam: false, recovered: false, raw: false, canonical: false };
 
 describe("recovery layers", () => {
   it("draws only the selected layer", () => {
@@ -74,7 +74,18 @@ describe("recovery layers", () => {
   });
 
   it("does not hold a box past its time", () => {
-    expect(layerBoxes(bundle, [proposal], 5, { vlm: true, tracker: true, sam: true, recovered: true, canonical: true })).toEqual([]);
+    expect(layerBoxes(bundle, [proposal], 5, { vlm: true, tracker: true, sam: true, recovered: true, raw: true, canonical: true })).toEqual([]);
+  });
+
+  it("draws every raw SAM box, keeps two tracks apart, and marks unassigned ones", () => {
+    const raw = (track: string, object: string, status: string) => ({
+      request_key: "k", raw_track_id: track, object_local_id: object, frame_index: 0, timestamp: 1, bbox: box, pixels: [], confidence: 0.2, has_mask: true, status,
+    });
+    const rows = [raw("1", "Object_1", "associated"), raw("7", "", "unassigned"), { ...raw("8", "", "frame_out_of_range"), timestamp: null, bbox: null }];
+    expect(layerBoxes(bundle, [], 1, none, rows)).toEqual([]);
+    const shown = layerBoxes(bundle, [], 1, { ...none, raw: true }, rows);
+    expect(shown.map((item) => [item.objectId, item.dashed])).toEqual([["Object_1", false], ["SAM track 7", true]]);
+    expect(stepTimes({ frames: [], observations: [] }, [], rows)).toEqual([1]);
   });
 
   it("exposes provenance on a recovered box and labels the score uncalibrated", () => {
@@ -166,6 +177,7 @@ describe("recovery page", () => {
     useInspector.getState().setTime(1);
     vi.spyOn(api, "recoveryCandidates").mockResolvedValue({ run_id: "run-1", revision_id: "r", targets: [target], seeds: [], seed_counts: {}, objects: [], price_per_frame_usd: null } as never);
     vi.spyOn(api, "recoveryExperiments").mockResolvedValue([]);
+    vi.spyOn(api, "recoveryDiagnostics").mockResolvedValue({ experiment_id: "", generation: 0, note: "", requests: [] });
   });
   afterEach(() => {
     cleanup();
@@ -405,6 +417,33 @@ describe("recovery page", () => {
     fireEvent.click(row);
     await waitFor(() => expect(read).toHaveBeenCalledWith("experiment-1"));
     await waitFor(() => expect(row).toHaveAttribute("aria-current", "true"));
+  });
+
+  it("shows what a request returned and where its boxes went", async () => {
+    const done = { ...planned, created_at: "2026-11-01T19:42:00", status: "completed", mode: "live", generation: 1 };
+    vi.spyOn(api, "recoveryExperiments").mockResolvedValue([done] as never);
+    vi.spyOn(api, "recoveryExperiment").mockResolvedValue(done as never);
+    vi.spyOn(api, "recoveryDiagnostics").mockResolvedValue({
+      experiment_id: "experiment-1",
+      generation: 1,
+      note: "A returned box shows SAM produced output.",
+      requests: [{
+        key: "k", verdict: "no_assignment", message: "SAM returned usable boxes and none belong to a prompted object.", boxes_returned: true, synthetic: false,
+        request: { status: "completed", submission: "completed", source: "live", provider_request_id: "resp_1", latency_ms: 2000, error: "" },
+        prompt: "<0f>1<|box|>", direction: "forward", planned_frames: 10, reachable_frames: 10, frames_with_boxes: 4,
+        parsed: { text_chars: 9, frame_lines: 4, empty_frame_lines: 0, box_tokens: 4, dropped_tokens: 0, unparsed_lines: 0, unparsed_samples: [] },
+        funnel: { box_tokens: 4, parsed: 4, usable: 4, unassigned: 4, assigned: 0, supported: 0, provisional: 0, conflicting: 0, rejected: 0 },
+        tracks: [{ raw_track_id: "7", prompted: false, object_local_id: "", association: "unassigned", association_note: "", boxes: 4, first_time: 1, last_time: 2, first_confidence: 0.5, mean_confidence: 0.4, last_confidence: 0.3, broke: null }],
+        missing_frames: [], failed_checks: {}, findings: [{ code: "unprompted_track", severity: "warning", message: "SAM track 7 was not prompted." }], boxes: [],
+      }],
+    } as never);
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: /Object 1 · 2.0–4.0s/ }));
+    const panel = await screen.findByTestId("sam-diagnostics");
+    expect(within(panel).getByText(/none belong to a prompted object/)).toBeInTheDocument();
+    expect(within(panel).getByText(/SAM track 7 was not prompted/)).toBeInTheDocument();
+    expect(within(panel).getByText(/no object/)).toHaveTextContent("4 boxes");
+    expect(screen.getByRole("button", { name: "All SAM output" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("keeps limits in the seeds panel, apart from earlier runs", () => {

@@ -2,7 +2,7 @@ import { humanize } from "./humanize";
 import type { BBox, Bundle } from "./types";
 
 export type RecoveryOutcome = "supported" | "provisional" | "conflicting" | "rejected";
-export type RecoveryLayer = "vlm" | "tracker" | "sam" | "recovered" | "canonical";
+export type RecoveryLayer = "vlm" | "tracker" | "sam" | "recovered" | "raw" | "canonical";
 
 export interface RecoverySeed {
   seed_id: string;
@@ -158,6 +158,8 @@ export interface LayerBox {
   key: string;
   layer: RecoveryLayer;
   objectId: string;
+  /** Keeps tracks apart that share an object, so each draws its own box. */
+  group?: string;
   bbox: BBox;
   timestamp: number;
   /** Tells apart a directly observed box from an estimate or a conflict. */
@@ -170,6 +172,7 @@ export const LAYERS: { key: RecoveryLayer; label: string; color: string }[] = [
   { key: "tracker", label: "Tracker", color: "#7dcea0" },
   { key: "sam", label: "Original SAM", color: "#d2a24c" },
   { key: "recovered", label: "Recovered SAM", color: "#e879f9" },
+  { key: "raw", label: "All SAM output", color: "#22d3ee" },
   { key: "canonical", label: "Final canonical", color: "#f5f5f5" },
 ];
 
@@ -226,7 +229,7 @@ function nearest(boxes: LayerBox[], time: number): LayerBox[] {
   for (const box of boxes) {
     const gap = Math.abs(box.timestamp - time);
     if (gap > NEAR_SEC) continue;
-    const key = `${box.layer}:${box.objectId}`;
+    const key = `${box.layer}:${box.group ?? box.objectId}`;
     const current = best.get(key);
     if (!current || gap < Math.abs(current.timestamp - time)) best.set(key, box);
   }
@@ -239,6 +242,7 @@ export function layerBoxes(
   proposals: RecoveryProposal[],
   time: number,
   layers: Record<RecoveryLayer, boolean>,
+  raw: RawSamBox[] = [],
 ): LayerBox[] {
   const stored: Row[] = [...bundle.observations, ...(bundle.raw_observations?.rows ?? [])];
   const boxes: LayerBox[] = [];
@@ -305,6 +309,25 @@ export function layerBoxes(
         });
       });
     }
+  }
+  if (layers.raw) {
+    raw.forEach((box, index) => {
+      if (!box.bbox || box.timestamp == null) return;
+      boxes.push({
+        key: `raw-${index}`,
+        layer: "raw",
+        objectId: box.object_local_id || `SAM track ${box.raw_track_id}`,
+        group: `${box.request_key}:${box.raw_track_id}`,
+        bbox: box.bbox,
+        timestamp: box.timestamp,
+        dashed: box.status !== "associated",
+        details: [
+          `SAM track ${box.raw_track_id}`,
+          `status ${box.status}`,
+          box.confidence != null ? `SAM score ${box.confidence.toFixed(2)}, uncalibrated` : "",
+        ].filter(Boolean),
+      });
+    });
   }
   return nearest(boxes, time);
 }
@@ -404,12 +427,77 @@ export function laneSpans(
   ];
 }
 
+export interface RawSamBox {
+  request_key: string;
+  raw_track_id: string;
+  object_local_id: string;
+  frame_index: number;
+  timestamp: number | null;
+  bbox: BBox | null;
+  pixels: number[];
+  confidence: number | null;
+  has_mask: boolean;
+  status: string;
+}
+
+export interface SamTrackDiagnostics {
+  raw_track_id: string;
+  prompted: boolean;
+  object_local_id: string;
+  association: string;
+  association_note: string;
+  boxes: number;
+  first_time: number | null;
+  last_time: number | null;
+  first_confidence: number | null;
+  mean_confidence: number | null;
+  last_confidence: number | null;
+  broke: { timestamp: number; detail: string } | null;
+}
+
+export interface SamRequestDiagnostics {
+  key: string;
+  verdict: string;
+  message: string;
+  boxes_returned: boolean;
+  synthetic: boolean;
+  request: { status: string; submission: string; source: string; provider_request_id: string; latency_ms: number; error: string };
+  prompt: string;
+  direction: string;
+  planned_frames: number;
+  reachable_frames: number;
+  frames_with_boxes: number;
+  parsed: {
+    text_chars: number;
+    frame_lines: number;
+    empty_frame_lines: number;
+    box_tokens: number;
+    dropped_tokens: number;
+    unparsed_lines: number;
+    unparsed_samples: string[];
+  };
+  funnel: Record<"box_tokens" | "parsed" | "usable" | "unassigned" | "assigned" | "supported" | "provisional" | "conflicting" | "rejected", number>;
+  tracks: SamTrackDiagnostics[];
+  missing_frames: { start: number; end: number; frames: number }[];
+  failed_checks: Record<string, number>;
+  findings: { code: string; severity: string; message: string }[];
+  boxes: RawSamBox[];
+}
+
+export interface RecoveryDiagnostics {
+  experiment_id: string;
+  generation: number;
+  note: string;
+  requests: SamRequestDiagnostics[];
+}
+
 /** The moments worth stopping on: sampled frames, stored boxes, and recovered boxes inside their interval. */
-export function stepTimes(bundle: Pick<Bundle, "frames" | "observations">, proposals: RecoveryProposal[]): number[] {
+export function stepTimes(bundle: Pick<Bundle, "frames" | "observations">, proposals: RecoveryProposal[], raw: RawSamBox[] = []): number[] {
   const times = [
     ...bundle.frames.map((frame) => frame.timestamp),
     ...bundle.observations.filter((row) => row.bbox).map((row) => row.timestamp),
     ...proposals.flatMap((proposal) => proposal.rows.filter((row) => !row.context).map((row) => row.timestamp)),
+    ...raw.flatMap((box) => (box.bbox && box.timestamp != null ? [box.timestamp] : [])),
   ].sort((a, b) => a - b);
   return times.filter((time, index) => index === 0 || time - times[index - 1] > 0.001);
 }

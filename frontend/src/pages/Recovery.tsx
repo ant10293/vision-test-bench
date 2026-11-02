@@ -21,6 +21,8 @@ import {
   stepTimes,
   trackRange,
   usage,
+  type RawSamBox,
+  type RecoveryDiagnostics,
   type RecoveryExperiment,
   type RecoveryLayer,
   type RecoveryProposal,
@@ -33,7 +35,7 @@ import { useInspector } from "../stores/ui";
 
 type PointTool = "none" | "positive" | "negative";
 
-const START_LAYERS: Record<RecoveryLayer, boolean> = { vlm: true, tracker: false, sam: false, recovered: true, canonical: true };
+const START_LAYERS: Record<RecoveryLayer, boolean> = { vlm: true, tracker: false, sam: false, recovered: true, raw: false, canonical: true };
 const RUNNING_POLL_MS = 1500;
 const NEAR_SEC = 0.45;
 const INSPECT_LABEL_SIZE = 14;
@@ -131,8 +133,14 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
   const objectIds = useMemo(() => new Set(bundle.objects.map((item) => item.local_id)), [bundle.objects]);
   const draftsKey = JSON.stringify([drafts, maxRequests, maxFrames, maxBilled, budget]);
   const plan = data?.plan && plannedKey === draftsKey ? data.plan : null;
-  const boxes = layerBoxes(bundle, proposals, time, layers);
-  const steps = useMemo(() => stepTimes(bundle, proposals), [bundle, proposals]);
+  const diagnostics = useQuery({
+    queryKey: ["recovery-diagnostics", experimentId, data?.generation, data?.status, data?.requests.length],
+    queryFn: () => api.recoveryDiagnostics(experimentId),
+    enabled: Boolean(data && (data.generation > 0 || data.requests.length > 0) && data.status !== "running"),
+  });
+  const rawBoxes = useMemo<RawSamBox[]>(() => diagnostics.data?.requests.flatMap((item) => item.boxes) ?? [], [diagnostics.data]);
+  const boxes = layerBoxes(bundle, proposals, time, layers, rawBoxes);
+  const steps = useMemo(() => stepTimes(bundle, proposals, layers.raw ? rawBoxes : []), [bundle, proposals, layers.raw, rawBoxes]);
 
   function step(delta: 1 | -1) {
     const next = nextStep(steps, useInspector.getState().time, delta);
@@ -348,6 +356,7 @@ function RecoveryWorkspace({ bundle }: { bundle: Bundle }) {
             />
           </SeedList>
           <ResultsPanel data={data} proposals={proposals} provisional={provisional} onProvisional={setProvisional} pending={act.isPending} onDecide={decide} onSeek={seek} />
+          {diagnostics.data && diagnostics.data.requests.length > 0 && <SamDiagnostics data={diagnostics.data} onSeek={seek} />}
           <ProblemList
             targets={targets}
             dismissed={dismissed}
@@ -788,6 +797,93 @@ function RunPanel({
       )}
       {error && <p className="text-xs text-[var(--rose)]" role="alert">{error}</p>}
     </div>
+  );
+}
+
+const VERDICT_COLORS: Record<string, string> = {
+  boxes_returned: "var(--muted)",
+  not_run: "var(--muted)",
+};
+
+function SamDiagnostics({ data, onSeek }: { data: RecoveryDiagnostics; onSeek: (time: number) => void }) {
+  return (
+    <section className="panel space-y-2 p-4 text-sm" data-testid="sam-diagnostics">
+      <h2 className="text-base">SAM requests</h2>
+      <p className="text-xs text-[var(--muted)]">{data.note} Turn on the All SAM output layer to see every box on the frame.</p>
+      {data.requests.map((request) => {
+        const funnel = request.funnel;
+        const steps: [string, number][] = [
+          ["Returned", funnel.box_tokens],
+          ["Parsed", funnel.parsed],
+          ["Usable", funnel.usable],
+          ["Unassigned", funnel.unassigned],
+          ["Assigned", funnel.assigned],
+          ["Supported", funnel.supported],
+          ["Provisional", funnel.provisional],
+          ["Conflicting", funnel.conflicting],
+          ["Rejected", funnel.rejected],
+        ];
+        return (
+          <div key={request.key} className="space-y-2 rounded border border-[var(--line)] p-2 text-xs" data-testid="sam-request">
+            <p className="font-medium" style={{ color: VERDICT_COLORS[request.verdict] ?? "var(--amber)" }}>{request.message}</p>
+            {request.synthetic && <p className="text-[var(--amber)]">This response is synthetic.</p>}
+            <p className="text-[var(--muted)]">
+              {request.frames_with_boxes} of {request.reachable_frames} reachable frames have a box · {request.direction} · {request.planned_frames} planned frames
+              {request.request.source ? ` · ${request.request.source}` : ""}
+              {request.request.latency_ms ? ` · ${(request.request.latency_ms / 1000).toFixed(1)}s` : ""}
+              {request.request.provider_request_id ? ` · ${request.request.provider_request_id}` : ""}
+            </p>
+            <dl className="flex flex-wrap gap-x-4 gap-y-1">
+              {steps.map(([label, value]) => (
+                <div key={label}><dt className="text-[var(--muted)]">{label}</dt><dd className="mono">{value}</dd></div>
+              ))}
+            </dl>
+            {request.tracks.length > 0 && (
+              <ul className="space-y-1">
+                {request.tracks.map((track) => (
+                  <li key={track.raw_track_id}>
+                    SAM track {track.raw_track_id}
+                    {" · "}{track.object_local_id ? humanize(track.object_local_id) : "no object"}
+                    {" · "}{humanize(track.association)}
+                    {" · "}{track.boxes} boxes
+                    {track.first_time != null && track.last_time != null && ` · ${track.first_time.toFixed(2)}–${track.last_time.toFixed(2)}s`}
+                    {track.mean_confidence != null && ` · score ${track.first_confidence?.toFixed(2)} first, ${track.mean_confidence.toFixed(2)} mean, ${track.last_confidence?.toFixed(2)} last (uncalibrated)`}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {request.findings.length > 0 && (
+              <ul className="space-y-1">
+                {request.findings.map((finding, index) => (
+                  <li key={index} style={{ color: finding.severity === "error" ? "var(--rose)" : "var(--amber)" }}>{finding.message}</li>
+                ))}
+              </ul>
+            )}
+            {request.tracks.flatMap((track) => (track.broke ? [track.broke] : [])).map((broke) => (
+              <button key={broke.timestamp} className="btn" onClick={() => onSeek(broke.timestamp)}>Go to the break at {broke.timestamp.toFixed(2)}s</button>
+            ))}
+            {request.missing_frames.slice(0, 3).map((gap) => (
+              <button key={gap.start} className="block text-[var(--muted)]" onClick={() => onSeek(gap.start)}>{gap.start.toFixed(2)}–{gap.end.toFixed(2)}s has no box from SAM</button>
+            ))}
+            {Object.keys(request.failed_checks).length > 0 && (
+              <p className="text-[var(--muted)]">
+                Failed checks: {Object.entries(request.failed_checks).map(([name, count]) => `${humanize(name)} ${count}`).join(" · ")}
+              </p>
+            )}
+            {request.parsed.unparsed_samples.length > 0 && (
+              <details>
+                <summary className="cursor-pointer text-[var(--muted)]">Lines the parser skipped</summary>
+                <pre className="mono mt-1 overflow-x-auto">{request.parsed.unparsed_samples.join("\n")}</pre>
+              </details>
+            )}
+            <details>
+              <summary className="cursor-pointer text-[var(--muted)]">Prompt</summary>
+              <pre className="mono mt-1 overflow-x-auto">{request.prompt}</pre>
+            </details>
+          </div>
+        );
+      })}
+    </section>
   );
 }
 

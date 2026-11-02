@@ -997,3 +997,98 @@ def test_hybrid_records_each_prompt_kind_separately(client, tmp_path, monkeypatc
     for call in fake.calls:
         assert ("<|" in call["prompt"]) == (call["kind"] == "spatial")
     assert not any(call["kind"] == "spatial" and call["direction"] is None for call in fake.calls)
+
+
+# ---- Request diagnostics ----
+
+
+def _diagnosed(client, tmp_path, monkeypatch, answer) -> dict:
+    run_id, _revision, _times = _setup(client, tmp_path)
+    fake = _install(monkeypatch, FakeSam(answer=answer))
+    experiment = _create(client, run_id, limits={"max_requests": 4})
+    _live(client, experiment)
+    calls = len(fake.calls)
+    response = client.get(f"/api/recovery/experiments/{experiment['id']}/diagnostics")
+    assert response.status_code == 200, response.text
+    assert len(fake.calls) == calls
+    return response.json()
+
+
+def test_diagnostics_before_any_run_send_nothing(client, tmp_path, monkeypatch):
+    run_id, _revision, _times = _setup(client, tmp_path)
+    fake = _install(monkeypatch, FakeSam(answer=_answer()))
+    experiment = _create(client, run_id, limits={"max_requests": 4})
+    client.post(f"/api/recovery/experiments/{experiment['id']}/dry-run")
+    data = client.get(f"/api/recovery/experiments/{experiment['id']}/diagnostics").json()
+    assert {item["verdict"] for item in data["requests"]} == {"not_run"}
+    assert fake.calls == []
+
+
+def test_diagnostics_say_when_boxes_came_back_without_claiming_they_are_right(client, tmp_path, monkeypatch):
+    data = _diagnosed(client, tmp_path, monkeypatch, _answer())
+    request = data["requests"][0]
+    assert request["verdict"] == "boxes_returned" and request["boxes_returned"] is True
+    assert "does not show" in request["message"]
+    funnel = request["funnel"]
+    assert funnel["box_tokens"] == funnel["parsed"] == funnel["usable"] == funnel["assigned"] > 0
+    assert request["tracks"][0]["association"] == "associated"
+    assert all("mask_data" not in box and "mask_payload" not in box for box in request["boxes"])
+
+
+def test_diagnostics_name_an_empty_response(client, tmp_path, monkeypatch):
+    request = _diagnosed(client, tmp_path, monkeypatch, lambda *_args: "")["requests"][0]
+    assert request["verdict"] == "empty_output" and request["boxes_returned"] is False
+    assert any(item["code"] == "prompted_track_missing" for item in request["findings"])
+
+
+def test_diagnostics_tell_no_detection_from_a_parse_failure(client, tmp_path, monkeypatch):
+    request = _diagnosed(client, tmp_path, monkeypatch, lambda *_args: "<0f>\n<1f>")["requests"][0]
+    assert request["verdict"] == "no_boxes" and request["parsed"]["empty_frame_lines"] == 2
+
+
+def test_diagnostics_count_lines_and_tokens_the_parser_skipped(client, tmp_path, monkeypatch):
+    # A box with no mask is dropped by the parser, and a line with no frame mark is skipped.
+    answer = lambda *_args: "nonsense\n<0f>1<|box;x1=1;y1=1;x2=2;y2=2;w=640;h=360|>"  # noqa: E731
+    request = _diagnosed(client, tmp_path, monkeypatch, answer)["requests"][0]
+    assert request["verdict"] == "parse_failure"
+    assert request["parsed"]["unparsed_lines"] == 1 and request["parsed"]["dropped_tokens"] == 1
+    assert request["parsed"]["unparsed_samples"][0] == "nonsense"
+    assert {"unparsed_lines", "dropped_tokens"} <= {item["code"] for item in request["findings"]}
+
+
+def test_diagnostics_keep_boxes_from_a_frame_outside_the_clip(client, tmp_path, monkeypatch):
+    answer = lambda *_args: "<9999f>1<|box;x1=1;y1=1;x2=2;y2=2;w=640;h=360|><|mask;data=1,1,!A|>"  # noqa: E731
+    request = _diagnosed(client, tmp_path, monkeypatch, answer)["requests"][0]
+    assert request["verdict"] == "no_usable_boxes"
+    assert request["boxes"][0]["status"] == "frame_out_of_range" and request["boxes"][0]["timestamp"] is None
+
+
+def test_diagnostics_expose_unassigned_tracks_the_proposal_leaves_out(client, tmp_path, monkeypatch):
+    base = _answer()
+
+    def answer(prompt, direction):
+        return base(prompt, direction).replace("<|mask;data=1,1,!A|>", "<|mask;data=1,1,!A|>,7<|box;x1=1;y1=1;x2=40;y2=40;w=640;h=360;c=0.3|><|mask;data=1,1,!A|>")
+
+    request = _diagnosed(client, tmp_path, monkeypatch, answer)["requests"][0]
+    extra = [box for box in request["boxes"] if box["raw_track_id"] == "7"]
+    assert extra and all(box["status"] == "unassigned" and box["object_local_id"] == "" for box in extra)
+    assert request["funnel"]["unassigned"] == len(extra)
+    assert request["funnel"]["assigned"] == request["funnel"]["usable"] - len(extra)
+    assert any(item["code"] == "unprompted_track" for item in request["findings"])
+    track = next(item for item in request["tracks"] if item["raw_track_id"] == "7")
+    assert track["prompted"] is False and track["boxes"] == len(extra)
+
+
+def test_diagnostics_report_all_unassigned_output(client, tmp_path, monkeypatch):
+    answer = lambda *_args: "<0f>7<|box;x1=1;y1=1;x2=40;y2=40;w=640;h=360;c=0.3|><|mask;data=1,1,!A|>"  # noqa: E731
+    request = _diagnosed(client, tmp_path, monkeypatch, answer)["requests"][0]
+    assert request["verdict"] == "no_assignment"
+
+
+def test_diagnostics_report_a_failed_request(client, tmp_path, monkeypatch):
+    run_id, _revision, _times = _setup(client, tmp_path)
+    _install(monkeypatch, FakeSam(error=RuntimeError("provider said no")))
+    experiment = _create(client, run_id, limits={"max_requests": 4})
+    _live(client, experiment)
+    request = client.get(f"/api/recovery/experiments/{experiment['id']}/diagnostics").json()["requests"][0]
+    assert request["verdict"] == "request_failed" and "provider said no" in request["message"]
