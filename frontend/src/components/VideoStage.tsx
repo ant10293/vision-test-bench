@@ -126,7 +126,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
   const vlmBoxes = overlay ? overlayObservations(bundle.observations, time, "vlm").filter((item) => !trackedIds.has(item.object_local_id)) : [];
   const inferredBoxes = overlay ? overlayObservations(bundle.observations, time, "inferred") : [];
   const conflictBoxes = overlay && layers.conflicts ? overlayObservations(bundle.observations, time, "conflict") : [];
-  const dropBoxes = overlay && layers.drops ? decisionsNear(bundle.box_decisions?.rows ?? [], time).filter((row) => row.bbox) : [];
+  const dropBoxes = overlay && layers.drops ? decisionsNear(bundle.box_decisions?.rows ?? [], time).filter((row) => row.bbox && row.outcome !== "kept") : [];
   const stills = frameObjectStills(bundle, time);
   const allPoints = bundle.tracks?.points ?? [];
   const trackHits = tracksAt(allPoints, time);
@@ -463,6 +463,7 @@ export function VideoStage({ bundle }: { bundle: Bundle }) {
 
 function coverageLabel(state: string) {
   if (state === "observed") return "directly observed";
+  if (state === "unmeasured") return "video-file box, not measured on a frame";
   if (state === "inferred") return "inferred between observations";
   if (state === "absent") return "explicitly absent";
   if (state === "conflict") return "model and SAM disagree";

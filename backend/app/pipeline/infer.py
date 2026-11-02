@@ -24,10 +24,13 @@ from app.pipeline.contracts import (
     validate_output,
 )
 from app.pipeline.frame_boxes import (
+    FRAME_BOX_ATTEMPTS,
     FRAME_BOX_WINDOW,
+    answered_keys,
     frame_box_prompt,
     frame_box_rejection,
     frame_box_schema,
+    mark_unmeasured,
     merge_frame_boxes,
     parse_frame_boxes,
 )
@@ -584,8 +587,10 @@ async def _reground_video_boxes(
     roster = "\n".join(f"{obj.local_id}: {obj.label}" for obj in pending)
     system = frame_box_prompt(width, height)
     merged = document
-    replaced = False
-    for window in _windows(selected, FRAME_BOX_WINDOW, overlap=0):
+    measured: set[tuple[str, float]] = set()
+    failed: list[tuple[float, float, str]] = []
+    windows = _windows(selected, FRAME_BOX_WINDOW, overlap=0)
+    for index, window in enumerate(windows):
         stamps = ", ".join(f"{_frame_time(frame):.3f}" for frame in window)
         user = (
             f"Objects:\n{roster}\n\n"
@@ -593,44 +598,63 @@ async def _reground_video_boxes(
             "Use those times on the observations. Box only the named parts."
         )
         try:
-            fresh = await _call(
-                session,
-                run,
-                stage,
-                system,
-                user,
-                window,
-                video,
-                frame_box_schema(sorted(roster_ids)),
-                attach_video=False,
-                modality="sampled_frames",
-                parser=lambda text, frame_w=width, frame_h=height: parse_frame_boxes(text, frame_w, frame_h),
+            fresh, reason = await _measure_window(
+                session, run, stage, system, user, window, video, roster_ids, width, height
             )
-        except SchemaContractError:
-            raise
         except SchemaContractError:
             raise
         except Exception:
             logger.exception("frame box pass failed; the video boxes were kept")
-            _note_unmeasured(coverage, window, "the call failed")
+            for rest in windows[index:]:
+                failed.append(_note_unmeasured(coverage, rest, "the call failed"))
             break
-        reason = frame_box_rejection(fresh.observations, width, height, roster_ids)
         if reason:
             logger.warning("frame box pass skipped: %s", reason)
-            _note_unmeasured(coverage, window, reason)
+            failed.append(_note_unmeasured(coverage, window, reason))
             continue
         merged = fence_repair(merged, lambda doc, answer=fresh: merge_frame_boxes(doc, answer))
-        replaced = True
-    if replaced:
+        measured |= answered_keys(fresh)
+    if measured:
         logger.info("replaced video-file boxes with boxes measured on the displayed frames")
-    return merged
+    return mark_unmeasured(merged, roster_ids, measured, failed)
 
 
-def _note_unmeasured(coverage: Coverage, window, reason: str) -> None:
+async def _measure_window(
+    session, run, stage, system, user, window, video, roster_ids: set[str], width: int, height: int
+) -> tuple[AnalysisDocument, str]:
+    """One window's frame answer and why it was refused, asked again once when it was."""
+    prompt = user
+    for _attempt in range(FRAME_BOX_ATTEMPTS):
+        fresh = await _call(
+            session,
+            run,
+            stage,
+            system,
+            prompt,
+            window,
+            video,
+            frame_box_schema(sorted(roster_ids)),
+            attach_video=False,
+            modality="sampled_frames",
+            parser=lambda text, frame_w=width, frame_h=height: parse_frame_boxes(text, frame_w, frame_h),
+        )
+        reason = frame_box_rejection(fresh.observations, width, height, roster_ids)
+        if not reason:
+            break
+        logger.warning("frame box answer refused: %s", reason)
+        prompt = (
+            f"{user} A previous answer for these frames was refused because {reason}. "
+            "Look at each image again. Every named part that is visible needs its own box."
+        )
+    return fresh, reason
+
+
+def _note_unmeasured(coverage: Coverage, window, reason: str) -> tuple[float, float, str]:
     """Say which moments still show unmeasured video-file boxes, so a run cannot look measured when it is not."""
     start, end = _frame_time(window[0]), _frame_time(window[-1])
     note = f"Boxes from {start:.1f}s to {end:.1f}s were not measured on frames: {reason}."
     coverage.temporal_coverage_note = f"{coverage.temporal_coverage_note or ''} {note}".strip()
+    return start, end, reason
 
 
 def _note_video_coverage(coverage: Coverage, *, timeline_frames: int | None = None) -> None:

@@ -42,6 +42,10 @@ def square_normalized(observations: list[ObservationPrediction], width: int, hei
 # A few stills per call. Sixteen portrait frames in one request came back as
 # track points and boxes on the hands.
 FRAME_BOX_WINDOW = 4
+# A window can come back empty once and answer normally the next time.
+FRAME_BOX_ATTEMPTS = 2
+# The authority of a video-file box that no frame answer replaced.
+UNMEASURED_AUTHORITY = "vlm_video_unmeasured"
 
 FRAME_BOX_SCHEMA = {
     "type": "object",
@@ -116,6 +120,10 @@ def frame_box_rejection(
     roster: set[str],
 ) -> str:
     """Why a follow-up answer must not replace the video boxes. Empty when it may."""
+    if not any(item.bbox is not None for item in observations):
+        if observations and all(_visibility(item) == "absent" for item in observations):
+            return "the answer called every part absent"
+        return "the answer contained no boxes"
     if not frame_boxes_usable(observations, width, height):
         return "boxes were not in displayed-frame coordinates"
     named = [item for item in observations if item.bbox is not None and item.object_local_id in roster]
@@ -247,6 +255,46 @@ def merge_frame_boxes(document: AnalysisDocument, fresh: AnalysisDocument) -> An
         if key not in matched and item.object_local_id in known
     )
     return drop_copied_boxes(with_decisions(document.model_copy(update={"observations": updated}), cleared))
+
+
+def answered_keys(fresh: AnalysisDocument) -> set[tuple[str, float]]:
+    """The object and moment pairs a frame answer settled, with a box or by calling the part absent."""
+    return {
+        (item.object_local_id, round(item.timestamp, 3))
+        for item in fresh.observations
+        if item.bbox is not None or _visibility(item) == "absent"
+    }
+
+
+def mark_unmeasured(
+    document: AnalysisDocument,
+    roster: set[str],
+    measured: set[tuple[str, float]],
+    failed: list[tuple[float, float, str]],
+) -> AnalysisDocument:
+    """Tag each video-file box no frame answer replaced, so it cannot pass as measured.
+
+    `failed` holds the start, end, and reason of each refused window.
+    """
+    updated = []
+    kept = []
+    for item in document.observations:
+        key = (item.object_local_id, round(item.timestamp, 3))
+        if item.bbox is None or item.object_local_id not in roster or key in measured:
+            updated.append(item)
+            continue
+        reason = next((why for start, end, why in failed if start - 1e-3 <= item.timestamp <= end + 1e-3), "")
+        kept.append(
+            box_decision(
+                "frame_boxes",
+                "frame_box_unmeasured",
+                item,
+                outcome="kept",
+                detail=f"This video-file box was kept unmeasured: {reason or 'no frame answer settled this moment'}.",
+            )
+        )
+        updated.append(item.model_copy(update={"geometry_authority": UNMEASURED_AUTHORITY}))
+    return with_decisions(document.model_copy(update={"observations": updated}), kept)
 
 
 def drop_copied_boxes(document: AnalysisDocument) -> AnalysisDocument:

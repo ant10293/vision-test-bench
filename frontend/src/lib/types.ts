@@ -300,7 +300,7 @@ export interface StageInfo {
 export interface BoxDecision {
   step: string;
   reason_code: string;
-  outcome: "dropped" | "reassigned";
+  outcome: "dropped" | "reassigned" | "kept";
   object_local_id: string;
   timestamp: number | null;
   bbox: BBox | null;

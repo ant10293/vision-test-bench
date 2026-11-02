@@ -52,10 +52,14 @@ export function observationsAt(bundle: Bundle, time: number, window = 0.45): Obs
 
 export type OverlayKind = "vlm" | "sam" | "inferred" | "conflict";
 
+/** A video-file box that no answer on the displayed frames replaced. */
+const UNMEASURED_AUTHORITY = "vlm_video_unmeasured";
+
 /** "sam" is the measured layer: canonical rows and SAM masks draw solid. A provisional tracker row stays dashed. */
 export function observationKind(observation: Observation): OverlayKind {
   if (observation.association_status === "conflict") return "conflict";
   if (observation.observation_role === "canonical") return "sam";
+  if (observation.geometry_authority === UNMEASURED_AUTHORITY) return "inferred";
   if (observation.source_model === "tracker") return "inferred";
   if (observation.evidence_class === "INFERRED") return "inferred";
   if (observation.provenance === "CV_DETECTION" || observation.source_model === "sam-3.1") return "sam";
@@ -83,7 +87,7 @@ export function overlayObservations(
   return [...nearest.values()];
 }
 
-export type CoverageState = "observed" | "inferred" | "absent" | "unobserved" | "conflict" | "unassigned";
+export type CoverageState = "observed" | "unmeasured" | "inferred" | "absent" | "unobserved" | "conflict" | "unassigned";
 
 /** What the playhead can claim. A missing sample is unobserved, not absence. */
 export function coverageAt(observations: Observation[], localId: string, time: number, window = 0.45): CoverageState {
@@ -92,6 +96,7 @@ export function coverageAt(observations: Observation[], localId: string, time: n
   if (rows.some((item) => item.association_status === "conflict")) return "conflict";
   if (rows.some((item) => item.association_status === "unassigned")) return "unassigned";
   if (rows.some((item) => item.evidence_class === "DIRECTLY_OBSERVED" && item.visibility === "absent")) return "absent";
+  if (rows.some((item) => item.bbox && item.geometry_authority === UNMEASURED_AUTHORITY)) return "unmeasured";
   if (rows.some((item) => item.evidence_class === "DIRECTLY_OBSERVED" && (item.visibility === "visible" || item.visibility === "partial"))) {
     return "observed";
   }

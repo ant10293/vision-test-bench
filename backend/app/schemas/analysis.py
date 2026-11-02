@@ -356,11 +356,11 @@ class InterpretationResponse(BaseModel):
 
 
 class BoxDecision(BaseModel):
-    """A box a pipeline step removed or moved. The box is kept as it was before that step."""
+    """A box a pipeline step removed, moved, or kept unmeasured. The box is kept as it was before that step."""
 
     step: str
     reason_code: str
-    outcome: Literal["dropped", "reassigned"] = "dropped"
+    outcome: Literal["dropped", "reassigned", "kept"] = "dropped"
     object_local_id: str
     timestamp: float | None = None
     bbox: BBox | None = None

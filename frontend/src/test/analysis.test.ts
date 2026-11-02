@@ -160,6 +160,14 @@ describe("analysis helpers", () => {
     expect(overlayObservations(observations, 1, "vlm").map((item) => item.id).sort()).toEqual(["estimate", "legacy"]);
   });
 
+  it("draws an unmeasured video-file box dashed and does not call it observed", () => {
+    const row = { id: "video", object_local_id: "Object_1", timestamp: 1, bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, visibility: "visible", evidence_class: "DIRECTLY_OBSERVED", provenance: "AI_PREDICTION", evidence_note: "", continuity: "continuous", confidence: 0.8, coordinate_frame: "image", camera_compensated: false, frame_id: null, geometry_authority: "vlm_video_unmeasured" };
+    const observations = [row] as Bundle["observations"];
+    expect(overlayObservations(observations, 1, "inferred").map((item) => item.id)).toEqual(["video"]);
+    expect(overlayObservations(observations, 1, "vlm")).toEqual([]);
+    expect(coverageAt(observations, "Object_1", 1)).toBe("unmeasured");
+  });
+
   it("lists raw rows near the playhead and flattens nested diagnostics", () => {
     const row = { bbox: null, visibility: "visible", track_ref: "", association_status: "", observation_role: "raw", geometry_origin: "vlm_estimated", geometry_authority: "vlm", detection_support: "none", association_support: "", temporal_support: "", semantic_support: "labeled", evidence_ref: "" };
     const rows = [

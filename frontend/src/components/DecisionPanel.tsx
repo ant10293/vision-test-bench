@@ -13,7 +13,7 @@ export function DecisionPanel({ bundle }: { bundle: Bundle }) {
   return (
     <section className="panel space-y-3 p-4 text-sm" data-testid="box-decisions">
       <div>
-        <h2 className="text-base">Dropped and moved boxes</h2>
+        <h2 className="text-base">Dropped, moved, and unmeasured boxes</h2>
         <p className="text-xs text-[var(--muted)]">
           {decisions.total} {decisions.total === 1 ? "record" : "records"} from this run's pipeline steps. Each box is shown as it was before the step changed it.
           {decisions.truncated ? " The list is truncated. The counts are complete." : ""}
